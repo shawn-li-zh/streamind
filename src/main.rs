@@ -1,12 +1,21 @@
-use async_openai::{Client, config::OpenAIConfig, types::{ChatCompletionRequestMessage, ChatCompletionRequestUserMessageArgs}};
+use async_openai::{
+    config::OpenAIConfig,
+    types::{ChatCompletionRequestMessage, ChatCompletionRequestUserMessageArgs},
+    Client,
+};
 use std::io::{self, Write};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
-
+mod stream;
+mod event;
+mod agent;
+mod llm_engine;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
         .init();
 
     info!("Starting StreamInd AI Client");
@@ -15,7 +24,8 @@ async fn main() -> anyhow::Result<()> {
 
     let client = Client::with_config(
         OpenAIConfig::new()
-            .with_api_key(std::env::var("OPENAI_API_KEY")?)
+            .with_api_base(std::env::var("API_BASE")?)
+            .with_api_key(std::env::var("API_KEY")?),
     );
 
     println!("\n=== StreamInd AI Chat ===");
@@ -63,8 +73,8 @@ async fn main() -> anyhow::Result<()> {
                 async_openai::types::ChatCompletionRequestMessage::Assistant(
                     async_openai::types::ChatCompletionRequestAssistantMessageArgs::default()
                         .content(reply)
-                        .build()?
-                )
+                        .build()?,
+                ),
             );
         }
     }
