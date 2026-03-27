@@ -1,8 +1,4 @@
-use core::time;
-use std::sync::{Arc, RwLock};
-
 use async_openai::types::{
-    ChatCompletionRequestAssistantMessage, ChatCompletionRequestAssistantMessageArgs,
     ChatCompletionRequestMessage, ChatCompletionRequestSystemMessageArgs,
     ChatCompletionResponseStream,
 };
@@ -91,7 +87,7 @@ impl LLMStream {
                     if let Some(chunk) = &choice.delta.content {
                         self.buffer.push_str(chunk);
 
-                        let cmds = inlet.borrow().input(chunk);
+                        let cmds = inlet.borrow_mut().input(chunk);
                         for cmd in cmds {
                             match cmd {
                                 StreamCommand::Next(inl) => inlet = inl,

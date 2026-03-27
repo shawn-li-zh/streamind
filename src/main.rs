@@ -4,12 +4,21 @@ use async_openai::{
     Client,
 };
 use std::io::{self, Write};
+use std::sync::Arc;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
+
 mod stream;
 mod event;
 mod agent;
 mod llm_engine;
+mod db;
+mod rule;
+mod service;
+
+use db::Database;
+use service::{AgentService, RuleService};
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
@@ -27,6 +36,28 @@ async fn main() -> anyhow::Result<()> {
             .with_api_base(std::env::var("API_BASE")?)
             .with_api_key(std::env::var("API_KEY")?),
     );
+
+    let db = Arc::new(Database::new("streamind.db")?);
+    let agent_service = AgentService::new(db.clone());
+    let rule_service = RuleService::new(db.clone());
+
+    agent_service
+        .init_agent("Assistant", "初始化记忆", "帮助用户完成任务")
+        .await?;
+
+    let group_id = rule_service.create_rule_group("default")?;
+    rule_service.add_rule(
+        group_id,
+        r#""hello"&"world""#,
+        "inject(你好世界)",
+        3600,
+    )?;
+    rule_service.add_rule(
+        group_id,
+        r#"contains("help")"#,
+        "context(用户需要帮助)",
+        3600,
+    )?;
 
     println!("\n=== StreamInd AI Chat ===");
     println!("Type 'exit' to quit\n");
@@ -49,6 +80,11 @@ async fn main() -> anyhow::Result<()> {
             break;
         }
 
+        let injections = agent_service.add_event(input).await?;
+        if !injections.is_empty() {
+            println!("[Rule triggered: {}]", injections.join(", "));
+        }
+
         let user_msg = ChatCompletionRequestUserMessageArgs::default()
             .content(input.to_string())
             .build()?;
@@ -69,6 +105,8 @@ async fn main() -> anyhow::Result<()> {
             let reply = choice.message.content.clone().unwrap_or_default();
             println!("\nAssistant: {}\n", reply);
 
+            let _ = agent_service.evaluate_rules(&reply).await;
+
             conversation.push(
                 async_openai::types::ChatCompletionRequestMessage::Assistant(
                     async_openai::types::ChatCompletionRequestAssistantMessageArgs::default()
@@ -78,6 +116,8 @@ async fn main() -> anyhow::Result<()> {
             );
         }
     }
+
+    rule_service.cleanup_expired()?;
 
     Ok(())
 }

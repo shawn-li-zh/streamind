@@ -1,4 +1,4 @@
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
 
 use crate::{event::AgentEvent, stream::LLMStream};
 #[derive(Debug, Clone)]

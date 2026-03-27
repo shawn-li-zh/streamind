@@ -1,4 +1,4 @@
-use std::{cell::RefCell, fmt::format, rc::Rc};
+use std::{cell::RefCell, rc::Rc};
 
 use async_openai::types::ChatCompletionRequestMessage;
 //入口控制
@@ -64,7 +64,7 @@ impl StreamInlet for TagMatchInlet {
         } else {
             //未匹配到标签，保留buffer的最后部分，防止标签被切断，其他的全部输出
             let reserve = self.prefix.len() - 1;
-            if self.buffer.len() > reserve  {
+            if self.buffer.len() > reserve {
                 let out = self.buffer[..self.buffer.len() - reserve].to_string();
                 commands.push(StreamCommand::Out(out));
                 self.buffer = self.buffer[self.buffer.len() - reserve..].to_string();
