@@ -15,6 +15,8 @@ mod llm_engine;
 mod db;
 mod rule;
 mod service;
+mod common;
+mod global;
 
 use db::Database;
 use service::{AgentService, RuleService};

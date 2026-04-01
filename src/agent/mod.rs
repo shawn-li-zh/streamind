@@ -1,6 +1,6 @@
 use tokio::sync::mpsc;
 
-use crate::{event::AgentEvent, stream::LLMStream};
+use crate::{event::AgentEvent, stream::{LLMStream, MindStream}};
 #[derive(Debug, Clone)]
 pub struct AgentInfo {
     pub id: u32,
@@ -31,7 +31,7 @@ impl Agent {
 pub struct AgentWorker {
     pub info: AgentInfo,
     receiver: mpsc::Receiver<AgentEvent>,
-    streams: Vec<LLMStream>,
+    streams: Vec<MindStream>,
 }
 impl AgentWorker {
     pub fn new(info: AgentInfo, receiver: mpsc::Receiver<AgentEvent>) -> Self {

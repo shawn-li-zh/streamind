@@ -12,12 +12,10 @@ use crate::{
 use futures::StreamExt;
 
 mod inlet;
+
 pub struct LLMStream {
-    pub id: u32,
-    pub upstream_id: u32,
     pub llm_engine: LLMEngine,
-    pub events: Vec<AgentEvent>,
-    pub trigger_event: AgentEvent,
+    pub messages: Vec<ChatCompletionRequestMessage>,
     pub buffer: String,
     pub is_runing: bool,
     pub is_stopped: bool,
@@ -29,13 +27,10 @@ impl LLMStream {
         //@todo 从数据库加载
     }
 
-    pub fn new(id: u32, engine: LLMEngine, trigger_event: AgentEvent) -> Self {
+    pub fn new(engine: LLMEngine, messages: Vec<ChatCompletionRequestMessage>) -> Self {
         LLMStream {
-            id: id,
-            upstream_id: 0,
             llm_engine: engine,
-            events: vec![],
-            trigger_event: trigger_event,
+            messages,
             buffer: String::new(),
             is_runing: false,
             is_stopped: false,
@@ -44,34 +39,13 @@ impl LLMStream {
 
     pub async fn start(&mut self, mut inlet: ShareInlet) -> ShareInlet {
         self.is_runing = true;
-        let messages = self.build_messages();
-        let stream = self.llm_engine.stream(messages).await.unwrap();
+        let stream = self.llm_engine.stream(self.messages.clone()).await.unwrap();
         inlet = self.chunk_loop(stream, inlet).await;
         inlet.borrow_mut().end();
         self.is_runing = false;
         return inlet;
     }
-    fn build_messages(&self) -> Vec<ChatCompletionRequestMessage> {
-        //事件转消息
-        let content = (&self.events)
-            .iter()
-            .map(|e| e.to_message())
-            .collect::<Vec<_>>()
-            .join("\n\n");
-        let msg = ChatCompletionRequestSystemMessageArgs::default()
-            .content(content)
-            .build()
-            .unwrap();
-        let event_msg = ChatCompletionRequestMessage::System(msg);
-        //添加当前时间提示
-        let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-        let time_msg = ChatCompletionRequestSystemMessageArgs::default()
-            .content(format!("当前时间：{}", now))
-            .build()
-            .unwrap();
-        let time_msg = ChatCompletionRequestMessage::System(time_msg);
-        return vec![event_msg, time_msg];
-    }
+
     async fn chunk_loop(
         &mut self,
         mut stream: ChatCompletionResponseStream,
@@ -81,28 +55,29 @@ impl LLMStream {
             if self.is_stopped {
                 break;
             }
-            match result {
-                Ok(response) => {
-                    let choice = &response.choices[0];
-                    if let Some(chunk) = &choice.delta.content {
-                        self.buffer.push_str(chunk);
+            if result.is_err() {
+                error!("Stream error: {:?}", result.as_ref().err());
+                break;
+            }
+            let response = result.unwrap();
+            let choice = &response.choices[0];
+            if let Some(chunk) = &choice.delta.content {
+                self.buffer.push_str(chunk);
 
-                        let cmds = inlet.borrow_mut().input(chunk);
-                        for cmd in cmds {
-                            match cmd {
-                                StreamCommand::Next(inl) => inlet = inl,
-                                StreamCommand::Stop() => {
-                                    break;
-                                }
-                                StreamCommand::Append(msg) => todo!(),
-                                StreamCommand::Out(c) => todo!(),
-                            }
+                let cmds = inlet.borrow_mut().input(chunk);
+                for cmd in cmds {
+                    match cmd {
+                        StreamCommand::Next(inl) => inlet = inl,
+                        StreamCommand::Stop() => {
+                            break;
                         }
+                        StreamCommand::Append(msgs) => {
+                            self.messages.extend(msgs);
+                            //重新创建流
+                            stream = self.llm_engine.stream(self.messages.clone()).await.unwrap();
+                        }
+                        StreamCommand::Out(c) => todo!(),
                     }
-                }
-                Err(err) => {
-                    error!("{}", err);
-                    break;
                 }
             }
         }
@@ -125,14 +100,66 @@ impl LLMStream {
         self.is_stopped = true;
         self.trigger_event.response = response;
     }
+}
+
+fn build_messages(events: &Vec<AgentEvent>) -> Vec<ChatCompletionRequestMessage> {
+    //事件转消息
+    let content = (&events)
+        .iter()
+        .map(|e| e.to_message())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let msg = ChatCompletionRequestSystemMessageArgs::default()
+        .content(content)
+        .build()
+        .unwrap();
+    let event_msg = ChatCompletionRequestMessage::System(msg);
+
+    return vec![event_msg];
+}
+pub struct MindStream {
+    id: u32,
+    upstream_id: u32,
+    events: Vec<AgentEvent>,
+    trigger_event: AgentEvent,
+    llm_stream: LLMStream,
+}
+
+impl MindStream {
+    pub fn new(
+        id: u32,
+        engine: LLMEngine,
+        events: Vec<AgentEvent>,
+        trigger_event: AgentEvent,
+    ) -> Self {
+        MindStream {
+            id: id,
+            upstream_id: 0,
+            llm_stream: LLMStream::new(engine, build_messages(&events)),
+            events:events,
+            trigger_event: trigger_event,
+        }
+    }
+    pub fn read(&self) -> String {
+        let mut content = self.llm_stream.buffer.clone();
+        if self.llm_stream.is_runing {
+            content.push_str("[中断]");
+        }
+        return content;
+    }
     //从当前状态创建分支
     pub fn fork(&self, id: u32, trigger_event: AgentEvent) -> Self {
         let mut events = self.events.clone();
         let mut old = self.trigger_event.clone();
         old.response = self.read();
         events.push(old);
-        let mut stream = LLMStream::new(id, self.llm_engine.clone(), trigger_event);
-        stream.events = events;
-        stream
+        let stream = LLMStream::new(self.llm_stream.llm_engine.clone(), build_messages(&events));
+        MindStream {
+            id: id,
+            upstream_id: self.id,
+            llm_stream: stream,
+            events: events,
+            trigger_event: trigger_event,
+        }
     }
 }

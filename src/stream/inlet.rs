@@ -5,7 +5,7 @@ use async_openai::types::ChatCompletionRequestMessage;
 
 pub enum StreamCommand {
     Next(ShareInlet),
-    Append(ChatCompletionRequestMessage),
+    Append(Vec<ChatCompletionRequestMessage>),
     Out(String),
     Stop(),
 }
@@ -14,7 +14,6 @@ pub enum StreamCommand {
 pub type ShareInlet = Rc<RefCell<dyn StreamInlet>>;
 pub trait StreamInlet {
     fn input(&mut self, chunk: &String) -> Vec<StreamCommand>;
-    fn end(&mut self);
 }
 
 pub struct TagMatchInlet {
@@ -25,6 +24,7 @@ pub struct TagMatchInlet {
     pub is_matched: bool,
     handler: Box<dyn FnMut(String, String) -> Vec<StreamCommand>>,
 }
+
 impl TagMatchInlet {
     pub fn new(tag: String, handler: Box<dyn FnMut(String, String) -> Vec<StreamCommand>>) -> Self {
         let prefix = format!("<{} ", &tag);
@@ -71,9 +71,5 @@ impl StreamInlet for TagMatchInlet {
             }
         }
         commands
-    }
-
-    fn end(&mut self) {
-        todo!()
     }
 }

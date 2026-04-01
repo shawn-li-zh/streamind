@@ -23,5 +23,7 @@ regex = "1"
 pest = "2.8.6"
 pest_derive = "2.8.6"
 rayon = "1.8" # 用于并行计算
+notify = "6"
+lazy_static = "1.5.0"
 [dev-dependencies]
 cargo-nextest = "0.9"
