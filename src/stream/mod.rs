@@ -1,165 +1,243 @@
+use std::sync::RwLock;
+
 use async_openai::types::{
-    ChatCompletionRequestMessage, ChatCompletionRequestSystemMessageArgs,
-    ChatCompletionResponseStream,
+    ChatCompletionRequestAssistantMessageArgs, ChatCompletionRequestMessage,
+    ChatCompletionRequestSystemMessageArgs, ChatCompletionRequestUserMessageArgs,
 };
-use tracing::error;
 
 use crate::{
-    event::AgentEvent,
+    agent::{
+        event::{AgentEvent, AgentEventData},
+        section::{section_stream, Section, SectionEvent, SectionListener},
+    },
     llm_engine::LLMEngine,
-    stream::inlet::{ShareInlet, StreamCommand},
 };
-use futures::StreamExt;
+use futures::{Stream, StreamExt};
 
 mod inlet;
-
-pub struct LLMStream {
-    pub llm_engine: LLMEngine,
-    pub messages: Vec<ChatCompletionRequestMessage>,
-    pub buffer: String,
-    pub is_runing: bool,
-    pub is_stopped: bool,
-}
-
-impl LLMStream {
-    pub fn load() {
-
-        //@todo 从数据库加载
-    }
-
-    pub fn new(engine: LLMEngine, messages: Vec<ChatCompletionRequestMessage>) -> Self {
-        LLMStream {
-            llm_engine: engine,
-            messages,
-            buffer: String::new(),
-            is_runing: false,
-            is_stopped: false,
+mod parser;
+fn to_message(event: &AgentEvent) -> ChatCompletionRequestMessage {
+    match &event.data {
+        crate::agent::event::AgentEventData::UserInput(_) => {
+            let msg = ChatCompletionRequestUserMessageArgs::default()
+                .content(event.to_message())
+                .build()
+                .unwrap();
+            ChatCompletionRequestMessage::User(msg)
         }
-    }
-
-    pub async fn start(&mut self, mut inlet: ShareInlet) -> ShareInlet {
-        self.is_runing = true;
-        let stream = self.llm_engine.stream(self.messages.clone()).await.unwrap();
-        inlet = self.chunk_loop(stream, inlet).await;
-        inlet.borrow_mut().end();
-        self.is_runing = false;
-        return inlet;
-    }
-
-    async fn chunk_loop(
-        &mut self,
-        mut stream: ChatCompletionResponseStream,
-        mut inlet: ShareInlet,
-    ) -> ShareInlet {
-        while let Some(result) = stream.next().await {
-            if self.is_stopped {
-                break;
-            }
-            if result.is_err() {
-                error!("Stream error: {:?}", result.as_ref().err());
-                break;
-            }
-            let response = result.unwrap();
-            let choice = &response.choices[0];
-            if let Some(chunk) = &choice.delta.content {
-                self.buffer.push_str(chunk);
-
-                let cmds = inlet.borrow_mut().input(chunk);
-                for cmd in cmds {
-                    match cmd {
-                        StreamCommand::Next(inl) => inlet = inl,
-                        StreamCommand::Stop() => {
-                            break;
-                        }
-                        StreamCommand::Append(msgs) => {
-                            self.messages.extend(msgs);
-                            //重新创建流
-                            stream = self.llm_engine.stream(self.messages.clone()).await.unwrap();
-                        }
-                        StreamCommand::Out(c) => todo!(),
-                    }
-                }
-            }
+        _ => {
+            let msg = ChatCompletionRequestSystemMessageArgs::default()
+                .content(event.to_message())
+                .build()
+                .unwrap();
+            ChatCompletionRequestMessage::System(msg)
         }
-        self.stop();
-        return inlet;
-    }
-
-    pub fn read(&self) -> String {
-        let mut content = self.buffer.clone();
-        if self.is_runing {
-            content.push_str("[中断]");
-        }
-        return content;
-    }
-    pub fn stop(&mut self) {
-        if self.is_stopped {
-            return;
-        }
-        let response = self.read();
-        self.is_stopped = true;
-        self.trigger_event.response = response;
     }
 }
-
 fn build_messages(events: &Vec<AgentEvent>) -> Vec<ChatCompletionRequestMessage> {
+    let mut msgs = vec![];
     //事件转消息
-    let content = (&events)
-        .iter()
-        .map(|e| e.to_message())
-        .collect::<Vec<_>>()
-        .join("\n\n");
-    let msg = ChatCompletionRequestSystemMessageArgs::default()
-        .content(content)
-        .build()
-        .unwrap();
-    let event_msg = ChatCompletionRequestMessage::System(msg);
-
-    return vec![event_msg];
+    for ele in events {
+        let msg = to_message(ele);
+        msgs.push(msg);
+        if !ele.response.is_empty() {
+            let msg = ChatCompletionRequestAssistantMessageArgs::default()
+                .content(ele.response.to_string())
+                .build()
+                .unwrap();
+            let msg = ChatCompletionRequestMessage::Assistant(msg);
+            msgs.push(msg);
+        }
+    }
+    return msgs;
 }
+
+use futures::stream;
+use tokio::sync::{mpsc, oneshot};
+
 pub struct MindStream {
-    id: u32,
-    upstream_id: u32,
-    events: Vec<AgentEvent>,
-    trigger_event: AgentEvent,
-    llm_stream: LLMStream,
+    pub event_buffer: Vec<AgentEvent>,
+    pub messages: Vec<ChatCompletionRequestMessage>,
+    llm_engine: LLMEngine,
+    is_running: bool,
+
+    // 用于向流中注入“中断标签”的发送器
+    stop_tx: Option<mpsc::UnboundedSender<String>>,
+    // 用于等待 run() 完全退出的接收器
+    done_rx: Option<oneshot::Receiver<()>>,
+    last_section_head: RwLock<String>,
+    receiver: mpsc::Receiver<AgentEvent>,
+    sender: mpsc::Sender<SectionEvent>,
 }
 
 impl MindStream {
     pub fn new(
-        id: u32,
         engine: LLMEngine,
-        events: Vec<AgentEvent>,
-        trigger_event: AgentEvent,
+        receiver: mpsc::Receiver<AgentEvent>,
+        sender: mpsc::Sender<SectionEvent>,
     ) -> Self {
         MindStream {
-            id: id,
-            upstream_id: 0,
-            llm_stream: LLMStream::new(engine, build_messages(&events)),
-            events:events,
-            trigger_event: trigger_event,
+            llm_engine: engine,
+            messages: vec![],
+            event_buffer: vec![],
+            is_running: false,
+            stop_tx: None,
+            done_rx: None,
+            last_section_head: RwLock::new(String::new()),
+            receiver,
+            sender,
         }
     }
-    pub fn read(&self) -> String {
-        let mut content = self.llm_stream.buffer.clone();
-        if self.llm_stream.is_runing {
-            content.push_str("[中断]");
-        }
-        return content;
+
+    pub fn is_running(&self) -> bool {
+        self.is_running
     }
-    //从当前状态创建分支
-    pub fn fork(&self, id: u32, trigger_event: AgentEvent) -> Self {
-        let mut events = self.events.clone();
-        let mut old = self.trigger_event.clone();
-        old.response = self.read();
-        events.push(old);
-        let stream = LLMStream::new(self.llm_stream.llm_engine.clone(), build_messages(&events));
-        MindStream {
-            id: id,
-            upstream_id: self.id,
-            llm_stream: stream,
-            events: events,
-            trigger_event: trigger_event,
+    async fn chunk_stream(&self) -> std::pin::Pin<Box<dyn Stream<Item = String> + Send>> {
+        let llm_stream = self.llm_engine.stream(self.messages.clone()).await.unwrap();
+        llm_stream
+            .map(|c| match c {
+                // 优化：使用 first_mut 和 and_then 扁平化取值，避免繁杂的 if/else
+                Ok(mut r) => r
+                    .choices
+                    .first_mut()
+                    .and_then(|choice| choice.delta.content.take())
+                    .unwrap_or_default(),
+                Err(e) => {
+                    let section = format!("<error>Stream error: {:?}</error>", e);
+                    // &self.inject_section(&section);
+                    // String::new()
+                    section
+                }
+            })
+            .boxed()
+    }
+
+    /// 停止流
+    pub async fn stop(&mut self, info: &str) {
+        if !self.is_running {
+            return;
+        }
+        self.is_running = false;
+
+        if let Some(rx) = self.done_rx.take() {
+            //阻塞等待完全停止
+            let _ = rx.await.unwrap();
+        }
+        // 1. 给正在处理中的流插入一条中断事件内容
+        let section = format!("<interupt>{}</interupt>", info);
+        self.inject_section(&section);
+        // self.stop_channel.0.send(section).unwrap();
+    }
+    fn inject_section(&self, section: &str) {
+        let mut last_section_head = self.last_section_head.write().unwrap();
+        let head = std::mem::replace(&mut *last_section_head, String::new());
+        let end = format!("</{}>", head);
+        if let Some(tx) = &self.stop_tx {
+            tx.send(format!("{}{}", end, section)).unwrap();
+        }
+    }
+    /// 核心方法：非阻塞地抽干(Drain)当前队列中的所有事件
+    fn drain_events(&mut self) {
+        while let Ok(event) = self.receiver.try_recv() {
+            match event.data {
+                AgentEventData::Interupt(_) => {
+                    // 在 drain 阶段遇到打断信号可以直接忽略
+                    // 因为我们本身就是在打断后的重新整理阶段
+                    println!("  [队列提取] 忽略多余的打断信号");
+                }
+                _ => {
+                    self.event_buffer.push(event);
+                }
+            }
+        }
+    }
+    async fn start(&mut self) {
+        self.is_running = true;
+        self.section_loop().await;
+        self.is_running = false;
+    }
+    async fn section_loop(&mut self) {
+        let mut is_interupt = false;
+        loop {
+            // 1. 创建注入通道 (mpsc) 和 完成信号通道 (oneshot)
+            let (tx, rx) = mpsc::unbounded_channel::<String>();
+            let (done_tx, done_rx) = oneshot::channel();
+            self.stop_tx = Some(tx);
+            self.done_rx = Some(done_rx);
+            // 1. 如果没有待处理任务，阻塞等待下一个事件到达
+            if self.event_buffer.is_empty() {
+                let opt = self.receiver.recv().await;
+                if opt.is_none() {
+                    println!("通道已关闭，智能体即将退出");
+                    break;
+                }
+                let event = opt.unwrap();
+                self.event_buffer.push(event);
+            }
+
+            // 3. 准备当前要处理的上下文
+            // 提取出当前所有的任务，清空 pending 准备接收新的
+            let buffer = std::mem::take(&mut self.event_buffer);
+            let msgs = build_messages(&buffer);
+            self.messages.extend(msgs);
+            // 4. 创建生成流（模拟大模型输出或耗时任务）
+            let chunk_stream = self.chunk_stream().await;
+            // 3. 将 Rx 转换为 Stream 并与 LLM 流合并
+            let inject_stream = tokio_stream::wrappers::UnboundedReceiverStream::new(rx).boxed();
+
+            let merged_stream = stream::select(chunk_stream, inject_stream).boxed();
+
+            let mut section_stream = Box::pin(section_stream(merged_stream));
+
+            // 5. 边生成边监听队列
+            loop {
+                tokio::select! {
+                        // 分支 A：段落生成流
+                    section_event_opt = section_stream.next() =>  {
+                        if let Some(event)=section_event_opt{
+
+                            match &event{
+                                SectionEvent::Close(section)=>{
+                                    if matches!(section,Section::Interupt(_)){
+                                        is_interupt=true;
+                                    }
+                                }
+                                SectionEvent::End=>{
+                                     is_interupt=true;
+                                }
+                                _=>{}
+                            }
+                            self.sender.send(event);
+
+                     }else{
+                                return;
+                            }
+
+                        }
+
+                        // 分支 B：在生成过程中，收到了新事件
+                        event_opt = self.receiver.recv() => {
+                            if let Some(event)=event_opt{
+                                    if event.force{
+                                        self.sender.send(SectionEvent::End);
+                                        break; // 跳出内部 loop,强制处理
+                                    }
+                                        // 如果是普通任务，先默默存起来，不打断当前生成
+                                self.event_buffer.push(event)
+                            }else{
+                                return;
+                            }
+                        }
+                }
+                if is_interupt {
+                    done_tx.send(()).unwrap();
+                    self.stop_tx = None;
+                    self.done_rx = None;
+                    return;
+                }
+            }
+            // 2. 瞬间抽干队列中同时到达的其他任务（Batching）
+            self.drain_events();
         }
     }
 }

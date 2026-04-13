@@ -1,0 +1,24 @@
+use sea_orm::entity::prelude::*;
+#[sea_orm::model]
+#[derive(Clone, Debug, Default, DeriveEntityModel)]
+#[sea_orm(table_name = "events")]
+pub struct Model {
+    #[sea_orm(primary_key, auto_increment = true)]
+    pub id: i64,
+    #[sea_orm(not_null)]
+    pub stream_id: i64,
+    #[sea_orm(column_type = "Text", not_null)]
+    pub event_type: String,
+    #[sea_orm(column_type = "Text", not_null)]
+    pub content: String,
+    #[sea_orm(column_type = "Text", default_value = "")]
+    pub response: String,
+    pub source_event_id: Option<i64>,
+
+    #[sea_orm(column_type = "Timestamp", not_null)]
+    pub time: chrono::DateTime<chrono::Local>,
+    #[sea_orm(has_many)]
+    pub sections: HasMany<super::section::Entity>,
+}
+
+impl ActiveModelBehavior for ActiveModel {}

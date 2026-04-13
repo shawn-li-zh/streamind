@@ -1,46 +1,149 @@
-use tokio::sync::mpsc;
+use std::{
+    collections::{HashMap, HashSet},
+};
 
-use crate::{event::AgentEvent, stream::{LLMStream, MindStream}};
-#[derive(Debug, Clone)]
-pub struct AgentInfo {
-    pub id: u32,
-    pub name: String,
-    pub workspace: String,
+use anyhow::Ok;
+use chrono::{DateTime, Local};
+use tokio::sync::{mpsc, watch};
+pub mod event;
+pub mod section;
+pub mod global;
+use crate::{
+    agent::{
+        event::AgentEventData,
+        section::{Section, SectionEvent},
+    },
+    entity,
+    global::AGENT_GLOBAL_CONTEXT,
+    llm_engine::LLMEngine,
+    stream::MindStream,
+    tool::ToolExcutor,
+};
+
+use event::AgentEvent;
+
+pub struct AgentGlobalContext {
+    pub agent: HashMap<u64, AgentContext>,
+    pub engine: HashMap<String, LLMEngine>,
 }
+pub struct AgentContext {
+    info: entity::agent::Model,
+}
+
 pub struct Agent {
-    pub info: AgentInfo,
-    sender: mpsc::Sender<AgentEvent>,
+    pub info: entity::agent::Model,
+    tool_excutor: ToolExcutor,
+    mind_stream: MindStream,
+    event_sender: mpsc::Sender<AgentEvent>,
+    section_receiver: mpsc::Receiver<SectionEvent>,
+    watcher: (watch::Sender<bool>, watch::Receiver<bool>),
 }
 impl Agent {
-    pub fn new(info: AgentInfo) -> Agent {
-        let (sender, receiver) = mpsc::channel(100);
-
-        // 启动后台循环
-        let mut worker = AgentWorker::new(info.clone(), receiver);
-        tokio::spawn(async move {
-            worker.run().await;
-        });
-        Agent { info, sender }
+    pub fn new(info: entity::agent::Model, tool_packages: HashSet<String>) -> Agent {
+        //通道
+        let event = mpsc::channel(100);
+        let section = mpsc::channel(100);
+        let watcher: (watch::Sender<bool>, watch::Receiver<bool>) = watch::channel(false);
+        //流
+        let engine = AGENT_GLOBAL_CONTEXT.engine.get("default").unwrap().clone();
+        let mind_stream = MindStream::new(engine, event.1, section.0);
+        //工具执行器
+        let tool_excutor = ToolExcutor {
+            packages: tool_packages,
+        };
+        Agent {
+            info,
+            event_sender: event.0,
+            section_receiver: section.1,
+            watcher,
+            mind_stream,
+            tool_excutor,
+        }
     }
-    pub async fn send_event(&self, event: AgentEvent) -> anyhow::Result<()> {
-        self.sender.send(event).await?;
+    pub async fn send_event(
+        &mut self,
+        event_data: AgentEventData,
+        force: bool,
+    ) -> anyhow::Result<()> {
+        self.watcher.1.wait_for(|&is_paused| !is_paused).await?;
+        //
+
+        self.send_event_pure(event_data, force).await
+    }
+    async fn send_event_pure(
+        &mut self,
+        event_data: AgentEventData,
+        force: bool,
+    ) -> anyhow::Result<()> {
+        //@todo 保存数据库
+        let event = AgentEvent {
+            id: 0,
+            agent_id: 0,
+            data: event_data,
+            response: String::new(),
+            force,
+            time: Local::now(),
+        };
+        if let AgentEventData::Interupt(reason) = &event.data {
+            self.mind_stream.stop(reason).await;
+            return Ok(());
+        }
+        self.event_sender.send(event).await?;
         Ok(())
     }
-}
 
-pub struct AgentWorker {
-    pub info: AgentInfo,
-    receiver: mpsc::Receiver<AgentEvent>,
-    streams: Vec<MindStream>,
-}
-impl AgentWorker {
-    pub fn new(info: AgentInfo, receiver: mpsc::Receiver<AgentEvent>) -> Self {
-        Self { info, receiver, streams: Vec::new() }
+    pub async fn start(&mut self) {
+        loop {
+            self.react_loop().await;
+        }
     }
 
-    pub async fn run(&mut self) {
-        while let Some(event) = self.receiver.recv().await {
-            // Handle the received event
+    async fn react_loop(&mut self) {
+        let mut sections = vec![];
+        let mut tool_calls = vec![];
+        loop {
+            if let Some(section_event) = self.section_receiver.recv().await {
+                match section_event {
+                    SectionEvent::Start => todo!(),
+                    SectionEvent::Open(section_tag) => todo!(),
+                    SectionEvent::Close(section) => {
+                        //保存数据库+发送到前端
+                        if let Section::FunctionCall(code) = &section {
+                            tool_calls.push(code.to_string());
+                        }
+                        sections.push(section);
+                    }
+                    SectionEvent::End => {
+                        //如果有函数调用，则执行函数调用，然后发送事件继续循环，
+                        //没有的话，则等待外部事件触发循环
+                        if tool_calls.is_empty() {
+                            break;
+                        }
+                        //加入临时阻塞事件接收机制，防止执行函数调用时，中间有事件触发
+                        self.watcher.0.send(true).unwrap();
+                        let results = self.tool_excutor.batch_call(tool_calls).await;
+                        let results = results
+                            .into_iter()
+                            .map(|res| {
+                                let r = match res {
+                                    Ok(e) => format!("Ok:{}", e),
+                                    Err(e) => format!("Error:{:?}", e),
+                                };
+                                r
+                            })
+                            .collect::<Vec<String>>();
+                        let _ = self
+                            .send_event_pure(AgentEventData::ToolCallResult(results), true)
+                            .await
+                            .unwrap();
+                        self.watcher.0.send(false).unwrap();
+                        break;
+                    }
+                }
+                continue;
+            }
+            //
+            return;
         }
     }
 }

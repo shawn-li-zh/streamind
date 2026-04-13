@@ -25,5 +25,10 @@ pest_derive = "2.8.6"
 rayon = "1.8" # 用于并行计算
 notify = "6"
 lazy_static = "1.5.0"
+sea-orm = { version = "2.0.0-rc.37", features = ["sqlx-sqlite", "runtime-tokio-native-tls", "macros"] }
+async-trait = "0.1"
+async_once = "0.2.6"
+async-stream = "0.3.6"
+tokio-stream = "0.1.18"
 [dev-dependencies]
 cargo-nextest = "0.9"

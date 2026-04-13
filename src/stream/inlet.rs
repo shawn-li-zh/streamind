@@ -15,7 +15,9 @@ pub type ShareInlet = Rc<RefCell<dyn StreamInlet>>;
 pub trait StreamInlet {
     fn input(&mut self, chunk: &String) -> Vec<StreamCommand>;
 }
-
+pub trait StreamListener {
+    fn input(&mut self, chunk: &String) ;
+}
 pub struct TagMatchInlet {
     tag: String,
     pub buffer: String,

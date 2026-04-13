@@ -9,16 +9,15 @@ use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 mod stream;
-mod event;
 mod agent;
 mod llm_engine;
-mod db;
 mod rule;
 mod service;
+mod entity;
 mod common;
 mod global;
+mod tool;
 
-use db::Database;
 use service::{AgentService, RuleService};
 
 #[tokio::main]
