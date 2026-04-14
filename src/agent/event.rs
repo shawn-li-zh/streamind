@@ -11,7 +11,7 @@ pub enum AgentEventData {
     //工具调用结果
     ToolCallResult(Vec<String>),
     //中断信号
-    Interupt(String),
+    Interrupt(String),
 }
 impl AgentEventData {
     pub fn name(&self) -> &'static str {
@@ -19,7 +19,7 @@ impl AgentEventData {
             AgentEventData::UserInput(_) => "用户输入",
             AgentEventData::Timer { .. } => "定时器",
             AgentEventData::ToolCallResult(_) => "工具调用结果",
-            AgentEventData::Interupt(_) => "中断信号",
+            AgentEventData::Interrupt(_) => "中断信号",
         }
     }
     pub fn content(&self) -> String {
@@ -34,7 +34,7 @@ impl AgentEventData {
             AgentEventData::ToolCallResult(results) => {
                results.join("\n---\n")
             }
-            AgentEventData::Interupt(reason) => format!("【中断信号:'{}'】", reason),
+            AgentEventData::Interrupt(reason) => format!("【中断信号:'{}'】", reason),
         }
     }
 }
@@ -46,8 +46,6 @@ pub struct AgentEvent {
     pub data: AgentEventData,
     //是否强制执行
     pub force: bool,
-    //agent的响应
-    pub response: String,
     pub time: chrono::DateTime<Local>,
 }
 

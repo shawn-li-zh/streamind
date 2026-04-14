@@ -140,7 +140,7 @@ impl MindStream {
     fn drain_events(&mut self) {
         while let Ok(event) = self.receiver.try_recv() {
             match event.data {
-                AgentEventData::Interupt(_) => {
+                AgentEventData::Interrupt(_) => {
                     // 在 drain 阶段遇到打断信号可以直接忽略
                     // 因为我们本身就是在打断后的重新整理阶段
                     println!("  [队列提取] 忽略多余的打断信号");
@@ -198,7 +198,7 @@ impl MindStream {
 
                             match &event{
                                 SectionEvent::Close(section)=>{
-                                    if matches!(section,Section::Interupt(_)){
+                                    if matches!(section,Section::Interrupt(_)){
                                         is_interupt=true;
                                     }
                                 }

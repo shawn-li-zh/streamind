@@ -6,7 +6,7 @@ pub enum Section {
     //思考:内容
     Think(String),
     //函数调用
-    FunctionCall(String),
+    ToolCall(String),
     //回复
     Reply(String),
     //客户端UI渲染代码
@@ -14,7 +14,7 @@ pub enum Section {
     //异常
     Error(String),
     //中断
-    Interupt(String),
+    Interrupt(String),
     //其他
     Other(String),
 }
@@ -144,11 +144,11 @@ pub fn section_stream(
 fn create_section(tag: &str, content: String) -> Section {
     match tag {
         "think" => Section::Think(content),
-        "function_call" => Section::FunctionCall(content),
+        "function_call" => Section::ToolCall(content),
         "render" => Section::Render(content),
         "reply" => Section::Reply(content),
         "error" => Section::Error(content),
-        "interupt" => Section::Interupt(content),
+        "interupt" => Section::Interrupt(content),
         _ => Section::Other(content),
     }
 }

@@ -3,22 +3,22 @@ use async_openai::{
     types::{ChatCompletionRequestMessage, ChatCompletionRequestUserMessageArgs},
     Client,
 };
+use sea_orm::{ConnectOptions, Database};
 use std::io::{self, Write};
 use std::sync::Arc;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
-mod stream;
+use crate::global::DB;
+
 mod agent;
+mod common;
+mod entity;
+mod global;
 mod llm_engine;
 mod rule;
-mod service;
-mod entity;
-mod common;
-mod global;
+mod stream;
 mod tool;
-
-use service::{AgentService, RuleService};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -37,8 +37,11 @@ async fn main() -> anyhow::Result<()> {
             .with_api_base(std::env::var("API_BASE")?)
             .with_api_key(std::env::var("API_KEY")?),
     );
-
-    let db = Arc::new(Database::new("streamind.db")?);
+    //初始化数据库连接
+    let opt = ConnectOptions::new("sqlite://streamind.db?mode=rwc");
+    let db = Database::connect(opt).await.expect("数据库连接失败");
+    DB.set(db).unwrap();
+    //
     let agent_service = AgentService::new(db.clone());
     let rule_service = RuleService::new(db.clone());
 
@@ -47,12 +50,7 @@ async fn main() -> anyhow::Result<()> {
         .await?;
 
     let group_id = rule_service.create_rule_group("default")?;
-    rule_service.add_rule(
-        group_id,
-        r#""hello"&"world""#,
-        "inject(你好世界)",
-        3600,
-    )?;
+    rule_service.add_rule(group_id, r#""hello"&"world""#, "inject(你好世界)", 3600)?;
     rule_service.add_rule(
         group_id,
         r#"contains("help")"#,

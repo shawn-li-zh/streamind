@@ -1,19 +1,18 @@
-use std::{
-    collections::{HashMap, HashSet},
-};
+use std::collections::{HashMap, HashSet};
 
 use anyhow::Ok;
 use chrono::{DateTime, Local};
+use sea_orm::EntityTrait;
 use tokio::sync::{mpsc, watch};
 pub mod event;
-pub mod section;
 pub mod global;
+pub mod section;
 use crate::{
     agent::{
         event::AgentEventData,
         section::{Section, SectionEvent},
     },
-    entity,
+    entity::{self, EventEntity, EventModel},
     global::AGENT_GLOBAL_CONTEXT,
     llm_engine::LLMEngine,
     stream::MindStream,
@@ -31,6 +30,7 @@ pub struct AgentContext {
 }
 
 pub struct Agent {
+    pub id: u32,
     pub info: entity::agent::Model,
     tool_excutor: ToolExcutor,
     mind_stream: MindStream,
@@ -39,7 +39,7 @@ pub struct Agent {
     watcher: (watch::Sender<bool>, watch::Receiver<bool>),
 }
 impl Agent {
-    pub fn new(info: entity::agent::Model, tool_packages: HashSet<String>) -> Agent {
+    pub fn new(id: u32, info: entity::agent::Model, tool_packages: HashSet<String>) -> Agent {
         //通道
         let event = mpsc::channel(100);
         let section = mpsc::channel(100);
@@ -52,6 +52,7 @@ impl Agent {
             packages: tool_packages,
         };
         Agent {
+            id,
             info,
             event_sender: event.0,
             section_receiver: section.1,
@@ -78,14 +79,19 @@ impl Agent {
         //@todo 保存数据库
         let event = AgentEvent {
             id: 0,
-            agent_id: 0,
+            agent_id: self.id,
             data: event_data,
-            response: String::new(),
             force,
             time: Local::now(),
         };
-        if let AgentEventData::Interupt(reason) = &event.data {
-            self.mind_stream.stop(reason).await;
+        let mut event_model = EventModel::default();
+        event_model.agent_id = event.agent_id;
+        event_model.event_type=event.data.name().to_string();
+        event_model.force=event.force;
+        event_model.time=event.time;
+        EventEntity::insert(event_model.into()).exec(db).await;
+        if let AgentEventData::Interrupt(reason) = &event.data {
+            self.mind_stream.stop(reason.as_str()).await;
             return Ok(());
         }
         self.event_sender.send(event).await?;
@@ -108,7 +114,7 @@ impl Agent {
                     SectionEvent::Open(section_tag) => todo!(),
                     SectionEvent::Close(section) => {
                         //保存数据库+发送到前端
-                        if let Section::FunctionCall(code) = &section {
+                        if let Section::ToolCall(code) = &section {
                             tool_calls.push(code.to_string());
                         }
                         sections.push(section);
