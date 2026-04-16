@@ -65,14 +65,19 @@ pub struct MindStream {
 impl MindStream {
     pub fn new(
         engine: Arc<LLMEngine>,
+        system_prompt: String,
         inject_receiver: mpsc::UnboundedReceiver<(String, bool)>,
         event_receiver: mpsc::Receiver<AgentEvent>,
         section_sender: mpsc::Sender<SectionEvent>,
         run_watcher: watch::Sender<bool>,
     ) -> Self {
+        let msg = ChatCompletionRequestSystemMessageArgs::default()
+            .content(system_prompt)
+            .build()
+            .unwrap();
         MindStream {
             llm_engine: engine,
-            messages: vec![],
+            messages: vec![ChatCompletionRequestMessage::System(msg)],
             event_buffer: vec![],
             is_running: false,
             last_section_head: RwLock::new(String::new()),

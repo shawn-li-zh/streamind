@@ -16,12 +16,7 @@ pub struct Model {
     pub name: String,
     #[sea_orm(not_null, default_value = 0)]
     pub step: i64,
-    #[sea_orm(column_type = "Text", not_null)]
-    pub system: String,
-    #[sea_orm(column_type = "Text", default_value = "")]
-    pub memory: String,
-    #[sea_orm(column_type = "Text", default_value = "")]
-    pub goal: String,
+
     #[sea_orm(column_type = "Text", default_value = "[]")]
     pub tool_packages: StringArray,
     #[sea_orm(column_type = "Timestamp", not_null)]

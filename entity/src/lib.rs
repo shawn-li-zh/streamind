@@ -1,10 +1,11 @@
 pub mod agent;
 pub mod event;
+pub mod section;
+pub mod item;
+pub mod types;
 
 pub mod rule_group;
-pub mod section;
 pub mod trigger_rule;
-pub mod types;
 
 // pub use agent::{ActiveModel, Entity, Model};
 // pub use event::{ActiveModel as EventActiveModel, Entity as EventEntity, Model as EventModel};

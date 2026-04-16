@@ -1,44 +1,55 @@
-use std::{convert::Infallible, sync::Arc};
+use axum::{body::Body, http::Response, response::IntoResponse, Json, Router};
+use serde::Serialize;
 
-use axum::{
-    extract::{Path, State},
-    response::{sse::Event, Sse},
-    routing::get,
-    Router,
-};
-use futures::Stream;
-use tokio::sync::mpsc;
-use tokio_stream::{wrappers::UnboundedReceiverStream, StreamExt};
+pub mod api;
 
-use crate::agent::global::AGENT_POOL;
+#[derive(Serialize)]
+pub struct ApiResponse<T> {
+    pub code: u16,
+    pub data: Option<T>,
+    pub message: String,
+}
 
-async fn connect_agent(
-    Path(agent_id): Path<u32>,
-) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
-    let p = AGENT_POOL.read().await;
-
-    let agent_arc = match p.get(&agent_id) {
-        Some(a) => a,
-        None => {
-            panic!("agent不存在！")
+// 构造辅助函数
+impl<T> ApiResponse<T>
+where
+    T: Serialize,
+{
+    pub fn success(data: T) -> Self {
+        Self {
+            code: 200,
+            data: Some(data),
+            message: "ok".to_string(),
         }
-    };
-
-    // 2. 创建通道 (Unbounded 适合流式输出)
-    let (tx, rx) = mpsc::unbounded_channel();
-
-    // 3. 将写入器注入 Agent
-    {
-        let mut agent = agent_arc.write().await;
-        agent.web_sender = Some(tx);
     }
 
-    // 4. 将接收端转为 Stream 返回给前端
-    let stream = UnboundedReceiverStream::new(rx).map(Ok);
-
-    Sse::new(stream).keep_alive(axum::response::sse::KeepAlive::default())
+    pub fn error(message: &str) -> Self {
+        Self {
+            code: 500,
+            data: None,
+            message: message.to_string(),
+        }
+    }
+}
+impl ApiResponse<()> {
+    pub fn ok() -> ApiResponse<()> {
+        ApiResponse {
+            code: 200,
+            data: None,
+            message: "ok".to_string(),
+        }
+    }
+}
+impl<T> IntoResponse for ApiResponse<T>
+where
+    T: Serialize,
+{
+    fn into_response(self) -> Response<Body> {
+        // 将结构体转换为 JSON，Axum 会自动设置 Content-Type: application/json
+        Json(self).into_response()
+    }
 }
 
 pub fn inject_router(router: Router) -> Router {
-    router.route("/api/connect/:agent_id", get(connect_agent))
+    api::inject_router(router)
 }
