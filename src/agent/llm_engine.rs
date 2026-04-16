@@ -8,8 +8,8 @@ use async_openai::{
 };
 #[derive(Debug, Clone)]
 pub struct LLMEngine {
-    model: String,
-    client: Client<OpenAIConfig>,
+    pub model: String,
+    pub client: Client<OpenAIConfig>,
 }
 impl LLMEngine {
     pub async fn stream(

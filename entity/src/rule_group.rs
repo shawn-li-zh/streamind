@@ -12,5 +12,4 @@ pub struct Model {
     pub create_time: String,
 }
 
-
 impl ActiveModelBehavior for ActiveModel {}

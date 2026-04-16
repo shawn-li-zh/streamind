@@ -8,7 +8,7 @@ use async_openai::types::{
 use crate::{
     agent::{
         event::{AgentEvent, AgentEventData},
-        section::{section_stream, Section, SectionEvent, SectionListener},
+        section::{section_stream, Section, SectionEvent},
     },
     llm_engine::LLMEngine,
 };
@@ -124,7 +124,7 @@ impl MindStream {
             let _ = rx.await.unwrap();
         }
         // 1. 给正在处理中的流插入一条中断事件内容
-        let section = format!("<interupt>{}</interupt>", info);
+        let section = format!("<interrupt>{}</interrupt>", info);
         self.inject_section(&section);
         // self.stop_channel.0.send(section).unwrap();
     }
@@ -157,7 +157,7 @@ impl MindStream {
         self.is_running = false;
     }
     async fn section_loop(&mut self) {
-        let mut is_interupt = false;
+        let mut is_interrupt = false;
         loop {
             // 1. 创建注入通道 (mpsc) 和 完成信号通道 (oneshot)
             let (tx, rx) = mpsc::unbounded_channel::<String>();
@@ -199,11 +199,11 @@ impl MindStream {
                             match &event{
                                 SectionEvent::Close(section)=>{
                                     if matches!(section,Section::Interrupt(_)){
-                                        is_interupt=true;
+                                        is_interrupt=true;
                                     }
                                 }
                                 SectionEvent::End=>{
-                                     is_interupt=true;
+                                     is_interrupt=true;
                                 }
                                 _=>{}
                             }
@@ -229,7 +229,7 @@ impl MindStream {
                             }
                         }
                 }
-                if is_interupt {
+                if is_interrupt {
                     done_tx.send(()).unwrap();
                     self.stop_tx = None;
                     self.done_rx = None;

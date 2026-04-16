@@ -4,7 +4,6 @@ use std::{
     sync::{Arc, LazyLock},
 };
 
-use anyhow::Ok;
 use futures::{
     future::{join_all, BoxFuture},
     FutureExt,
@@ -14,7 +13,7 @@ use serde_json::Value;
 use tokio::task::JoinHandle;
 
 mod package;
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum ToolCallError {
     ParseError(String),
     NotFound(String),
@@ -234,7 +233,10 @@ impl ToolExcutor {
     }
     //code格式 package.fn(..args) 或者 await package.fn(..args)
     pub async fn batch_call(&self, codes: Vec<String>) -> Vec<Result<String, ToolCallError>> {
-        let mut results = vec![Err(ToolCallError::Undo); codes.len()];
+        let mut results = vec![];
+        for _ in 0..codes.len() {
+            results.push(Err(ToolCallError::Undo));
+        }
         let mut has_parse_error = false;
         //语法解析
         let mut valid_tasks = Vec::with_capacity(codes.len());

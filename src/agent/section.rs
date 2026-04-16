@@ -2,6 +2,9 @@ use std::{pin::Pin, sync::LazyLock};
 
 use futures::{Stream, StreamExt};
 
+use tokio::sync::mpsc::{self, UnboundedSender};
+use tokio_stream::wrappers::UnboundedReceiverStream;
+
 pub enum Section {
     //思考:内容
     Think(String),
@@ -18,6 +21,21 @@ pub enum Section {
     //其他
     Other(String),
 }
+
+impl Into<String> for &Section {
+    fn into(self) -> String {
+        match self {
+            Section::Think(content) => format!("<think>{}</think>", content),
+            Section::ToolCall(content) => format!("<function_call>{}</function_call>", content),
+            Section::Reply(content) => format!("<reply>{}</reply>", content),
+            Section::Render(content) => format!("<render>{}</render>", content),
+            Section::Error(content) => format!("<error>{}</error>", content),
+            Section::Interrupt(content) => format!("<interrupt>{}</interrupt>", content),
+            Section::Other(content) => format!("<other>{}</other>", content),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SectionTag {
     pub name: &'static str,
@@ -36,17 +54,17 @@ pub static TAGS: LazyLock<Vec<SectionTag>> = LazyLock::new(|| {
         SectionTag::new("reply", "<reply>", "</reply>"),
         SectionTag::new("render", "<render>", "</render>"),
         SectionTag::new("error", "<error>", "</error>"),
-        SectionTag::new("interupt", "<interupt>", "</interupt>"),
+        SectionTag::new("interrupt", "<interrupt>", "</interrupt>"),
     ]
 });
-pub trait SectionListener {
-    fn on_start(&mut self, section: &str);
-    fn on_end(&mut self, section: Section);
-}
 
+pub struct SectionHead {
+    pub tag: SectionTag,
+    pub inner_stream: Pin<Box<dyn Stream<Item = String> + Send>>,
+}
 pub enum SectionEvent {
     Start,
-    Open(SectionTag),
+    Open(SectionHead),
     Close(Section),
     End,
 }
@@ -59,7 +77,7 @@ pub fn section_stream(
 ) -> impl Stream<Item = SectionEvent> {
     let mut buffer = String::new();
     let mut current_tag: Option<SectionTag> = None;
-
+    let mut inner_sender: Option<mpsc::UnboundedSender<String>> = None;
     // 定义我们需要解析的标签映射
     let tags = &*TAGS;
 
@@ -68,7 +86,9 @@ pub fn section_stream(
         yield SectionEvent::Start;
         while let Some(chunk) = chunk_stream.next().await {
             buffer.push_str(&chunk);
-
+            if let Some(tx)=&inner_sender{
+                tx.send(chunk.clone()).unwrap();
+            }
             // 循环处理 buffer，直到无法解析出完整的标签为止
             loop {
                 if let Some(tag) = &current_tag {
@@ -82,6 +102,7 @@ pub fn section_stream(
 
                         // yield 抛出到外部流
                         yield SectionEvent::Close(create_section(tag.name, content));
+                        inner_sender=None;
                         current_tag = None;
                     } else {
                         // 闭合标签还没到达，跳出当前处理，等待下一个 chunk
@@ -107,10 +128,14 @@ pub fn section_stream(
                         // 标签前面的内容作为普通的 Other 返回
                         if pos > 0 {
                             let content = buffer[..pos].to_string();
-                            yield SectionEvent::Open(tags[2].clone());
+                            let (head,tx)=to_head(tags[2].clone());
+                            inner_sender=Some(tx);
+                            yield SectionEvent::Open(head);
                             yield SectionEvent::Close(Section::Reply(content));
                         }
-                        yield SectionEvent::Open(tag.clone());
+                        let (head,tx)=to_head(tag.clone());
+                        inner_sender=Some(tx);
+                        yield SectionEvent::Open(head);
                         // 将当前标签从 buffer 中移除
                         buffer = buffer[pos + tag.start.len()..].to_string();
                         current_tag = Some(tag);
@@ -132,14 +157,24 @@ pub fn section_stream(
                 yield SectionEvent::Close(section);
             } else {
                 // 剩余内容当作普通
-                yield SectionEvent::Open(tags[2].clone());
+                let (head,tx)=to_head(tags[2].clone());
+                inner_sender=Some(tx);
+                yield SectionEvent::Open(head);
                 yield SectionEvent::Close(Section::Reply(buffer));
             }
         }
         yield SectionEvent::End
     }
 }
-
+fn to_head(tag: SectionTag) -> (SectionHead, UnboundedSender<String>) {
+    let (tx, rx) = mpsc::unbounded_channel::<String>();
+    let stream = UnboundedReceiverStream::new(rx).boxed();
+    let head = SectionHead {
+        tag,
+        inner_stream: stream,
+    };
+    (head, tx)
+}
 /// 辅助方法：根据 tag 名称构建对于的 Section 枚举
 fn create_section(tag: &str, content: String) -> Section {
     match tag {
@@ -148,7 +183,7 @@ fn create_section(tag: &str, content: String) -> Section {
         "render" => Section::Render(content),
         "reply" => Section::Reply(content),
         "error" => Section::Error(content),
-        "interupt" => Section::Interrupt(content),
+        "interrupt" => Section::Interrupt(content),
         _ => Section::Other(content),
     }
 }

@@ -31,9 +31,7 @@ impl AgentEventData {
             } => {
                 format!("附加信息：{},源事件id：{}", attach, source_event_id)
             }
-            AgentEventData::ToolCallResult(results) => {
-               results.join("\n---\n")
-            }
+            AgentEventData::ToolCallResult(results) => results.join("\n---\n"),
             AgentEventData::Interrupt(reason) => format!("【中断信号:'{}'】", reason),
         }
     }
@@ -52,16 +50,8 @@ pub struct AgentEvent {
 impl AgentEvent {
     pub fn to_message(&self) -> String {
         let time = self.time.format("%Y-%m-%d %H:%M:%S").to_string();
-        let head = format!(
-            "id={},type={},time={}",
-            self.id,
-            self.data.name(),
-            time
-        );
+        let head = format!("id={},type={},time={}", self.id, self.data.name(), time);
         let content = self.data.content();
-        return format!(
-            "{}\nContent:\n{}\nResponse:\n{}",
-            head, content, self.response
-        );
+        return format!("{}\nContent:\n{}", head, content);
     }
 }

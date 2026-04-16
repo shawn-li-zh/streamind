@@ -1,24 +1,15 @@
-use async_openai::{
-    config::OpenAIConfig,
-    types::{ChatCompletionRequestMessage, ChatCompletionRequestUserMessageArgs},
-    Client,
-};
-use sea_orm::{ConnectOptions, Database};
-use std::io::{self, Write};
-use std::sync::Arc;
+use axum::{routing::get, Router};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
-use crate::global::DB;
+use crate::{agent::global::AGENT_POOL, web::inject_router};
 
 mod agent;
 mod common;
-mod entity;
 mod global;
-mod llm_engine;
 mod rule;
-mod stream;
 mod tool;
+mod web;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -28,95 +19,15 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
+    dotenvy::dotenv()?;
+    crate::global::init().await?;
+    agent::global::init().await?;
     info!("Starting StreamInd AI Client");
 
-    dotenvy::dotenv()?;
-
-    let client = Client::with_config(
-        OpenAIConfig::new()
-            .with_api_base(std::env::var("API_BASE")?)
-            .with_api_key(std::env::var("API_KEY")?),
-    );
-    //初始化数据库连接
-    let opt = ConnectOptions::new("sqlite://streamind.db?mode=rwc");
-    let db = Database::connect(opt).await.expect("数据库连接失败");
-    DB.set(db).unwrap();
-    //
-    let agent_service = AgentService::new(db.clone());
-    let rule_service = RuleService::new(db.clone());
-
-    agent_service
-        .init_agent("Assistant", "初始化记忆", "帮助用户完成任务")
-        .await?;
-
-    let group_id = rule_service.create_rule_group("default")?;
-    rule_service.add_rule(group_id, r#""hello"&"world""#, "inject(你好世界)", 3600)?;
-    rule_service.add_rule(
-        group_id,
-        r#"contains("help")"#,
-        "context(用户需要帮助)",
-        3600,
-    )?;
-
-    println!("\n=== StreamInd AI Chat ===");
-    println!("Type 'exit' to quit\n");
-
-    let mut conversation: Vec<ChatCompletionRequestMessage> = vec![];
-
-    loop {
-        print!("> ");
-        io::stdout().flush()?;
-
-        let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
-        let input = input.trim();
-
-        if input.is_empty() {
-            continue;
-        }
-        if input.eq_ignore_ascii_case("exit") {
-            println!("Goodbye!");
-            break;
-        }
-
-        let injections = agent_service.add_event(input).await?;
-        if !injections.is_empty() {
-            println!("[Rule triggered: {}]", injections.join(", "));
-        }
-
-        let user_msg = ChatCompletionRequestUserMessageArgs::default()
-            .content(input.to_string())
-            .build()?;
-        conversation.push(user_msg.into());
-
-        info!("Sending message to OpenAI");
-
-        let response = client
-            .chat()
-            .create(async_openai::types::CreateChatCompletionRequest {
-                model: "gpt-4o-mini".to_string(),
-                messages: conversation.clone(),
-                ..Default::default()
-            })
-            .await?;
-
-        if let Some(choice) = response.choices.first() {
-            let reply = choice.message.content.clone().unwrap_or_default();
-            println!("\nAssistant: {}\n", reply);
-
-            let _ = agent_service.evaluate_rules(&reply).await;
-
-            conversation.push(
-                async_openai::types::ChatCompletionRequestMessage::Assistant(
-                    async_openai::types::ChatCompletionRequestAssistantMessageArgs::default()
-                        .content(reply)
-                        .build()?,
-                ),
-            );
-        }
-    }
-
-    rule_service.cleanup_expired()?;
+    let mut app = Router::new();
+    app = inject_router(app);
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
+    axum::serve(listener, app).await.unwrap();
 
     Ok(())
 }

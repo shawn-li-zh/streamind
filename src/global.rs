@@ -3,18 +3,21 @@ use std::{
     sync::{LazyLock, OnceLock},
 };
 
-use crate::{agent::AgentGlobalContext, common::prompt_cache::PromptCache, tool::ToolPackage};
-use lazy_static::lazy_static;
-use sea_orm::DatabaseConnection;
+use crate::{common::prompt_cache::PromptCache, tool::ToolPackage};
+
+use sea_orm::{ConnectOptions, Database, DatabaseConnection};
 pub static PROMPT_CACHE: LazyLock<PromptCache> =
     LazyLock::new(|| PromptCache::new("./prompts".into()));
 pub static TOOL_PACKAGE_POOL: LazyLock<HashMap<String, ToolPackage>> =
     LazyLock::new(|| HashMap::new());
 pub static DB: OnceLock<DatabaseConnection> = OnceLock::new();
 
-lazy_static! {
-    pub static ref AGENT_GLOBAL_CONTEXT: AgentGlobalContext = AgentGlobalContext {
-        agent: HashMap::new(),
-        engine: HashMap::new(),
-    };
+pub async fn init() -> anyhow::Result<()> {
+    //初始化数据库连接
+    let url = std::env::var("DATABASE_URL")?;
+    let opt = ConnectOptions::new(url);
+    let db = Database::connect(opt).await.expect("数据库连接失败");
+    db.get_schema_registry("entity::*").sync(&db).await?;
+    DB.set(db).unwrap();
+    Ok(())
 }

@@ -57,7 +57,11 @@ impl PromptCache {
     }
 
     pub fn get_keys(&self) -> Vec<String> {
-        self.templates.read().ok().map(|t| t.keys().cloned().collect()).unwrap_or_default()
+        self.templates
+            .read()
+            .ok()
+            .map(|t| t.keys().cloned().collect())
+            .unwrap_or_default()
     }
 
     pub fn reload(&self) {
@@ -98,7 +102,10 @@ impl PromptCache {
                 .unwrap();
             rt.block_on(async {
                 while let Some(event) = rx.recv().await {
-                    if matches!(event.kind, notify::EventKind::Modify(_) | notify::EventKind::Create(_)) {
+                    if matches!(
+                        event.kind,
+                        notify::EventKind::Modify(_) | notify::EventKind::Create(_)
+                    ) {
                         tracing::info!("Template file changed, reloading...");
                         if let Ok(mut templates) = templates.write() {
                             templates.clear();
@@ -146,17 +153,22 @@ fn walkdir_recursive(
             let key = relative
                 .file_stem()
                 .and_then(|s| s.to_str())
-                .map(|s| relative.parent().map(|p| {
-                    if p.as_os_str().is_empty() {
-                        s.to_string()
-                    } else {
-                        format!(
-                            "{}/{}",
-                            p.file_name().and_then(|n| n.to_str()).unwrap_or(""),
-                            s
-                        )
-                    }
-                }).unwrap_or_else(|| s.to_string()))
+                .map(|s| {
+                    relative
+                        .parent()
+                        .map(|p| {
+                            if p.as_os_str().is_empty() {
+                                s.to_string()
+                            } else {
+                                format!(
+                                    "{}/{}",
+                                    p.file_name().and_then(|n| n.to_str()).unwrap_or(""),
+                                    s
+                                )
+                            }
+                        })
+                        .unwrap_or_else(|| s.to_string())
+                })
                 .unwrap_or_default();
 
             let content = std::fs::read_to_string(&path)?;
