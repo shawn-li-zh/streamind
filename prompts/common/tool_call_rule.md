@@ -12,11 +12,9 @@
 <tool_call>common.println("hello world")</tool_call>
 ps:以上两个函数会同时异步执行。
 
-
 同步调用：
 <tool_call>await common.get_weather("shanghai")</tool_call>
 ps:当执行器遇到await时，会同步等待当前工具调用完成。
-
 
 ### 注意事项
 你可以输出多个同步调用和异步调用，执行器会按顺序执行

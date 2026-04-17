@@ -8,8 +8,7 @@ use crate::{common::prompt_cache::PromptCache, tool::ToolPackage};
 use sea_orm::{ConnectOptions, Database, DatabaseConnection};
 pub static PROMPT_CACHE: LazyLock<PromptCache> =
     LazyLock::new(|| PromptCache::new("./prompts".into()));
-pub static TOOL_PACKAGE_POOL: LazyLock<HashMap<String, ToolPackage>> =
-    LazyLock::new(|| HashMap::new());
+
 pub static DB: OnceLock<DatabaseConnection> = OnceLock::new();
 
 pub async fn init() -> anyhow::Result<()> {
