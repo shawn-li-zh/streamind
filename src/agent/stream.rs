@@ -204,7 +204,9 @@ impl MindStream {
                      Some(section_event) = section_stream.next() =>  {
                             let is_end= matches!(&section_event,SectionEvent::End);
                             if let SectionEvent::Close(section)=&section_event{
-                                response.push_str(section.content());
+                                let s:String=section.into();
+                                response.push_str(&s);
+                                response.push_str("\n");
                             }
                             self.section_sender.send(section_event).await.unwrap();
                             if is_end{
@@ -227,9 +229,9 @@ impl MindStream {
                         }
                 };
             }
-            //放入agent的回复
+            //放入agent的回复 
             let msg = ChatCompletionRequestAssistantMessageArgs::default()
-                .content(response)
+                .content(response.trim().to_string())
                 .build()
                 .unwrap();
             self.messages

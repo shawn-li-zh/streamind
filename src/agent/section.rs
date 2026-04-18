@@ -3,58 +3,36 @@ use std::{pin::Pin, sync::LazyLock, time::Duration};
 use futures::{Stream, StreamExt};
 use tokio::sync::mpsc;
 
-pub enum Section {
-    //思考:内容
-    Think(String),
-    //函数调用
-    ToolCall(String),
-    //回复
-    Reply(String),
-    //客户端UI渲染代码
-    Render(String),
-    //异常
-    Error(String),
-    //中断
-    Interrupt(String),
-    //其他
-    Other(String),
+#[derive(Debug, Clone)]
+// pub enum Section {
+//     //思考:内容
+//     Think(String),
+//     //函数调用
+//     ToolCall(String),
+//     //回复
+//     Reply(String),
+//     //客户端UI渲染代码
+//     Render(String),
+//     //异常
+//     Error(String),
+//     //中断
+//     Interrupt(String),
+//     //其他
+//     Other(String),
+// }
+pub struct Section {
+    pub tag: &'static SectionTag,
+    pub content: String,
 }
 
 impl Into<String> for &Section {
     fn into(self) -> String {
-        match self {
-            Section::Think(content) => format!("<think>{}</think>", content),
-            Section::ToolCall(content) => format!("<function_call>{}</function_call>", content),
-            Section::Reply(content) => format!("<reply>{}</reply>", content),
-            Section::Render(content) => format!("<render>{}</render>", content),
-            Section::Error(content) => format!("<error>{}</error>", content),
-            Section::Interrupt(content) => format!("<interrupt>{}</interrupt>", content),
-            Section::Other(content) => format!("<other>{}</other>", content),
-        }
+        format!("{}\n{}\n{}", self.tag.start, self.content, self.tag.end)
     }
 }
 impl Section {
-    pub fn name(&self) -> &'static str {
-        match &self {
-            Section::Think(_) => "think",
-            Section::ToolCall(_) => "tool_call",
-            Section::Reply(_) => "reply",
-            Section::Render(_) => "render",
-            Section::Error(_) => "error",
-            Section::Interrupt(_) => "interrupt",
-            Section::Other(_) => "other",
-        }
-    }
-    pub fn content(&self)->&String{
-         match &self {
-            Section::Think(c) =>c,
-            Section::ToolCall(c) =>c,
-            Section::Reply(c) =>c,
-            Section::Render(c) =>c,
-            Section::Error(c) =>c,
-            Section::Interrupt(c) =>c,
-            Section::Other(c) =>c,
-        }
+    pub fn new(tag: &'static SectionTag, content: String) -> Section {
+        Section { tag, content }
     }
 }
 
@@ -79,11 +57,11 @@ pub static TAGS: LazyLock<Vec<SectionTag>> = LazyLock::new(|| {
         SectionTag::new("interrupt", "<interrupt>", "</interrupt>"),
     ]
 });
-
+#[derive(Debug, Clone)]
 pub enum SectionEvent {
     Start,
-    Open(SectionTag),
-    Chunk(&'static str, String),
+    Open(&'static SectionTag),
+    Chunk(&'static SectionTag, String),
     Close(Section),
     End,
 }
@@ -96,12 +74,12 @@ pub fn section_stream(
     // safe_size 必须大于等于最长闭合标签的长度 (</function_call> 是 16)
     let safe_size = 20;
     let mut buffer = String::new();
-    let mut current_tag: Option<SectionTag> = None;
+    let mut current_tag: Option<&'static SectionTag> = None;
     let mut tag_seek: usize = 0;
 
     let mut is_in_reply_stream = false;
-    let tags = &*TAGS;
-
+    let tags: &'static Vec<SectionTag> = &*TAGS;
+    let reply_tag = &tags[2];
     async_stream::stream! {
         yield SectionEvent::Start;
 
@@ -126,14 +104,14 @@ pub fn section_stream(
 
                     if let Some(tag) = &current_tag {
                         // 处于标签内
-                        yield SectionEvent::Chunk(tag.name, chunk_text);
+                        yield SectionEvent::Chunk(tag, chunk_text);
                     } else {
                         // 处于正常文本内，也需要流式输出！
                         if !is_in_reply_stream {
-                            yield SectionEvent::Open(tags[2].clone()); // tags[2] 是 reply
+                            yield SectionEvent::Open(reply_tag); // tags[2] 是 reply
                             is_in_reply_stream = true;
                         }
-                        yield SectionEvent::Chunk(tags[2].name, chunk_text);
+                        yield SectionEvent::Chunk(reply_tag, chunk_text);
                     }
                     tag_seek = offset;
                 }
@@ -148,10 +126,10 @@ pub fn section_stream(
                     if let Some(pos) = buffer.find(tag.end) {
                         // 把没输出完的部分补齐输出
                         if tag_seek < pos {
-                            yield SectionEvent::Chunk(tag.name, buffer[tag_seek..pos].to_string());
+                            yield SectionEvent::Chunk(tag, buffer[tag_seek..pos].to_string());
                         }
                         let content = buffer[..pos].to_string();
-                        yield SectionEvent::Close(create_section(tag.name, content));
+                        yield SectionEvent::Close(Section::new(&tag, content));
 
                         // 截断 buffer，关键修复：重置状态！
                         buffer = buffer[pos + tag.end.len()..].to_string();
@@ -169,7 +147,7 @@ pub fn section_stream(
                         if let Some(pos) = buffer.find(tag.start) {
                             if earliest_pos.map_or(true, |p| pos < p) {
                                 earliest_pos = Some(pos);
-                                earliest_tag = Some(tag.clone());
+                                earliest_tag = Some(tag);
                             }
                         }
                     }
@@ -180,21 +158,22 @@ pub fn section_stream(
                         // 起始标签前面的内容处理
                         if pos > 0 && !&buffer[..pos].trim_start().is_empty() {
                             if !is_in_reply_stream {
-                                yield SectionEvent::Open(tags[2].clone());
+                                yield SectionEvent::Open(reply_tag);
                             }
                             if tag_seek < pos {
-                                yield SectionEvent::Chunk(tags[2].name, buffer[tag_seek..pos].to_string());
+                                yield SectionEvent::Chunk(reply_tag, buffer[tag_seek..pos].to_string());
                             }
                             let content = buffer[..pos].to_string();
-                            yield SectionEvent::Close(Section::Reply(content));
+
+                            yield SectionEvent::Close(Section::new(reply_tag,content));
                             is_in_reply_stream = false;
                         }
 
                         // 截断 buffer 进入新标签，关键修复：不盲目直接 yield buffer！
                         buffer = buffer[pos + tag.start.len()..].to_string();
-                        yield SectionEvent::Open(tag.clone());
+                        yield SectionEvent::Open(tag);
                         tag_seek = 0;
-                        current_tag = Some(tag);
+                        current_tag = Some(&tag);
                     } else {
                         break; // 没找到起始标签，交给下一轮网络流
                     }
@@ -209,31 +188,18 @@ pub fn section_stream(
             let remain = buffer[tag_seek..].to_string();
 
             if let Some(tag) = current_tag {
-                yield SectionEvent::Chunk(tag.name, remain);
-                yield SectionEvent::Close(create_section(tag.name, buffer.clone()));
+                yield SectionEvent::Chunk(tag, remain);
+                yield SectionEvent::Close(Section::new(&tag, buffer.clone()));
             } else if !&buffer.trim_start().is_empty(){
                 if !is_in_reply_stream {
-                    yield SectionEvent::Open(tags[2].clone());
+                    yield SectionEvent::Open(reply_tag);
                 }
-                yield SectionEvent::Chunk(tags[2].name, remain);
-                yield SectionEvent::Close(Section::Reply(buffer.clone()));
+                yield SectionEvent::Chunk(reply_tag, remain);
+                yield SectionEvent::Close(Section::new(reply_tag,buffer.clone()));
             }
         }
 
         yield SectionEvent::End;
-    }
-}
-
-/// 辅助方法：根据 tag 名称构建对于的 Section 枚举
-fn create_section(tag: &str, content: String) -> Section {
-    match tag {
-        "think" => Section::Think(content),
-        "function_call" => Section::ToolCall(content),
-        "render" => Section::Render(content),
-        "reply" => Section::Reply(content),
-        "error" => Section::Error(content),
-        "interrupt" => Section::Interrupt(content),
-        _ => Section::Other(content),
     }
 }
 

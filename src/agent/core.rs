@@ -1,19 +1,14 @@
 use std::{
     collections::{HashMap, HashSet},
-    sync::{
-        atomic::{AtomicI64, AtomicU32, Ordering},
-        Arc,
-    },
+    sync::Arc,
 };
 
 use async_openai::types::ChatCompletionRequestSystemMessageArgs;
 use axum::response::sse;
 use chrono::Local;
-use entity::agent;
-use futures::StreamExt;
-use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
+
 use serde_json::json;
-use tokio::sync::{mpsc, watch, Mutex, RwLock};
+use tokio::sync::{mpsc, oneshot::Receiver, watch, Mutex, RwLock};
 use tracing::info;
 
 use crate::{
@@ -22,10 +17,13 @@ use crate::{
         global::{AGENT_POOL, ENGINE_POOL},
         kit::{entity_kit, message_kit, prompt_kit},
         section::{Section, SectionEvent},
+        sse_event::WebEvent,
         stream::MindStream,
     },
-    global::{DB, PROMPT_CACHE},
-    tool::ToolExcutor,
+    tool::{
+        core::ToolCallError,
+        executor::{ToolCallEvent, ToolExcutor},
+    },
 };
 
 pub struct Agent {
@@ -125,20 +123,35 @@ impl Agent {
     ) -> anyhow::Result<entity::event::Model> {
         //保存数据库
         let (event, model) = entity_kit::save_event(&self.info, event_data, force).await?;
-        self.event_sender.send(event).await?;
+        self.event_sender.send(event.clone()).await?;
+        //发送到前端
+        match &event.data {
+            AgentEventData::AgentResponse
+            | AgentEventData::UserInput(_)
+            | AgentEventData::ToolCallResult(_) => {
+                //忽略
+            }
+            _ => {
+                let web_event = WebEvent::Agent(event);
+                self.send_web_event(web_event).await;
+            }
+        }
+
         Ok(model)
     }
-}
 
-fn to_sse_event<T>(event: &str, data: T) -> sse::Event
-where
-    T: serde::Serialize,
-{
-    let payload = json!({
-        "event":event,
-        "data":data,
-    });
-    sse::Event::default().json_data(payload).unwrap()
+    async fn send_web_event(&mut self, e: WebEvent) {
+        if let Some(sender) = &self.web_sender {
+            match sender.send(e.to_sse_event()) {
+                Ok(_) => {}
+                Err(e) => {
+                    //断开
+                    info!("sse连接断开：{}", e);
+                    self.web_sender = None;
+                }
+            };
+        }
+    }
 }
 
 impl AgentRuntime {
@@ -151,34 +164,34 @@ impl AgentRuntime {
                     .unwrap();
                 agent.info.step = new_step;
             }
-            self.react().await?;
+            if let Err(e) = self.react().await {
+                let mut agent = self.agent.write().await;
+                agent
+                    .send_event(AgentEventData::Error(format!("{}", e)), true)
+                    .await
+                    .unwrap();
+            };
         }
     }
 
     async fn react(&mut self) -> anyhow::Result<()> {
-        let mut sections = vec![];
         let mut tool_calls = vec![];
-        let mut tool_call_ids = vec![];
-        let mut last_head_tag = None;
         let mut start_time = 0;
 
         while let Some(section_event) = self.section_receiver.recv().await {
+            let web_event = WebEvent::Section(section_event.clone(), 0);
             match section_event {
                 SectionEvent::Start => {
-                    send_sse_event(self.agent.clone(), to_sse_event("start", "")).await;
+                    send_web_event(self.agent.clone(), web_event).await;
                 }
                 SectionEvent::Open(tag) => {
-                    last_head_tag = Some(tag.clone());
                     start_time = Local::now().timestamp_subsec_millis();
-                    let agent = self.agent.read().await;
-                    if agent.web_sender.is_some() {
-                        send_sse_event(self.agent.clone(), to_sse_event("open", &tag.name)).await;
-                    }
+
+                    send_web_event(self.agent.clone(), web_event).await;
                 }
-                SectionEvent::Chunk(tag_name, chunk) => match tag_name {
+                SectionEvent::Chunk(tag, _) => match tag.name {
                     "reply" | "think" => {
-                        let agent = self.agent.clone();
-                        send_sse_event(agent.clone(), to_sse_event("chunk", chunk)).await;
+                        send_web_event(self.agent.clone(), web_event).await;
                     }
                     _ => {
                         continue;
@@ -198,67 +211,82 @@ impl AgentRuntime {
                             &section,
                             taken_time,
                             json!({
-                                "content":section.content().clone()
+                                "content":section.content.clone()
                             }),
                         )
                         .await
                         .expect("保存section失败")
                     };
                     //发送到前端
-                    let tag = last_head_tag.unwrap();
-                    let content = match tag.name {
-                        "reply" | "think" => String::new(),
-                        _ => (&section).content().to_string(),
-                    };
-                    let data = json!({
-                        "id":model.id,
-                        "name":tag.name,
-                        "content":content,
-                        "meta":model.meta,
-                    });
-                    send_sse_event(self.agent.clone(), to_sse_event("close", data)).await;
+                    let web_event =
+                        WebEvent::Section(SectionEvent::Close(section.clone()), model.id);
+                    send_web_event(self.agent.clone(), web_event).await;
                     //
-                    if let Section::ToolCall(code) = &section {
-                        tool_call_ids.push(model.id);
-                        tool_calls.push(code.to_string());
+                    if section.tag.name == "tool_call" {
+                        tool_calls.push((model.id, section.content));
+                        continue;
                     }
-                    sections.push(section);
-                    last_head_tag = None;
                 }
                 SectionEvent::End => {
                     //没有调用的话，则等待外部事件触发循环
                     if tool_calls.is_empty() {
-                        send_sse_event(self.agent.clone(), to_sse_event("end", "")).await;
+                        send_web_event(self.agent.clone(), web_event).await;
                         break;
                     }
+
                     //加入临时阻塞事件接收机制，防止执行函数调用时，中间有事件触发
                     self.call_watcher.send(true).unwrap();
                     //批执行
-                    let results = self.tool_excutor.batch_call(tool_calls).await;
-                    //格式化+关联id
-                    let results = tool_call_ids
-                        .into_iter()
-                        .zip(results)
-                        .map(|(id, result)| {
-                            let content = match result {
-                                Ok(e) => format!("Ok:{}", e),
-                                Err(e) => format!("Error:{:?}", e),
+                    let (sender, mut receiver) = mpsc::channel::<ToolCallEvent>(tool_calls.len());
+                    let agent = self.agent.clone();
+                    let call_watcher = self.call_watcher.clone();
+                    let tool_call_ids: Vec<i64> = tool_calls.iter().map(|(id, _)| *id).collect();
+                    let call_ids = tool_call_ids.clone();
+                    tokio::spawn(async move {
+                        //异步处理函数调用结果
+                        let mut map: HashMap<i64, ToolCallResultItem> = HashMap::new();
+                        while let Some(event) = receiver.recv().await {
+                            let (id, content) = match &event {
+                                ToolCallEvent::Active(_, _) => {
+                                    send_web_event(agent.clone(), WebEvent::ToolCall(event)).await;
+                                    continue;
+                                }
+                                ToolCallEvent::Success(id, c) => (*id, format!("Ok:{}", c)),
+                                ToolCallEvent::Failure(id, e) => (*id, format!("Error:{}", e)),
+                                _ => {
+                                    continue;
+                                }
                             };
-                            ToolCallResultItem{
-                                id,content
-                            }
-                        })
-                        .collect();
-                    //发送事件
-                    {
-                        let mut agent = self.agent.write().await;
-                        let _ = agent
-                            .send_event_pure(AgentEventData::ToolCallResult(results), true)
-                            .await
-                            .unwrap();
-                    }
-                    //解锁
-                    self.call_watcher.send(false).unwrap();
+                            map.insert(id, ToolCallResultItem { id, content });
+                            send_web_event(agent.clone(), WebEvent::ToolCall(event)).await;
+                        }
+                        //结束
+                        send_web_event(agent.clone(), WebEvent::ToolCall(ToolCallEvent::End)).await;
+                        //发送完整事件
+                        {
+                            //排序
+                            let results = call_ids
+                                .iter()
+                                .map(|(id)| map.remove(id).unwrap())
+                                .collect();
+                            let mut agent = agent.write().await;
+                            let _ = agent
+                                .send_event_pure(AgentEventData::ToolCallResult(results), true)
+                                .await
+                                .unwrap();
+                        }
+                        //解锁
+                        call_watcher.clone().send(false).unwrap();
+                    });
+                    //通知前端 工具调用开始执行
+                    let agent = self.agent.clone();
+
+                    send_web_event(
+                        agent.clone(),
+                        WebEvent::ToolCall(ToolCallEvent::Start(tool_call_ids)),
+                    )
+                    .await;
+                    self.tool_excutor.batch_call(tool_calls, sender).await?;
                     break;
                 }
             }
@@ -272,18 +300,7 @@ impl AgentRuntime {
     }
 }
 
-async fn send_sse_event(agent: Arc<RwLock<Agent>>, e: sse::Event) {
-    let read = agent.read().await;
-    if let Some(sender) = &(&*read).web_sender {
-        match sender.send(e) {
-            Ok(_) => {}
-            Err(e) => {
-                //断开
-                info!("sse连接断开：{}", e);
-                drop(read);
-                let mut agent = (agent).write().await;
-                agent.web_sender = None;
-            }
-        };
-    }
+async fn send_web_event(agent: Arc<RwLock<Agent>>, e: WebEvent) {
+    let mut agent = agent.write().await;
+    agent.send_web_event(e).await
 }

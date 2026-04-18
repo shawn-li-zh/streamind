@@ -1,9 +1,8 @@
 use std::{
-    collections::HashMap,
     sync::{LazyLock, OnceLock},
 };
 
-use crate::{common::prompt_cache::PromptCache, tool::ToolPackage};
+use crate::common::prompt_cache::PromptCache;
 
 use sea_orm::{ConnectOptions, Database, DatabaseConnection};
 pub static PROMPT_CACHE: LazyLock<PromptCache> =

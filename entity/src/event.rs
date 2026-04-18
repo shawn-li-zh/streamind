@@ -39,5 +39,6 @@ pub enum EventTypeName {
     UserInput,
 
     ToolCallResult,
+    Error,
     Timer,
 }

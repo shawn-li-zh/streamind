@@ -26,6 +26,8 @@ pub enum AgentEventData {
     Timer(TimerData),
     //工具调用结果
     ToolCallResult(Vec<ToolCallResultItem>),
+    //异常
+    Error(String),
     //中断信号
     Interrupt(String),
 }
@@ -36,6 +38,7 @@ impl AgentEventData {
             AgentEventData::UserInput(_) => "用户输入",
             AgentEventData::Timer { .. } => "定时器",
             AgentEventData::ToolCallResult(_) => "工具调用结果",
+            AgentEventData::Error(_) => "异常",
             AgentEventData::Interrupt(_) => "中断信号",
         }
     }
@@ -45,6 +48,7 @@ impl AgentEventData {
             AgentEventData::UserInput(_) => EventTypeName::UserInput,
             AgentEventData::Timer { .. } => EventTypeName::Timer,
             AgentEventData::ToolCallResult(_) => EventTypeName::ToolCallResult,
+            AgentEventData::Error(_) => EventTypeName::Error,
             AgentEventData::Interrupt(_) => todo!(),
         }
     }
@@ -66,6 +70,7 @@ impl AgentEventData {
                 }
                 content
             }
+            AgentEventData::Error(reason) => format!("{}", reason),
             AgentEventData::Interrupt(reason) => format!("【中断信号:'{}'】", reason),
         }
     }
@@ -82,6 +87,11 @@ impl AgentEventData {
             }
             AgentEventData::ToolCallResult(results) => {
                 json!(results)
+            }
+            AgentEventData::Error(info) => {
+                json!({
+                    "info":info.clone()
+                })
             }
             AgentEventData::Interrupt(reason) => {
                 json!({
@@ -131,6 +141,11 @@ fn to_event_data(type_name: EventTypeName, payload: serde_json::Value) -> AgentE
 
         EventTypeName::ToolCallResult => {
             AgentEventData::ToolCallResult(serde_json::from_value(payload).unwrap())
+        }
+        EventTypeName::Error => {
+            let mut map: HashMap<String, String> = serde_json::from_value(payload).unwrap();
+            let info = map.remove("info").unwrap_or_default();
+            AgentEventData::Error(info)
         }
         EventTypeName::Timer => AgentEventData::Timer(serde_json::from_value(payload).unwrap()),
     }
