@@ -1,42 +1,50 @@
-use core::agent::AgentInfo;
 use std::{
     any::Any,
     collections::{HashMap, HashSet},
+    sync::{Arc, RwLock},
     time::Duration,
 };
+use streamind_core::agent::AgentInfo;
 
 use futures::{FutureExt, future::BoxFuture};
 
 use serde::Serialize;
 use serde_json::{Value, json};
-use thiserror::Error;
 
-use crate::value_type::{ToolValueType, TypeInfo, TypeItemInfo};
-
+use crate::{
+    context::ToolPackageContext,
+    value_type::{ToolValueType, TypeInfo, TypeItemInfo},
+};
+pub type SafeAny = dyn Any + Send + Sync + 'static;
+pub type ContextData = Arc<RwLock<SafeAny>>;
 pub type ToolHandler = Box<
-    dyn Fn(HashMap<String, serde_json::Value>) -> BoxFuture<'static, anyhow::Result<ToolCallReturn>>
+    dyn Fn(
+            HashMap<String, serde_json::Value>,
+            ContextData,
+        ) -> BoxFuture<'static, anyhow::Result<ToolCallReturn>>
         + Send
         + Sync,
 >;
-pub type ActiveFn = Box<dyn Fn(&HashMap<String, serde_json::Value>) -> String + Send + Sync>;
-pub type ContextBuilder = Box<dyn Fn(&AgentInfo) -> Box<dyn Any> + Send + Sync>;
+
+pub type ActiveFn = Box<dyn Fn(HashMap<String, serde_json::Value>,ContextData) -> anyhow::Result<String> + Send + Sync>;
+pub type ContextBuilder = Box<dyn Fn(&AgentInfo) -> Box<SafeAny> + Send + Sync>;
 
 pub fn async_tool_handler<F, Fut>(f: F) -> ToolHandler
 where
-    F: Fn(HashMap<String, serde_json::Value>) -> Fut + Send + Sync + 'static,
+    F: Fn(HashMap<String, serde_json::Value>, ContextData) -> Fut + Send + Sync + 'static,
     Fut: std::future::Future<Output = anyhow::Result<ToolCallReturn>> + Send + 'static,
 {
-    Box::new(move |args| f(args).boxed())
+    Box::new(move |args, ctx| f(args, ctx).boxed())
 }
 pub fn sync_tool_handler<F>(f: F) -> ToolHandler
 where
-    F: Fn(HashMap<String, serde_json::Value>) -> Result<ToolCallReturn, anyhow::Error>
+    F: Fn(HashMap<String, serde_json::Value>, ContextData) -> Result<ToolCallReturn, anyhow::Error>
         + Send
         + Sync
         + 'static,
 {
-    Box::new(move |args| {
-        let res = f(args);
+    Box::new(move |args, ctx| {
+        let res = f(args, ctx);
         async move { res }.boxed() // 将同步结果包装在 async 块中并 boxed
     })
 }
@@ -73,15 +81,22 @@ impl Tool {
             handler,
         }
     }
-    pub fn active_tip(&self, args: &HashMap<String, serde_json::Value>) -> String {
-        (self.active)(args)
+    pub fn active_tip(&self, args: HashMap<String, serde_json::Value>, ctx: &ToolPackageContext,) -> String {
+       match (self.active)(args,ctx.data.clone()) {
+           Ok(r) => {r},
+           Err(e) => format!("参数异常:{e}"),
+       }
     }
 
     pub async fn call(
         &self,
         args: HashMap<String, serde_json::Value>,
+        ctx: &ToolPackageContext,
     ) -> anyhow::Result<ToolCallReturn> {
-        (self.handler)(args).await
+        if ctx.is_limited(self.name) {
+            return Err(anyhow::anyhow!("调用频率过高"));
+        };
+        (self.handler)(args, ctx.data.clone()).await
     }
 
     pub fn to_doc(&self) -> String {
@@ -157,8 +172,11 @@ impl ToolPackage {
     pub fn get_type(&self, type_name: &str) -> Option<&TypeInfo> {
         self.types.get(type_name)
     }
-    pub fn new_context(&self, agent: &AgentInfo) -> Box<dyn Any> {
+    pub fn new_context(&self, agent: &AgentInfo) -> Box<dyn Any + Send + Sync + 'static> {
         (self.context_builder)(agent)
+    }
+    pub fn tools(&self) -> &HashMap<&'static str, Tool> {
+        &self.tools
     }
 }
 

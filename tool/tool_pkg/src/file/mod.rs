@@ -2,12 +2,12 @@ use tool_macro::package;
 
 #[package("文件操作工具包")]
 pub mod pkg {
-    use core::agent::AgentInfo;
+    use streamind_core::agent::AgentInfo;
 
     use anyhow::Ok;
     use chrono::Local;
 
-    use tool_core::ToolCallReturn;
+    use tool_core::{ContextData, ToolCallReturn};
 
     pub struct Context {
         pub root_path: String,
@@ -30,7 +30,6 @@ pub mod pkg {
         pub creation_time: chrono::DateTime<Local>,
         pub last_access_time: chrono::DateTime<Local>,
         pub last_write_time: chrono::DateTime<Local>,
-        #[field(anno="文件类型",enums=["txt","png"])]
         pub change_time: Option<chrono::DateTime<Local>>,
         pub file_size: u64,
     }
@@ -51,8 +50,14 @@ pub mod pkg {
         active = format!("正在创建{path}文件夹"),
         limit = "30s:10"
     )]
-    pub fn create_dir(#[arg("文件路径")] path: String) -> anyhow::Result<()> {
+    pub fn create_dir(
+        #[arg("文件路径")] path: String,
+        #[ctx] ctx: ContextData,
+    ) -> anyhow::Result<()> {
         std::fs::create_dir_all(path)?;
         Ok(())
     }
+}
+pub fn te() {
+    let a = pkg::build_package();
 }

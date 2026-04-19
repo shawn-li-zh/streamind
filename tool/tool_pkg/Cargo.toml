@@ -16,4 +16,4 @@ futures = "0.3"
 
 tool_core = { path = "../tool_core" }
 tool_macro = { path = "../tool_macro" }
-core = { path = "../../core" }
+streamind_core = { path = "../../streamind_core" }

@@ -1,5 +1,8 @@
+use std::collections::HashSet;
+
 use chrono::Local;
 
+use dashmap::DashMap;
 use sea_orm::{
     prelude::Expr,
     ActiveModelTrait,
@@ -7,10 +10,15 @@ use sea_orm::{
     ColumnTrait, EntityTrait, ExprTrait, QueryFilter,
 };
 use serde::Serialize;
+use streamind_core::{
+    agent::{AgentInfo, AgentStatus, AgentToolContext},
+    tool::ToolPackageContext,
+};
 
 use crate::{
     agent::{
         event::{AgentEvent, AgentEventData},
+        global::TOOL_PACKAGE_TOOL,
         section::Section,
     },
     global::DB,
@@ -92,4 +100,20 @@ pub async fn incr_agent_state_version(agent_id: u32, cur_version: i64) -> anyhow
         .await?;
 
     Ok(cur_version + 1)
+}
+
+pub fn to_agent_info(model: entity::agent::Model) -> AgentInfo {
+    let tool_packages: HashSet<String> = model.tool_packages.0.clone().into_iter().collect();
+
+    let agent = AgentInfo {
+        id: model.id,
+        parent_id: model.parent_id,
+        state_verion: model.state_version,
+        step: model.step,
+        name: model.name,
+        workspace: model.workspace,
+        avatar: model.avatar,
+        status: AgentStatus::Idle,
+    };
+    agent
 }

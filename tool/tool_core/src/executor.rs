@@ -1,12 +1,17 @@
 use std::{
     collections::{HashMap, HashSet},
     fmt::format,
+    sync::Arc,
 };
 
 use serde_json::Value;
 use tokio::{sync::mpsc, task::JoinHandle};
 
-use crate::core::{ToolCallReturn, ToolPackage};
+use crate::{
+    Tool,
+    context::ToolPackageContext,
+    core::{ToolCallReturn, ToolPackage},
+};
 #[derive(Debug, Clone)]
 pub enum ToolCallEvent {
     //调用id组
@@ -26,17 +31,102 @@ impl ToolCallEvent {
         }
     }
 }
+pub type ToolPackagePool = HashMap<&'static str, ToolPackage>;
 pub struct ToolExcutor {
-    package_pool: &'static HashMap<String, ToolPackage>,
-    pub packages: HashSet<String>,
+    package_pool: &'static ToolPackagePool,
+    packages: HashSet<String>,
+    contexts: HashMap<&'static str, Arc<ToolPackageContext>>,
 }
 impl ToolExcutor {
+    pub fn new(
+        package_pool: &'static ToolPackagePool,
+        packages: HashSet<String>,
+        contexts: HashMap<&'static str, Arc<ToolPackageContext>>,
+    ) -> Self {
+        Self {
+            package_pool,
+            packages,
+            contexts,
+        }
+    }
+
     //code格式 await package.fn(..args)
+
     pub async fn batch_call(
         &self,
         codes: Vec<(i64, String)>,
         sender: mpsc::Sender<ToolCallEvent>,
     ) -> anyhow::Result<()> {
+        //语法解析
+        let valid_tasks = self.parse_call(codes)?;
+
+        // 执行阶段
+        let mut concurrent_tasks: Vec<JoinHandle<()>> = Vec::new();
+        async fn send(
+            sender: mpsc::Sender<ToolCallEvent>,
+            id: i64,
+            res: Result<ToolCallReturn, anyhow::Error>,
+        ) {
+            match res {
+                Ok(res) => {
+                    sender
+                        .send(ToolCallEvent::Success(id, res.data.to_string()))
+                        .await
+                        .unwrap();
+                }
+                Err(e) => {
+                    sender
+                        .send(ToolCallEvent::Failure(id, format!("{e}")))
+                        .await
+                        .unwrap();
+                }
+            }
+        }
+        for (id, pkg, tool, args, is_await) in valid_tasks {
+            let ctx = self.contexts.get(pkg.name).unwrap();
+            sender
+                .send(ToolCallEvent::Active(id, tool.active_tip(args.clone(),&ctx)))
+                .await
+                .unwrap();
+            if is_await {
+                let ctx = self.contexts.get(pkg.name).unwrap();
+                // 串行：立即执行并等待结果，存入对应的索引位置
+                let res = tool.call(args, ctx).await;
+                let is_error = res.is_err();
+                send(sender.clone(), id, res).await;
+                if is_error {
+                    return Err(anyhow!("同步函数调用失败!"));
+                }
+            } else {
+                let sender: mpsc::Sender<ToolCallEvent> = sender.clone();
+                let ctx = ctx.clone();
+                let handle = tokio::spawn(async move {
+                    let res: std::result::Result<crate::core::ToolCallReturn, anyhow::Error> =
+                        tool.call(args, &ctx).await;
+                    send(sender, id, res).await
+                });
+                concurrent_tasks.push(handle);
+            }
+        }
+        // 回收并发结果
+        for handle in concurrent_tasks {
+            // handle.await 可能会返回 join 错误（例如 panic 了）
+            handle.await?;
+        }
+        Ok(())
+    }
+    fn parse_call(
+        &self,
+        codes: Vec<(i64, String)>,
+    ) -> anyhow::Result<
+        Vec<(
+            i64,
+            &'static ToolPackage,
+            &'static Tool,
+            HashMap<String, Value>,
+            bool,
+        )>,
+    > {
         let mut has_parse_error = false;
         let mut error_info = String::new();
         //语法解析
@@ -82,65 +172,17 @@ impl ToolExcutor {
             }
             let tool: &'static super::core::Tool = opt.unwrap();
             //
+            let ctx = self.contexts.get(pkg_name).unwrap();
             let args = parse_args(args)?;
             valid_tasks.push((*id, pkg, tool, args, is_await));
         }
         if has_parse_error {
             return Err(anyhow!(error_info))?;
         }
-        // 执行阶段
-        let mut concurrent_tasks: Vec<JoinHandle<()>> = Vec::new();
-        async fn send(
-            sender: mpsc::Sender<ToolCallEvent>,
-            id: i64,
-            res: Result<ToolCallReturn, anyhow::Error>,
-        ) {
-            match res {
-                Ok(res) => {
-                    sender
-                        .send(ToolCallEvent::Success(id, res.data.to_string()))
-                        .await
-                        .unwrap();
-                }
-                Err(e) => {
-                    sender
-                        .send(ToolCallEvent::Failure(id, format!("{e}")))
-                        .await
-                        .unwrap();
-                }
-            }
-        }
-        for (id, package, tool, args, is_await) in valid_tasks {
-            sender
-                .send(ToolCallEvent::Active(id, tool.active_tip(&args)))
-                .await
-                .unwrap();
-            if is_await {
-                // 串行：立即执行并等待结果，存入对应的索引位置
-                let res = tool.call(args).await;
-                let is_error = res.is_err();
-                send(sender.clone(), id, res).await;
-                if is_error {
-                    return Err(anyhow!("同步函数调用失败!"));
-                }
-            } else {
-                let sender: mpsc::Sender<ToolCallEvent> = sender.clone();
-                let handle = tokio::spawn(async move {
-                    let res: std::result::Result<crate::core::ToolCallReturn, anyhow::Error> =
-                        tool.call(args).await;
-                    send(sender, id, res).await
-                });
-                concurrent_tasks.push(handle);
-            }
-        }
-        // 回收并发结果
-        for handle in concurrent_tasks {
-            // handle.await 可能会返回 join 错误（例如 panic 了）
-            handle.await?;
-        }
-        Ok(())
+        Ok(valid_tasks)
     }
 }
+
 use anyhow::{Context, Result, anyhow};
 /// 格式 (aaa=1,bbb={},ccc=[],ddd="str",eee=true)
 fn parse_args(input: &str) -> anyhow::Result<HashMap<String, Value>> {

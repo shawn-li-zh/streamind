@@ -1,74 +1,75 @@
 use std::{
     any::Any,
     collections::VecDeque,
-    sync::Mutex,
+    sync::{Arc, Mutex, RwLock},
     time::{Duration, Instant},
 };
 
 use dashmap::DashMap;
-pub trait PackageCtx: Send + Sync + Any {
-    fn as_any(&self) -> &dyn Any;
+
+use crate::ToolPackage;
+
+pub struct ToolPackageContext {
+    pub data: Arc<RwLock<dyn Any + Send + Sync + 'static>>,
+    tool_limiter: DashMap<&'static str, RateLimiter>,
 }
 
-pub struct ToolPackageContext<T> {
-    pub data: T,
-    tool_limiter: DashMap<&'static str, SlidingWindowCounter>,
-}
-impl<T: Send + Sync + 'static> PackageCtx for ToolPackageContext<T> {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-}
-
-impl<T> ToolPackageContext<T> {
-    pub fn is_limited(&self, tool_name: &str, count: usize) -> bool {
-        if let Some(counter) = self.tool_limiter.get(tool_name) {
-            if counter.get_total() >= count {
-                return true;
+impl ToolPackageContext {
+    pub fn new<T: Send + Sync + 'static>(data: T, pkg: &ToolPackage) -> Self {
+        let map = DashMap::new();
+        for (name, tool) in pkg.tools() {
+            if let Some(rate_limit) = tool.rate_limit {
+                map.insert(*name, RateLimiter::new(rate_limit.0, rate_limit.1));
             }
-            counter.add(1);
+        }
+        Self {
+            data: Arc::new(RwLock::new(data)),
+            tool_limiter: map,
+        }
+    }
+    pub fn data(&self) -> std::sync::Arc<std::sync::RwLock<dyn Any>> {
+        self.data.clone()
+    }
+
+    pub fn is_limited(&self, tool_name: &str) -> bool {
+        if let Some(counter) = self.tool_limiter.get(tool_name) {
+            return counter.value().check();
         }
         false
     }
 }
-pub struct ToolContext {
-    pub packages: DashMap<&'static str, Box<dyn PackageCtx>>,
-}
 
-pub struct SlidingWindowCounter {
-    slots: Mutex<VecDeque<(Instant, usize)>>,
+pub struct RateLimiter {
+    slots: Mutex<VecDeque<Instant>>,
     window_size: Duration,
+    limit_times: usize,
 }
 
-impl SlidingWindowCounter {
-    pub fn new(window_size: Duration) -> Self {
+impl RateLimiter {
+    pub fn new(window_size: Duration, limit_times: u32) -> Self {
         Self {
             slots: Mutex::new(VecDeque::new()),
             window_size,
+            limit_times: limit_times as usize,
         }
     }
 
-    pub fn add(&self, count: usize) {
+    pub fn check(&self) -> bool {
         let mut slots = self.slots.lock().unwrap();
         let now = Instant::now();
-
-        // 记录当前时刻的计数
-        slots.push_back((now, count));
-
         // 移除窗口外的陈旧数据
         self.remove_past(&now, &mut slots);
+        let total = slots.len();
+        if total >= self.limit_times {
+            return false;
+        }
+        // 记录当前时刻的计数
+        slots.push_back(now);
+        true
     }
 
-    pub fn get_total(&self) -> usize {
-        let mut slots = self.slots.lock().unwrap();
-        let now = Instant::now();
-
-        self.remove_past(&now, &mut slots);
-        // 求和
-        slots.iter().map(|(_, count)| count).sum()
-    }
-    fn remove_past(&self, now: &Instant, slots: &mut VecDeque<(Instant, usize)>) {
-        while let Some((time, _)) = slots.front() {
+    fn remove_past(&self, now: &Instant, slots: &mut VecDeque<Instant>) {
+        while let Some((time)) = slots.front() {
             if now.duration_since(*time) > self.window_size {
                 slots.pop_front();
             } else {

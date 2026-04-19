@@ -28,10 +28,11 @@ struct FieldAttr {
 
 pub fn handle_struct(
     item_struct: &mut ItemStruct,
+    attr: Attribute,
     generated_types: &mut Vec<proc_macro2::TokenStream>,
 ) {
-    // 提取注释并清理无关宏
-    let struct_annotation = extract_struct_annotation(&mut item_struct.attrs);
+    // 提取注释
+    let struct_annotation = extract_struct_annotation(&attr);
 
     let struct_name = item_struct.ident.to_string();
 
@@ -83,23 +84,20 @@ fn extract_field_attr(attrs: &mut Vec<Attribute>) -> FieldAttr {
 }
 
 /// 解析结构体上的 #[class(...)] 属性
-fn extract_struct_annotation(attrs: &mut Vec<Attribute>) -> String {
-    if let Some(idx) = attrs.iter().position(|a| a.path().is_ident("class")) {
-        let attr = attrs.remove(idx);
-        // 尝试解析 #[class(anno="...")]
-        if let Meta::List(list) = &attr.meta {
-            if let Ok(nested) = NestedMeta::parse_meta_list(list.tokens.clone()) {
-                if let Ok(parsed) = TypeAttr::from_list(&nested) {
-                    if let Some(ann) = parsed.anno {
-                        return ann;
-                    }
+fn extract_struct_annotation(attr: &Attribute) -> String {
+    // 尝试解析 #[class(anno="...")]
+    if let Meta::List(list) = &attr.meta {
+        if let Ok(nested) = NestedMeta::parse_meta_list(list.tokens.clone()) {
+            if let Ok(parsed) = TypeAttr::from_list(&nested) {
+                if let Some(ann) = parsed.anno {
+                    return ann;
                 }
             }
         }
-        // 兼容处理单字符串 #[class("...")]
-        if let Ok(lit) = attr.parse_args::<syn::LitStr>() {
-            return lit.value();
-        }
+    }
+    // 兼容处理单字符串 #[class("...")]
+    if let Ok(lit) = attr.parse_args::<syn::LitStr>() {
+        return lit.value();
     }
     String::new()
 }

@@ -1,6 +1,6 @@
 use darling::FromMeta;
 use proc_macro2::TokenStream;
-use quote::{format_ident, quote};
+use quote::{ToTokens, format_ident, quote};
 use syn::{Attribute, FnArg, ItemFn, Meta, Pat, ReturnType, Signature, Type};
 
 use crate::common;
@@ -8,9 +8,11 @@ use crate::common;
 #[derive(Debug, FromMeta, Default)]
 #[darling(default)]
 pub struct ToolArgs {
+     #[darling(rename = "anno")]
     pub anno: Option<String>,
     pub example: Option<String>,
     pub active: Option<syn::Expr>,
+     #[darling(rename = "limit")]
     pub rate_limit: Option<String>,
 }
 
@@ -23,7 +25,7 @@ pub fn handle_fn(
     let args = ToolArgs::from_meta(&attr.meta).unwrap_or_default();
 
     // 3. 构建参数提取器 (extractors) 和 函数入参变量名 (arg_names)
-    let (arg_extractors, arg_names) = build_arg_extractors(&item_fn.sig);
+    let (arg_extractors, arg_names) = build_arg_extractors(&mut item_fn.sig);
 
     // 4. 解析限流配置为 Rust Token
     let rate_limit_tokens = parse_rate_limit_to_tokens(args.rate_limit.as_deref().unwrap_or(""));
@@ -36,28 +38,33 @@ pub fn handle_fn(
 }
 
 fn build_arg_extractors(
-    sig: &Signature,
+    sig: &mut Signature,
 ) -> (Vec<proc_macro2::TokenStream>, Vec<proc_macro2::TokenStream>) {
     let mut extractors = Vec::new();
     let mut names = Vec::new();
 
-    for arg in &sig.inputs {
+    for arg in &mut sig.inputs {
         if let syn::FnArg::Typed(pat_type) = arg {
+            let ty=pat_type.ty.to_token_stream();
             if let syn::Pat::Ident(pat_ident) = &*pat_type.pat {
                 let arg_ident = &pat_ident.ident;
                 let arg_name_str = arg_ident.to_string();
-
+                // 收集传递给原函数的变量名
+                names.push(quote!(#arg_ident));
+                if is_ctx_arg(&mut pat_type.attrs) {
+                    extractors.push(quote! {
+                        let #arg_ident = ctx;
+                    });
+                    continue;
+                }
                 // 生成从 HashMap 中提取并反序列化的代码
                 extractors.push(quote! {
-                    let #arg_ident = {
+                    let #arg_ident:#ty = {
                         let arg_val = args.remove(#arg_name_str).unwrap_or_default();
                         serde_json::from_value(arg_val)
                             .map_err(|e| anyhow::anyhow!("{} 参数格式异常: {}", #arg_name_str, e))?
                     };
                 });
-
-                // 收集传递给原函数的变量名
-                names.push(quote!(#arg_ident));
             }
         }
     }
@@ -111,17 +118,17 @@ fn build_tool_registration(
     let active = match args.active {
         Some(expr) => {
             quote! {
-                Box::new(|args: &std::collections::HashMap<String, serde_json::Value>| {
+                Box::new(|mut args: std::collections::HashMap<String, serde_json::Value>,ctx:ContextData| {
                     #(#extractors)*
                     let res = #expr;
-                    res.into()
+                    Ok(res.into())
                 })
             }
         }
         None => {
             quote! {
-                Box::new(|args: &std::collections::HashMap<String, serde_json::Value>| {
-                    format!("正在调用'{}'...",#tool_name)
+                Box::new(|mut args: std::collections::HashMap<String, serde_json::Value>,ctx:ContextData| {
+                    Ok(format!("正在调用'{}'...",#tool_name))
                 })
             }
         }
@@ -132,7 +139,7 @@ fn build_tool_registration(
     // 动态生成 handler 闭包
     let handler_closure = if is_async {
         quote! {
-            tool_core::async_tool_handler(async |mut args: std::collections::HashMap<String, serde_json::Value>| {
+            tool_core::async_tool_handler(async |mut args: std::collections::HashMap<String, serde_json::Value>,ctx:ContextData| {
                 #(#extractors)*
                 let res = #fn_ident(#(#arg_names),*).await?;
                 Ok(res.into())
@@ -140,7 +147,7 @@ fn build_tool_registration(
         }
     } else {
         quote! {
-            tool_core::sync_tool_handler(|mut args: std::collections::HashMap<String, serde_json::Value>| {
+            tool_core::sync_tool_handler(|mut args: std::collections::HashMap<String, serde_json::Value>,ctx:ContextData| {
                 #(#extractors)*
                 let res = #fn_ident(#(#arg_names),*)?;
                 Ok(res.into())
@@ -155,7 +162,7 @@ fn build_tool_registration(
             #annotation,
             #example,
             #rate_limit_tokens,
-            (vec![ #(#args_t)*],#return_t),
+            (vec![ #(#args_t),*],#return_t),
             #active,
             #handler_closure,
         ));
@@ -234,7 +241,13 @@ fn extract_arg_annotation(attrs: &mut Vec<Attribute>) -> String {
     }
     annotation
 }
-
+fn is_ctx_arg(attrs: &mut Vec<Attribute>) -> bool {
+    if let Some(idx) = attrs.iter().position(|a| a.path().is_ident("ctx")) {
+        let attr = attrs.remove(idx);
+        return true;
+    }
+    false
+}
 /// 剥离 Result/anyhow::Result 包装，获取 T
 fn unwrap_result_type(ty: &Type) -> &Type {
     if let Type::Path(type_path) = ty {

@@ -3,9 +3,12 @@ name = "streamind"
 version = "0.1.0"
 edition = "2021"
 [workspace]
-members = [".", "core", "entity", "tool/tool_core", "tool/tool_macro", "tool/tool_pkg"]
+members = [".", "streamind_core", "entity", "tool/tool_core", "tool/tool_macro", "tool/tool_pkg"]
 [dependencies]
 entity = { path = "entity" }
+streamind_core = { path = "streamind_core" }
+tool_core = { path = "tool/tool_core" }
+tool_pkg = { path = "tool/tool_pkg" }
 
 async-openai = "0.25"
 dotenvy = "0.15"

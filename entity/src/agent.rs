@@ -20,6 +20,8 @@ pub struct Model {
     pub name: String,
     #[sea_orm(not_null, default_value = 0)]
     pub step: i64,
+    pub workspace: String,
+    pub avatar: String,
 
     #[sea_orm(column_type = "Text", default_value = "[]")]
     pub tool_packages: StringArray,

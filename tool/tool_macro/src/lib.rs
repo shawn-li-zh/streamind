@@ -25,7 +25,14 @@ pub fn package(args: TokenStream, input: TokenStream) -> TokenStream {
             match item {
                 // 处理结构体 (提取 TS 类型)
                 syn::Item::Struct(item_struct) => {
-                    parse_type::handle_struct(item_struct, &mut generated_types);
+                    if let Some(idx) = item_struct
+                        .attrs
+                        .iter()
+                        .position(|a| a.path().is_ident("class"))
+                    {
+                        let attr = item_struct.attrs.remove(idx);
+                        parse_type::handle_struct(item_struct,attr, &mut generated_types);
+                    }
                 }
 
                 // 处理函数 (提取 Tool)
@@ -52,6 +59,7 @@ pub fn package(args: TokenStream, input: TokenStream) -> TokenStream {
             pub fn build_package() -> tool_core::ToolPackage {
                 use std::collections::HashMap;
                 use tool_core::{
+                    ContextData,
                     Tool, ToolHandler, ToolPackage,
                     async_tool_handler,
                     sync_tool_handler,

@@ -3,12 +3,13 @@ use std::{
     sync::{Arc, LazyLock},
 };
 
-use async_openai::{config::OpenAIConfig, Client};
+use async_openai::{Client, config::OpenAIConfig};
 use chrono::Local;
 
 use sea_orm::{ActiveModelTrait, ActiveValue::Set, EntityTrait, IntoActiveModel};
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
+use tool_core::executor::ToolPackagePool;
 
 use crate::{
     agent::{
@@ -20,11 +21,11 @@ use crate::{
 //全局agent池
 pub static AGENT_POOL: LazyLock<RwLock<HashMap<u32, Arc<RwLock<Agent>>>>> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
-pub static AGENT_RUNTIME_POOL: LazyLock<RwLock<HashMap<u32, Arc<RwLock<AgentRuntime>>>>> =
-    LazyLock::new(|| RwLock::new(HashMap::new()));
+
 pub static ENGINE_POOL: LazyLock<RwLock<HashMap<String, Arc<LLMEngine>>>> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
-
+pub static TOOL_PACKAGE_TOOL: LazyLock<ToolPackagePool> =
+    LazyLock::new(|| tool_pkg::tool_pool());
 pub static BASE_ITEMS: &str = include_str!("../../prompts/base_items.json");
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Item {

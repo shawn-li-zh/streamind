@@ -11,21 +11,15 @@ use serde_json::json;
 use tokio::sync::{mpsc, oneshot::Receiver, watch, Mutex, RwLock};
 use tracing::info;
 
-use crate::{
-    agent::{
-        event::{AgentEvent, AgentEventData, ToolCallResultItem},
-        global::{AGENT_POOL, ENGINE_POOL},
-        kit::{entity_kit, message_kit, prompt_kit},
-        section::{Section, SectionEvent},
-        sse_event::WebEvent,
-        stream::MindStream,
-    },
-    tool::{
-        core::ToolCallError,
-        executor::{ToolCallEvent, ToolExcutor},
-    },
+use crate::agent::{
+    event::{AgentEvent, AgentEventData, ToolCallResultItem},
+    global::{AGENT_POOL, ENGINE_POOL, TOOL_PACKAGE_TOOL},
+    kit::{entity_kit, message_kit, prompt_kit},
+    section::{Section, SectionEvent},
+    sse_event::WebEvent,
+    stream::MindStream,
 };
-
+use tool_core::executor::{ToolCallEvent, ToolExcutor};
 pub struct Agent {
     pub info: entity::agent::Model,
     event_sender: mpsc::Sender<AgentEvent>,
@@ -77,11 +71,21 @@ impl Agent {
                 mind_stream.start().await;
             }
         });
+        let agent = entity_kit::to_agent_info(info.clone());
         //工具执行器
-        let tool_packages: HashSet<String> = info.tool_packages.0.clone().into_iter().collect();
-        let tool_excutor = ToolExcutor {
-            packages: tool_packages,
+        let tool_excutor = {
+            let tool_packages: HashSet<String> = info.tool_packages.0.clone().into_iter().collect();
+            let mut contexts = HashMap::new();
+            for pkg_name in &tool_packages {
+                if let Some(pkg) = TOOL_PACKAGE_TOOL.get(pkg_name.as_str()) {
+                    let data = pkg.new_context(&agent);
+                    let ctx = tool_core::context::ToolPackageContext::new(data,pkg);
+                    contexts.insert(pkg.name, Arc::new(ctx));
+                }
+            }
+            ToolExcutor::new(&*TOOL_PACKAGE_TOOL, tool_packages, contexts)
         };
+
         let agent = Agent {
             info,
             event_sender: event.0,

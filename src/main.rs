@@ -1,5 +1,5 @@
 use axum::{http::HeaderValue, routing::get, Router};
-use reqwest::{Method, header};
+use reqwest::{header, Method};
 use tower_http::cors::{Any, CorsLayer};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
@@ -10,7 +10,7 @@ mod agent;
 mod common;
 mod global;
 mod rule;
-mod tool;
+
 mod web;
 
 #[tokio::main]
