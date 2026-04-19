@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, sync::{Arc, atomic::{AtomicI64, AtomicPtr, Ordering}}};
 
 use chrono::Local;
 
@@ -11,21 +11,21 @@ use sea_orm::{
 };
 use serde::Serialize;
 use streamind_core::{
-    agent::{AgentInfo, AgentStatus, AgentToolContext},
-    tool::ToolPackageContext,
+    agent::{AgentContext, AgentInfo, AgentStatus},
+    tool::engine::ToolEngineContext,
 };
 
 use crate::{
     agent::{
         event::{AgentEvent, AgentEventData},
-        global::TOOL_PACKAGE_TOOL,
+        global::{AGENT_CTX_POOL, TOOL_PACKAGE_TOOL},
         section::Section,
     },
     global::DB,
 };
 
 pub async fn save_event(
-    agent_info: &entity::agent::Model,
+    agent_info: &AgentInfo,
     event_data: AgentEventData,
     force: bool,
 ) -> anyhow::Result<(AgentEvent, entity::event::Model)> {
@@ -39,8 +39,8 @@ pub async fn save_event(
     };
     let event_model = entity::event::ActiveModel {
         agent_id: Set(event.agent_id),
-        state_version: Set(agent_info.state_version),
-        step: Set(agent_info.step),
+        state_version: Set(agent_info.state_version.load(Ordering::Relaxed)),
+        step: Set(agent_info.step.load(Ordering::Relaxed)),
         event_type: Set(event.data.type_enum()),
         force: Set(event.force),
         time: Set(event.time),
@@ -52,7 +52,7 @@ pub async fn save_event(
 }
 
 pub async fn save_section<T: Serialize>(
-    agent_info: &entity::agent::Model,
+    agent_info: &AgentInfo,
     section: &Section,
     taken_time: u32,
     meta: T,
@@ -61,8 +61,8 @@ pub async fn save_section<T: Serialize>(
 
     let model = entity::section::ActiveModel {
         agent_id: Set(agent_info.id),
-        state_version: Set(agent_info.state_version),
-        step: Set(agent_info.step),
+        state_version: Set(agent_info.state_version.load(Ordering::Relaxed)),
+        step: Set(agent_info.step.load(Ordering::Relaxed)),
         name: Set(section.tag.name.to_string()),
         taken_time: Set(taken_time),
         meta: Set(json),
@@ -102,18 +102,36 @@ pub async fn incr_agent_state_version(agent_id: u32, cur_version: i64) -> anyhow
     Ok(cur_version + 1)
 }
 
-pub fn to_agent_info(model: entity::agent::Model) -> AgentInfo {
-    let tool_packages: HashSet<String> = model.tool_packages.0.clone().into_iter().collect();
-
+pub async fn build_agent_context(model: entity::agent::Model) -> Arc<AgentContext> {
+    let mut status= AgentStatus::Idle;
     let agent = AgentInfo {
         id: model.id,
         parent_id: model.parent_id,
-        state_verion: model.state_version,
-        step: model.step,
+        state_version: AtomicI64::new(model.state_version),
+        step: AtomicI64::new(model.step),
         name: model.name,
         workspace: model.workspace,
         avatar: model.avatar,
-        status: AgentStatus::Idle,
+        status: AtomicPtr::new(&mut status),
     };
-    agent
+    //
+    let tool_packages: HashSet<&str> = model
+        .tool_packages
+        .0
+        .into_iter()
+        .map(|v| TOOL_PACKAGE_TOOL.get(v.as_str()).unwrap().name)
+        .collect();
+    let tool_engine_context = ToolEngineContext::build(tool_packages, &*TOOL_PACKAGE_TOOL);
+    let agent_context = AgentContext {
+        info: agent,
+        tool_engine_context,
+    };
+    //
+    let id = agent_context.info.id;
+    let mut p = AGENT_CTX_POOL.write().await;
+    p.insert(id, Arc::new(agent_context));
+    let agent_context = p.get(&id).unwrap();
+    agent_context.tool_engine_context.init(agent_context.clone());
+
+    agent_context.clone()
 }

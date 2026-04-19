@@ -1,22 +1,22 @@
+pub use self::file::build_package;
 use tool_macro::package;
-
 #[package("文件操作工具包")]
-pub mod pkg {
-    use streamind_core::agent::AgentInfo;
+pub mod file {
+    use streamind_core::agent::AgentContext;
 
     use anyhow::Ok;
     use chrono::Local;
 
-    use tool_core::{ContextData, ToolCallReturn};
+    use streamind_core::tool::{ToolCallContext, ToolCallReturn};
 
     pub struct Context {
         pub root_path: String,
     }
 
     #[context]
-    pub fn new_context(agent: &AgentInfo) -> Context {
+    pub fn new_context(agent: &AgentContext) -> Context {
         Context {
-            root_path: agent.workspace.to_string(),
+            root_path: agent.info.workspace.to_string(),
         }
     }
     #[class("文件对象")]
@@ -52,12 +52,9 @@ pub mod pkg {
     )]
     pub fn create_dir(
         #[arg("文件路径")] path: String,
-        #[ctx] ctx: ContextData,
+        #[ctx] ctx: ToolCallContext,
     ) -> anyhow::Result<()> {
         std::fs::create_dir_all(path)?;
         Ok(())
     }
-}
-pub fn te() {
-    let a = pkg::build_package();
 }

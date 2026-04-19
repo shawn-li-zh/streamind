@@ -1,12 +1,17 @@
 use std::collections::HashMap;
 
-use tool_core::ToolPackage;
+use streamind_core::tool::ToolPackagePool;
 
 pub mod file;
+pub mod tool;
 
-pub fn tool_pool() -> HashMap<&'static str, ToolPackage> {
-    let mut pool: HashMap<&'static str, ToolPackage> = HashMap::new();
-    let pkg = file::pkg::build_package();
+pub fn tool_pool() -> ToolPackagePool {
+    let mut pool: ToolPackagePool = HashMap::new();
+    //
+    let pkg = tool::build_package();
+    pool.insert(pkg.name, pkg);
+    //
+     let pkg = file::build_package();
     pool.insert(pkg.name, pkg);
     pool
 }

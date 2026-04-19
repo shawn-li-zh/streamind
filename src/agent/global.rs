@@ -3,13 +3,13 @@ use std::{
     sync::{Arc, LazyLock},
 };
 
-use async_openai::{Client, config::OpenAIConfig};
+use async_openai::{config::OpenAIConfig, Client};
 use chrono::Local;
 
 use sea_orm::{ActiveModelTrait, ActiveValue::Set, EntityTrait, IntoActiveModel};
 use serde::{Deserialize, Serialize};
+use streamind_core::{agent::AgentContext, tool::ToolPackagePool};
 use tokio::sync::RwLock;
-use tool_core::executor::ToolPackagePool;
 
 use crate::{
     agent::{
@@ -22,10 +22,13 @@ use crate::{
 pub static AGENT_POOL: LazyLock<RwLock<HashMap<u32, Arc<RwLock<Agent>>>>> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
 
+pub static AGENT_CTX_POOL: LazyLock<RwLock<HashMap<u32, Arc<AgentContext>>>> =
+    LazyLock::new(||RwLock::new(HashMap::new()) );
+
 pub static ENGINE_POOL: LazyLock<RwLock<HashMap<String, Arc<LLMEngine>>>> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
-pub static TOOL_PACKAGE_TOOL: LazyLock<ToolPackagePool> =
-    LazyLock::new(|| tool_pkg::tool_pool());
+pub static TOOL_PACKAGE_TOOL: LazyLock<ToolPackagePool> = LazyLock::new(|| tool_pkg::tool_pool());
+
 pub static BASE_ITEMS: &str = include_str!("../../prompts/base_items.json");
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Item {
@@ -63,6 +66,8 @@ pub async fn init() -> anyhow::Result<()> {
             state_version: Set(0),
             model: Set(model),
             create_time: Set(Local::now()),
+            workspace:Set("/".to_string()),
+            avatar:Set("".to_string()),
             ..Default::default()
         };
         let agent = agent.insert(database_connection).await?;

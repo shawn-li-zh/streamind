@@ -118,7 +118,7 @@ fn build_tool_registration(
     let active = match args.active {
         Some(expr) => {
             quote! {
-                Box::new(|mut args: std::collections::HashMap<String, serde_json::Value>,ctx:ContextData| {
+                Box::new(|mut args: std::collections::HashMap<String, serde_json::Value>,ctx:ToolCallContext| {
                     #(#extractors)*
                     let res = #expr;
                     Ok(res.into())
@@ -127,7 +127,7 @@ fn build_tool_registration(
         }
         None => {
             quote! {
-                Box::new(|mut args: std::collections::HashMap<String, serde_json::Value>,ctx:ContextData| {
+                Box::new(|mut args: std::collections::HashMap<String, serde_json::Value>,ctx:ToolCallContext| {
                     Ok(format!("正在调用'{}'...",#tool_name))
                 })
             }
@@ -139,7 +139,7 @@ fn build_tool_registration(
     // 动态生成 handler 闭包
     let handler_closure = if is_async {
         quote! {
-            tool_core::async_tool_handler(async |mut args: std::collections::HashMap<String, serde_json::Value>,ctx:ContextData| {
+            async_tool_handler(async |mut args: std::collections::HashMap<String, serde_json::Value>,ctx:ToolCallContext| {
                 #(#extractors)*
                 let res = #fn_ident(#(#arg_names),*).await?;
                 Ok(res.into())
@@ -147,7 +147,7 @@ fn build_tool_registration(
         }
     } else {
         quote! {
-            tool_core::sync_tool_handler(|mut args: std::collections::HashMap<String, serde_json::Value>,ctx:ContextData| {
+            sync_tool_handler(|mut args: std::collections::HashMap<String, serde_json::Value>,ctx:ToolCallContext| {
                 #(#extractors)*
                 let res = #fn_ident(#(#arg_names),*)?;
                 Ok(res.into())
@@ -157,7 +157,7 @@ fn build_tool_registration(
 
     // 返回最终向 tools 插入的 TokenStream
     quote! {
-        tools.insert(#tool_name, tool_core::Tool::new(
+        tools.insert(#tool_name, Tool::new(
             #tool_name,
             #annotation,
             #example,

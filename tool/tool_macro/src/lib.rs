@@ -18,7 +18,7 @@ pub fn package(args: TokenStream, input: TokenStream) -> TokenStream {
 
     let mut generated_types: Vec<proc_macro2::TokenStream> = Vec::new();
     let mut generated_tools = Vec::new();
-    let mut ctx_t = quote! {Box::new(||Box::new(()))};
+    let mut ctx_t = quote! {Box::new(|_|Box::new(()))};
     // 遍历模块中的所有的项 (struct, fn 等)
     if let Some((_, ref mut items)) = module.content {
         for item in items.iter_mut() {
@@ -56,15 +56,15 @@ pub fn package(args: TokenStream, input: TokenStream) -> TokenStream {
 
         // 注入 build_package 函数到模块内部
         let build_fn = quote! {
-            pub fn build_package() -> tool_core::ToolPackage {
+            pub fn build_package() -> streamind_core::tool::ToolPackage {
                 use std::collections::HashMap;
-                use tool_core::{
-                    ContextData,
+                use streamind_core::tool::{
+                    ToolCallContext,
                     Tool, ToolHandler, ToolPackage,
                     async_tool_handler,
                     sync_tool_handler,
                 };
-                use tool_core::value_type::{ToolValueType, TypeInfo, TypeItemInfo};
+                use streamind_core::tool::value_type::{ToolValueType, TypeInfo, TypeItemInfo};
                 let mut types = HashMap::new();
                 #(#generated_types)*
 

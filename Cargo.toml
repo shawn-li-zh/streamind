@@ -3,11 +3,11 @@ name = "streamind"
 version = "0.1.0"
 edition = "2021"
 [workspace]
-members = [".", "streamind_core", "entity", "tool/tool_core", "tool/tool_macro", "tool/tool_pkg"]
+members = [".", "streamind_core", "entity", "tool/tool_macro", "tool/tool_pkg"]
 [dependencies]
 entity = { path = "entity" }
 streamind_core = { path = "streamind_core" }
-tool_core = { path = "tool/tool_core" }
+# tool_core = { path = "tool/tool_core" }
 tool_pkg = { path = "tool/tool_pkg" }
 
 async-openai = "0.25"
@@ -34,7 +34,8 @@ sea-orm = { version = "2.0.0-rc.37", features = [
     "sqlx-sqlite",
     "runtime-tokio-native-tls",
     "macros",
-    "schema-sync","entity-registry"
+    "schema-sync",
+    "entity-registry",
 ] }
 async-trait = "0.1"
 async_once = "0.2.6"
@@ -47,5 +48,5 @@ dashmap = "6.1.0"
 cargo-nextest = "0.9"
 
 [profile.dev]
-opt-level = 0    # 确保是 0，表示不优化，保留所有变量信息
-debug = true     # 确保生成调试信息
+opt-level = 0 # 确保是 0，表示不优化，保留所有变量信息
+debug = true  # 确保生成调试信息

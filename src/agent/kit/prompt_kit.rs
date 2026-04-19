@@ -1,8 +1,9 @@
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+use streamind_core::agent::AgentInfo;
 
 use crate::global::{DB, PROMPT_CACHE};
 
-pub async fn build_system_prompt(info: &entity::agent::Model) -> String {
+pub async fn build_system_prompt(info: &AgentInfo) -> String {
     let items: Vec<entity::item::Model> = entity::item::Entity::find()
         .filter(entity::item::Column::AgentId.eq(info.id))
         .all(DB.get().unwrap())

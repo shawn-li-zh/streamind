@@ -2,14 +2,13 @@ use axum::response::sse;
 use sea_orm::sea_query::prelude::rust_decimal::str;
 use serde::Serialize;
 use serde_json::json;
-use tool_core::executor::ToolCallEvent;
+use streamind_core::tool::engine::ToolCallEvent;
 
-use crate::{
-    agent::{
+
+use crate::agent::{
         event::{AgentEvent, AgentEventData},
         section::{Section, SectionEvent},
-    },
-};
+    };
 
 pub enum WebEvent {
     Section(SectionEvent, i64),
