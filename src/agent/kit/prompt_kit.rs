@@ -1,3 +1,8 @@
+use async_openai::types::{
+    ChatCompletionRequestAssistantMessageArgs, ChatCompletionRequestMessage,
+    ChatCompletionRequestSystemMessageArgs, ChatCompletionRequestToolMessageArgs,
+    ChatCompletionRequestUserMessageArgs,
+};
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use streamind_core::agent::AgentInfo;
 
@@ -56,4 +61,36 @@ pub async fn build_system_prompt(info: &AgentInfo) -> String {
     "#,
         info.id, info.name, generate_rule, tool_call_rule, memory, focus, goal
     )
+}
+
+pub fn system_message(content: String) -> ChatCompletionRequestMessage {
+    ChatCompletionRequestSystemMessageArgs::default()
+        .content(content)
+        .build()
+        .unwrap()
+        .into()
+}
+
+pub fn user_message(content: String) -> ChatCompletionRequestMessage {
+    ChatCompletionRequestUserMessageArgs::default()
+        .content(content)
+        .build()
+        .unwrap()
+        .into()
+}
+
+pub fn assistant_message(content: String) -> ChatCompletionRequestMessage {
+    ChatCompletionRequestAssistantMessageArgs::default()
+        .content(content)
+        .build()
+        .unwrap()
+        .into()
+}
+
+pub fn tool_message(content: String) -> ChatCompletionRequestMessage {
+    ChatCompletionRequestToolMessageArgs::default()
+        .content(content)
+        .build()
+        .unwrap()
+        .into()
 }

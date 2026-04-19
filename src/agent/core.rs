@@ -9,7 +9,7 @@ use chrono::Local;
 
 use serde_json::json;
 use streamind_core::{
-    agent::AgentContext,
+    agent::{AgentContext, AgentStatus},
     tool::engine::{ToolCallEvent, ToolEngine, ToolEngineContext},
 };
 use tokio::sync::{mpsc, oneshot::Receiver, watch, Mutex, RwLock};
@@ -61,20 +61,21 @@ impl Agent {
             .unwrap();
         messages.extend(msgs);
         //流
-        let p = ENGINE_POOL.read().await;
-        let engine = p.get("default").unwrap().clone();
-        let mut mind_stream = MindStream::new(
-            engine,
-            messages,
-            inject.1,
-            event.1,
-            section.0,
-            run_watcher.0,
-        );
+        let engine = {
+            let p = ENGINE_POOL.read().await;
+            let engine = p.get(&info.model).unwrap().clone();
+            engine
+        };
         tokio::spawn(async move {
-            loop {
-                mind_stream.start().await;
-            }
+            let mut mind_stream = MindStream::new(
+                engine,
+                messages,
+                inject.1,
+                event.1,
+                section.0,
+                run_watcher.0,
+            );
+            mind_stream.event_loop().await.unwrap();
         });
         //工具执行器
         let tool_engine = ToolEngine::new(agent_context.clone());
@@ -156,10 +157,16 @@ impl AgentRuntime {
         loop {
             {
                 let agent = self.agent.read().await;
-                let step = agent.ctx.info.step.fetch_add(1, Ordering::Relaxed);
+                let step = agent.ctx.info.step.load(Ordering::Relaxed);
                 let _ = entity_kit::incr_agent_step(agent.ctx.info.id, step)
                     .await
                     .unwrap();
+                let step = agent.ctx.info.step.fetch_add(1, Ordering::Relaxed);
+                agent
+                    .ctx
+                    .info
+                    .status
+                    .store(&mut AgentStatus::Idle, Ordering::Relaxed);
             }
             if let Err(e) = self.react().await {
                 let mut agent = self.agent.write().await;
@@ -179,6 +186,12 @@ impl AgentRuntime {
             let web_event = WebEvent::Section(section_event.clone(), 0);
             match section_event {
                 SectionEvent::Start => {
+                    let agent = self.agent.read().await;
+                    agent
+                        .ctx
+                        .info
+                        .status
+                        .store(&mut AgentStatus::Running, Ordering::Relaxed);
                     send_web_event(self.agent.clone(), web_event).await;
                 }
                 SectionEvent::Open(tag) => {

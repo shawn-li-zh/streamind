@@ -1,5 +1,12 @@
-use std::{collections::HashSet, sync::{Arc, atomic::{AtomicI64, AtomicPtr, Ordering}}};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::{
+        atomic::{AtomicI64, AtomicPtr, Ordering},
+        Arc,
+    },
+};
 
+use anyhow::Ok;
 use chrono::Local;
 
 use dashmap::DashMap;
@@ -9,16 +16,15 @@ use sea_orm::{
     ActiveValue::{self, Set},
     ColumnTrait, EntityTrait, ExprTrait, QueryFilter,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use streamind_core::{
-    agent::{AgentContext, AgentInfo, AgentStatus},
-    tool::engine::ToolEngineContext,
+    agent::{AgentContext, AgentInfo, AgentStatus}, item::Item, tool::engine::ToolEngineContext
 };
 
 use crate::{
     agent::{
         event::{AgentEvent, AgentEventData},
-        global::{AGENT_CTX_POOL, TOOL_PACKAGE_TOOL},
+        global::{AGENT_CTX_POOL, BASE_ITEMS, TOOL_PACKAGE_TOOL},
         section::Section,
     },
     global::DB,
@@ -103,13 +109,14 @@ pub async fn incr_agent_state_version(agent_id: u32, cur_version: i64) -> anyhow
 }
 
 pub async fn build_agent_context(model: entity::agent::Model) -> Arc<AgentContext> {
-    let mut status= AgentStatus::Idle;
+    let mut status = AgentStatus::Idle;
     let agent = AgentInfo {
         id: model.id,
         parent_id: model.parent_id,
         state_version: AtomicI64::new(model.state_version),
         step: AtomicI64::new(model.step),
         name: model.name,
+        model: model.model,
         workspace: model.workspace,
         avatar: model.avatar,
         status: AtomicPtr::new(&mut status),
@@ -131,7 +138,49 @@ pub async fn build_agent_context(model: entity::agent::Model) -> Arc<AgentContex
     let mut p = AGENT_CTX_POOL.write().await;
     p.insert(id, Arc::new(agent_context));
     let agent_context = p.get(&id).unwrap();
-    agent_context.tool_engine_context.init(agent_context.clone());
+    agent_context
+        .tool_engine_context
+        .init(agent_context.clone());
 
     agent_context.clone()
+}
+
+pub async fn new_agent(
+    name: String,
+    model: String,
+    parent_id: u32,
+    items: HashMap<String, Vec<Item>>,
+) -> anyhow::Result<entity::agent::Model> {
+    let database_connection = DB.get().unwrap();
+    let agent = entity::agent::ActiveModel {
+        name: Set(name),
+        parent_id: Set(parent_id),
+        step: Set(0),
+        state_version: Set(0),
+        model: Set(model),
+        create_time: Set(Local::now()),
+        workspace: Set("/".to_string()),
+        avatar: Set("".to_string()),
+        ..Default::default()
+    };
+    let agent = agent.insert(database_connection).await?;
+    //保存记忆条目
+    let mut saved_items = vec![];
+    for (group, items) in items {
+        for item in items {
+            let model = entity::item::ActiveModel {
+                agent_id: Set(agent.id),
+                group: Set(group.clone()),
+                name: Set(item.name),
+                content: Set(item.content),
+                editable: Set(item.editable),
+                ..Default::default()
+            };
+            saved_items.push(model);
+        }
+    }
+    entity::item::Entity::insert_many(saved_items)
+        .exec(database_connection)
+        .await?;
+    Ok(agent)
 }

@@ -15,15 +15,22 @@
         {
             "name": "自身状态",
             "content": "用户刚初始化我的环境",
-            "editable": true
+            "editable": true,
+            "removable": false
         },
         {
             "name": "用户状态",
             "content": "未知",
-            "editable": true
+            "editable": true,
+            "removable": false
         },
         {
             "name": "近期任务",
+            "content": "暂无",
+            "editable": true
+        },
+        {
+            "name": "事件",
             "content": "暂无",
             "editable": true
         }

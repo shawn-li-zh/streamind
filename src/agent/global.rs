@@ -7,13 +7,14 @@ use async_openai::{config::OpenAIConfig, Client};
 use chrono::Local;
 
 use sea_orm::{ActiveModelTrait, ActiveValue::Set, EntityTrait, IntoActiveModel};
-use serde::{Deserialize, Serialize};
-use streamind_core::{agent::AgentContext, tool::ToolPackagePool};
+
+use streamind_core::{agent::AgentContext, item::Item, tool::ToolPackagePool};
 use tokio::sync::RwLock;
 
 use crate::{
     agent::{
         core::{Agent, AgentRuntime},
+        kit::entity_kit,
         llm_engine::LLMEngine,
     },
     global::{DB, PROMPT_CACHE},
@@ -23,19 +24,14 @@ pub static AGENT_POOL: LazyLock<RwLock<HashMap<u32, Arc<RwLock<Agent>>>>> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
 
 pub static AGENT_CTX_POOL: LazyLock<RwLock<HashMap<u32, Arc<AgentContext>>>> =
-    LazyLock::new(||RwLock::new(HashMap::new()) );
+    LazyLock::new(|| RwLock::new(HashMap::new()));
 
 pub static ENGINE_POOL: LazyLock<RwLock<HashMap<String, Arc<LLMEngine>>>> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
 pub static TOOL_PACKAGE_TOOL: LazyLock<ToolPackagePool> = LazyLock::new(|| tool_pkg::tool_pool());
 
 pub static BASE_ITEMS: &str = include_str!("../../prompts/base_items.json");
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Item {
-    pub name: String,
-    pub content: String,
-    pub editable: bool,
-}
+
 pub async fn init() -> anyhow::Result<()> {
     //初始化大模型
     let client = Client::with_config(
@@ -50,7 +46,7 @@ pub async fn init() -> anyhow::Result<()> {
     };
     {
         let mut p = ENGINE_POOL.write().await;
-        p.insert("default".to_string(), Arc::new(engine));
+        p.insert(engine.model.to_string(), Arc::new(engine));
     }
     let database_connection = DB.get().unwrap();
     //初始化agent
@@ -59,36 +55,8 @@ pub async fn init() -> anyhow::Result<()> {
         .await?;
     // 如果为空，插入一个默认的agent
     if agents.is_empty() {
-        let agent = entity::agent::ActiveModel {
-            id: Set(1),
-            name: Set("助手".to_string()),
-            step: Set(0),
-            state_version: Set(0),
-            model: Set(model),
-            create_time: Set(Local::now()),
-            workspace:Set("/".to_string()),
-            avatar:Set("".to_string()),
-            ..Default::default()
-        };
-        let agent = agent.insert(database_connection).await?;
-        let base_items: HashMap<String, Vec<Item>> = serde_json::from_str(BASE_ITEMS).unwrap();
-        let mut saved_items = vec![];
-        for (group, items) in base_items {
-            for item in items {
-                let model = entity::item::ActiveModel {
-                    agent_id: Set(agent.id),
-                    group: Set(group.clone()),
-                    name: Set(item.name),
-                    content: Set(item.content),
-                    editable: Set(item.editable),
-                    ..Default::default()
-                };
-                saved_items.push(model);
-            }
-        }
-        entity::item::Entity::insert_many(saved_items)
-            .exec(database_connection)
-            .await?;
+        let base_items: HashMap<String, Vec<Item>> = serde_json::from_str(BASE_ITEMS)?;
+        let agent = entity_kit::new_agent("助手".to_string(), model, 0, base_items).await?;
         agents.push(agent);
     }
     {

@@ -2,7 +2,8 @@ use async_openai::{
     config::OpenAIConfig,
     error::OpenAIError,
     types::{
-        ChatCompletionRequestMessage, ChatCompletionResponseStream, CreateChatCompletionRequestArgs,
+        ChatCompletionRequestMessage, ChatCompletionResponseStream,
+        CreateChatCompletionRequestArgs, CreateChatCompletionResponse,
     },
     Client,
 };
@@ -23,5 +24,18 @@ impl LLMEngine {
 
         let stream = self.client.chat().create_stream(request).await;
         return stream;
+    }
+
+    pub async fn content(
+        &self,
+        messages: Vec<ChatCompletionRequestMessage>,
+    ) -> Result<CreateChatCompletionResponse, OpenAIError> {
+        let request = CreateChatCompletionRequestArgs::default()
+            .model(self.model.clone())
+            .messages(messages)
+            .build()?;
+        let res = self.client.chat().create(request).await;
+
+        return res;
     }
 }
