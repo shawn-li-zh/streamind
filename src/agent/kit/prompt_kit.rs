@@ -8,7 +8,7 @@ use streamind_core::agent::AgentInfo;
 
 use crate::global::{DB, PROMPT_CACHE};
 
-pub async fn build_system_prompt(info: &AgentInfo) -> String {
+pub async fn build_system_prompt(info:&AgentInfo) -> String {
     let items: Vec<entity::item::Model> = entity::item::Entity::find()
         .filter(entity::item::Column::AgentId.eq(info.id))
         .all(DB.get().unwrap())
@@ -53,10 +53,10 @@ pub async fn build_system_prompt(info: &AgentInfo) -> String {
     # 记忆
     {}
 
-    # 关注
+    # 关注条目
     {}
 
-    # 目标
+    # 目标条目
     {}
     "#,
         info.id, info.name, generate_rule, tool_call_rule, memory, focus, goal

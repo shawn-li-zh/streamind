@@ -3,7 +3,9 @@ use std::{
     sync::{atomic::Ordering, Arc},
 };
 
-use async_openai::types::ChatCompletionRequestSystemMessageArgs;
+use async_openai::types::{
+    ChatCompletionFunctions, ChatCompletionRequestMessage, ChatCompletionRequestSystemMessageArgs,
+};
 use axum::response::sse;
 use chrono::Local;
 
@@ -13,7 +15,7 @@ use streamind_core::{
     tool::engine::{ToolCallEvent, ToolEngine, ToolEngineContext},
 };
 use tokio::sync::{mpsc, oneshot::Receiver, watch, Mutex, RwLock};
-use tracing::info;
+use tracing::{debug, info, warn};
 
 use crate::agent::{
     event::{AgentEvent, AgentEventData, ToolCallResultItem},
@@ -21,12 +23,15 @@ use crate::agent::{
     kit::{entity_kit, message_kit, prompt_kit},
     section::{Section, SectionEvent},
     sse_event::WebEvent,
-    stream::MindStream,
+    stream::{self, MindFlag, MindStream},
 };
 pub struct Agent {
-    pub ctx: Arc<AgentContext>,
+    pub ctx: Arc<RwLock<AgentContext>>,
     event_sender: mpsc::Sender<AgentEvent>,
+    //函数调用
     call_watcher: watch::Receiver<bool>,
+    //重组条目
+    reorganize_watcher: watch::Receiver<bool>,
     run_watcher: watch::Receiver<bool>,
     inject_sender: mpsc::UnboundedSender<(String, bool)>,
     pub web_sender: Option<mpsc::UnboundedSender<sse::Event>>,
@@ -41,64 +46,66 @@ pub struct AgentRuntime {
 
 impl Agent {
     pub async fn new(model: entity::agent::Model) -> Arc<RwLock<Agent>> {
-        let agent_context = entity_kit::build_agent_context(model).await;
+        let agent_model = model.model.clone();
+        //
+        let item_groups = entity_kit::load_item_groups(model.id).await;
+        let agent_context = entity_kit::build_agent_context(model, item_groups).await;
         //通道
         let event = mpsc::channel(100);
         let section = mpsc::channel(100);
         let inject = mpsc::unbounded_channel();
         let call_watcher: (watch::Sender<bool>, watch::Receiver<bool>) = watch::channel(false);
+        let reorganize_watcher: (watch::Sender<bool>, watch::Receiver<bool>) =
+            watch::channel(false);
         let run_watcher: (watch::Sender<bool>, watch::Receiver<bool>) = watch::channel(false);
-        // 加载历史消息
-        let system_prompt = prompt_kit::build_system_prompt(&agent_context.info).await;
-        let mut messages = vec![ChatCompletionRequestSystemMessageArgs::default()
-            .content(system_prompt)
-            .build()
-            .unwrap()
-            .into()];
-        let info = &agent_context.info;
-        let msgs = message_kit::load_messages(info.id, info.state_version.load(Ordering::Relaxed))
-            .await
-            .unwrap();
-        messages.extend(msgs);
-        //流
-        let engine = {
-            let p = ENGINE_POOL.read().await;
-            let engine = p.get(&info.model).unwrap().clone();
-            engine
-        };
-        tokio::spawn(async move {
-            let mut mind_stream = MindStream::new(
-                engine,
-                messages,
-                inject.1,
-                event.1,
-                section.0,
-                run_watcher.0,
-            );
-            mind_stream.event_loop().await.unwrap();
-        });
+
         //工具执行器
         let tool_engine = ToolEngine::new(agent_context.clone());
-
+        //初始化
         let agent = Agent {
             ctx: agent_context.clone(),
             event_sender: event.0,
             call_watcher: call_watcher.1,
+            reorganize_watcher: reorganize_watcher.1,
             run_watcher: run_watcher.1,
             inject_sender: inject.0,
             web_sender: None,
         };
         let agent = Arc::new(RwLock::new(agent));
+        //运行输出流
+        let ctx = agent_context.clone();
+        tokio::spawn(async move {
+            let engine = {
+                let p = ENGINE_POOL.read().await;
+                let engine = p.get(&agent_model).unwrap().clone();
+                engine
+            };
+            stream::run_mind(
+                ctx,
+                engine,
+                inject.1,
+                event.1,
+                section.0,
+                reorganize_watcher.0,
+                run_watcher.0,
+            )
+            .await;
+        });
+        //运行时
         let mut runtime = AgentRuntime {
             agent: agent.clone(),
             section_receiver: section.1,
             call_watcher: call_watcher.0,
             tool_engine: tool_engine,
         };
-        tokio::spawn(async move { runtime.react_loop().await.unwrap() });
+        tokio::spawn(async move {
+            info!("运行时已启动");
+            runtime.react_loop().await.unwrap()
+        });
 
         agent
     }
+
     pub async fn stop(&mut self, reason: String) -> anyhow::Result<()> {
         self.inject_sender
             .send((format!("<interrupt>{}</interrupt>", reason), true))?;
@@ -110,6 +117,11 @@ impl Agent {
         event_data: AgentEventData,
         force: bool,
     ) -> anyhow::Result<entity::event::Model> {
+        //等待重组结束
+        self.reorganize_watcher
+            .wait_for(|&is_paused| !is_paused)
+            .await?;
+        //等待工具调用结束
         self.call_watcher.wait_for(|&is_paused| !is_paused).await?;
         //
         self.send_event_pure(event_data, force).await
@@ -120,7 +132,10 @@ impl Agent {
         force: bool,
     ) -> anyhow::Result<entity::event::Model> {
         //保存数据库
-        let (event, model) = entity_kit::save_event(&self.ctx.info, event_data, force).await?;
+        let (event, model) = {
+            let ctx = self.ctx.read().await;
+            entity_kit::save_event(&ctx.info, event_data, force).await?
+        };
         self.event_sender.send(event.clone()).await?;
         //发送到前端
         match &event.data {
@@ -130,6 +145,7 @@ impl Agent {
                 //忽略
             }
             _ => {
+                info!("发送事件:{:?}", &event.data);
                 let web_event = WebEvent::Agent(event);
                 self.send_web_event(web_event).await;
             }
@@ -148,25 +164,22 @@ impl Agent {
                     self.web_sender = None;
                 }
             };
+            return;
         }
+        warn!("断连中...");
     }
 }
 
 impl AgentRuntime {
     pub async fn react_loop(&mut self) -> anyhow::Result<()> {
+        let ctx = {
+            let agent = self.agent.read().await;
+            agent.ctx.clone()
+        };
         loop {
             {
-                let agent = self.agent.read().await;
-                let step = agent.ctx.info.step.load(Ordering::Relaxed);
-                let _ = entity_kit::incr_agent_step(agent.ctx.info.id, step)
-                    .await
-                    .unwrap();
-                let step = agent.ctx.info.step.fetch_add(1, Ordering::Relaxed);
-                agent
-                    .ctx
-                    .info
-                    .status
-                    .store(&mut AgentStatus::Idle, Ordering::Relaxed);
+                let mut ctx = ctx.write().await;
+                ctx.info.status = AgentStatus::Idle;
             }
             if let Err(e) = self.react().await {
                 let mut agent = self.agent.write().await;
@@ -175,28 +188,37 @@ impl AgentRuntime {
                     .await
                     .unwrap();
             };
+            {
+                let mut ctx = ctx.write().await;
+                let step = ctx.info.step;
+                let _ = entity_kit::incr_agent_step(ctx.info.id, step)
+                    .await
+                    .unwrap();
+                ctx.info.step += 1;
+                info!("step+1");
+            }
         }
     }
 
     async fn react(&mut self) -> anyhow::Result<()> {
         let mut tool_calls = vec![];
         let mut start_time = 0;
+        //
+        let ctx = {
+            let agent = self.agent.read().await;
+            agent.ctx.clone()
+        };
 
         while let Some(section_event) = self.section_receiver.recv().await {
             let web_event = WebEvent::Section(section_event.clone(), 0);
             match section_event {
                 SectionEvent::Start => {
-                    let agent = self.agent.read().await;
-                    agent
-                        .ctx
-                        .info
-                        .status
-                        .store(&mut AgentStatus::Running, Ordering::Relaxed);
+                    let mut ctx = ctx.write().await;
+                    ctx.info.status = AgentStatus::Running;
                     send_web_event(self.agent.clone(), web_event).await;
                 }
                 SectionEvent::Open(tag) => {
                     start_time = Local::now().timestamp_subsec_millis();
-
                     send_web_event(self.agent.clone(), web_event).await;
                 }
                 SectionEvent::Chunk(tag, _) => match tag.name {
@@ -216,8 +238,9 @@ impl AgentRuntime {
                             taken_time = end_time - start_time;
                         }
                         let agent = self.agent.read().await;
+                        let ctx = agent.ctx.read().await;
                         entity_kit::save_section(
-                            &agent.ctx.info,
+                            &ctx.info,
                             &section,
                             taken_time,
                             json!({
@@ -275,10 +298,8 @@ impl AgentRuntime {
                         //发送完整事件
                         {
                             //排序
-                            let results = call_ids
-                                .iter()
-                                .map(|(id)| map.remove(id).unwrap())
-                                .collect();
+                            let results =
+                                call_ids.iter().map(|id| map.remove(id).unwrap()).collect();
                             let mut agent = agent.write().await;
                             let _ = agent
                                 .send_event_pure(AgentEventData::ToolCallResult(results), true)
@@ -301,9 +322,11 @@ impl AgentRuntime {
                 }
             }
         }
+        info!("step end");
         //保存一个空事件
         let agent = self.agent.read().await;
-        entity_kit::save_event(&agent.ctx.info, AgentEventData::AgentResponse, false)
+        let ctx = agent.ctx.read().await;
+        entity_kit::save_event(&ctx.info, AgentEventData::AgentResponse, false)
             .await
             .expect("保存agent回复失败");
         Ok(())

@@ -240,7 +240,7 @@ async fn test() {
             SectionEvent::Start => {
                 println!("\n[事件] >>> 流开始 <<<");
             }
-            SectionEvent::Open(mut tag) => {
+            SectionEvent::Open(tag) => {
                 println!("\n[事件] 开启标签: <{}>", tag.name);
             }
             SectionEvent::Chunk(tag_name, chunk) => {

@@ -13,7 +13,7 @@ anyhow = "1"
 chrono = "0.4.44"
 dashmap = "6.1.0"
 futures = "0.3"
-
-
+unicode_reader = "1.0.2"
+rand = "0.8"
 tool_macro = { path = "../tool_macro" }
 streamind_core = { path = "../../streamind_core" }

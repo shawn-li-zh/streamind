@@ -4,7 +4,6 @@ use std::{
 };
 
 use async_openai::{config::OpenAIConfig, Client};
-use chrono::Local;
 
 use sea_orm::{ActiveModelTrait, ActiveValue::Set, EntityTrait, IntoActiveModel};
 
@@ -12,18 +11,14 @@ use streamind_core::{agent::AgentContext, item::Item, tool::ToolPackagePool};
 use tokio::sync::RwLock;
 
 use crate::{
-    agent::{
-        core::{Agent, AgentRuntime},
-        kit::entity_kit,
-        llm_engine::LLMEngine,
-    },
-    global::{DB, PROMPT_CACHE},
+    agent::{core::Agent, kit::entity_kit, llm_engine::LLMEngine},
+    global::DB,
 };
 //全局agent池
 pub static AGENT_POOL: LazyLock<RwLock<HashMap<u32, Arc<RwLock<Agent>>>>> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
 
-pub static AGENT_CTX_POOL: LazyLock<RwLock<HashMap<u32, Arc<AgentContext>>>> =
+pub static AGENT_CTX_POOL: LazyLock<RwLock<HashMap<u32, Arc<RwLock<AgentContext>>>>> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
 
 pub static ENGINE_POOL: LazyLock<RwLock<HashMap<String, Arc<LLMEngine>>>> =
@@ -31,7 +26,13 @@ pub static ENGINE_POOL: LazyLock<RwLock<HashMap<String, Arc<LLMEngine>>>> =
 pub static TOOL_PACKAGE_TOOL: LazyLock<ToolPackagePool> = LazyLock::new(|| tool_pkg::tool_pool());
 
 pub static BASE_ITEMS: &str = include_str!("../../prompts/base_items.json");
-
+pub static ITEM_GROUPS: LazyLock<Vec<(&str, &str)>> = LazyLock::new(|| {
+    vec![
+        ("fixed", "固定信息"),
+        ("focus", "当前需要关注的信息"),
+        ("goal", "当前的行动目标"),
+    ]
+});
 pub async fn init() -> anyhow::Result<()> {
     //初始化大模型
     let client = Client::with_config(

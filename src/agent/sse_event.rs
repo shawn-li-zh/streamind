@@ -4,11 +4,10 @@ use serde::Serialize;
 use serde_json::json;
 use streamind_core::tool::engine::ToolCallEvent;
 
-
 use crate::agent::{
-        event::{AgentEvent, AgentEventData},
-        section::{Section, SectionEvent},
-    };
+    event::{AgentEvent, AgentEventData},
+    section::{Section, SectionEvent},
+};
 
 pub enum WebEvent {
     Section(SectionEvent, i64),
@@ -72,6 +71,27 @@ impl WebEvent {
         }
     }
 }
+pub mod tool_call {
+    pub struct Start {
+        pub items: Vec<CallItem>,
+    }
+    pub struct CallItem {
+        pub id: i64,
+        pub package: &'static str,
+        pub tool: &'static str,
+    }
+    pub struct Active {
+        pub id: i64,
+        pub info: String,
+    }
+    pub struct Complete {
+        pub id: i64,
+        pub info: String,
+        pub result: String,
+        pub taken_time:u32
+    }
+}
+
 #[derive(Debug, Serialize)]
 pub struct SsePayload<T: Serialize> {
     pub r#type: &'static str,

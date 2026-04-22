@@ -6,8 +6,12 @@ use async_openai::types::{
 };
 use entity::event::EventTypeName;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder};
+use streamind_core::agent::AgentContext;
 
-use crate::{agent::event::AgentEvent, global::DB};
+use crate::{
+    agent::{event::AgentEvent, kit::prompt_kit},
+    global::DB,
+};
 
 pub fn build_step_messages(events: &Vec<AgentEvent>) -> ChatCompletionRequestMessage {
     //
@@ -82,4 +86,15 @@ pub async fn load_messages(
     }
 
     Ok(messages)
+}
+//构造当前状态下的上下文
+pub async fn build_state_context(ctx: &AgentContext) -> Vec<ChatCompletionRequestMessage> {
+    // 加载系统提示词和历史消息
+    let system_prompt = prompt_kit::build_system_prompt(&ctx.info).await;
+    let mut messages = vec![prompt_kit::system_message(system_prompt)];
+    let msgs = load_messages(ctx.info.id, ctx.info.state_version)
+        .await
+        .unwrap();
+    messages.extend(msgs);
+    messages
 }

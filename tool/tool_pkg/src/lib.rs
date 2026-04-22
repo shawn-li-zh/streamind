@@ -4,6 +4,7 @@ use streamind_core::tool::ToolPackagePool;
 
 pub mod file;
 pub mod tool;
+pub mod read;
 
 pub fn tool_pool() -> ToolPackagePool {
     let mut pool: ToolPackagePool = HashMap::new();

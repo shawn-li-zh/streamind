@@ -17,6 +17,8 @@ pub struct Model {
     pub content: String,
     #[sea_orm(not_null, default_value = true)]
     pub editable: bool,
+       #[sea_orm(not_null, default_value = true)]
+    pub removable: bool,
 }
 
 impl ActiveModelBehavior for ActiveModel {}
