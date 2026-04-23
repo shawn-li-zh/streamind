@@ -1,0 +1,14 @@
+[
+    ["if", "else", "switch", "case", "default", "for", "while", "do", "break", "continue", "return", "goto"],
+    ["int", "float", "double", "char", "string", "bool", "boolean", "byte", "long", "short", "void", "any", "number"],
+    ["var", "let", "const", "static", "final", "immutable", "type", "alias", "val"],
+    ["class", "interface", "struct", "enum", "extends","impl", "implements", "new", "this", "super", "self", "abstract", "trait", "protocol"],
+    ["public", "private", "protected", "internal", "external", "readonly", "override", "virtual"],
+    ["function","fn", "func", "def", "lambda", "async", "await", "yield", "generator", "callback"],
+    ["try", "catch", "finally", "throw", "throws", "raise", "assert", "panic", "recover", "error"],
+    ["import", "export", "package", "namespace", "use", "include", "require", "module", "from", "as"],
+    ["true", "false", "null", "undefined", "nil", "none", "NaN", "Infinity"],
+    ["typeof", "instanceof", "is", "as", "with", "delete", "template", "where", "native", "synchronized", "volatile"],
+    ["java.","javax.","spring.","springframework.","util","@Autowired","@Value","@Resource","@Service","@Controller","@Mapper"],
+    "::"
+]
