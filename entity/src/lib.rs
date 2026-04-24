@@ -7,6 +7,7 @@ pub mod types;
 
 pub mod rule_group;
 pub mod trigger_rule;
+pub mod format;
 
 // pub use agent::{ActiveModel, Entity, Model};
 // pub use event::{ActiveModel as EventActiveModel, Entity as EventEntity, Model as EventModel};

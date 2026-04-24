@@ -13,7 +13,8 @@ pub struct Model {
     #[sea_orm(not_null)]
     pub step: i64,
     #[sea_orm(not_null)]
-    pub state_version: i64,
+    pub event_id: i64,
+    pub state_id: i64,
     #[sea_orm(column_type = "Text", not_null)]
     pub name: String,
     #[sea_orm(column_type = "Text", not_null)]

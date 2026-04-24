@@ -1,0 +1,16 @@
+<think>
+用户想了解北京的天气，我需要调用天气查询工具... 
+</think>
+<tool_call>http.request(method="get",url="https://crates.io/crates/nanoid")</tool_call>
+<tool_call>http.request(method="get",url="https://crates.io111111123/crates/nanoid")</tool_call>
+
+<end/>
+<think>
+用户想了解北京的天气，我需要调用天气查询工具... 
+</think>
+<reply>
+根据查询结果，北京现在的天气是晴天，气温约为 25 摄氏度，非常宜人。
+</reply>
+<render>
+<div>111</div>
+</render>

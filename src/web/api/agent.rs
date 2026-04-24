@@ -35,7 +35,7 @@ pub async fn connect(
     // 3. 将写入器注入 Agent
     {
         let mut agent = agent_arc.write().await;
-        agent.web_sender = Some(tx);
+        agent.channel.web_sender = Some(tx);
     }
 
     // 4. 将接收端转为 Stream 返回给前端

@@ -50,10 +50,12 @@ impl SectionTag {
 pub static TAGS: LazyLock<Vec<SectionTag>> = LazyLock::new(|| {
     vec![
         SectionTag::new("think", "<think>", "</think>"),
-        SectionTag::new("function_call", "<function_call>", "</function_call>"),
+        SectionTag::new("tool_call", "<tool_call>", "</tool_call>"),
         SectionTag::new("reply", "<reply>", "</reply>"),
         SectionTag::new("render", "<render>", "</render>"),
         SectionTag::new("error", "<error>", "</error>"),
+        SectionTag::new("push", "<push>", "</push>"),
+        SectionTag::new("pop", "<pop>", "</pop>"),
         SectionTag::new("interrupt", "<interrupt>", "</interrupt>"),
     ]
 });
@@ -71,7 +73,7 @@ pub enum SectionEvent {
 pub fn section_stream(
     mut chunk_stream: Pin<Box<dyn Stream<Item = String> + Send>>,
 ) -> impl Stream<Item = SectionEvent> {
-    // safe_size 必须大于等于最长闭合标签的长度 (</function_call> 是 16)
+    // safe_size 必须大于等于最长闭合标签的长度 (</tool_call> 是 16)
     let safe_size = 20;
     let mut buffer = String::new();
     let mut current_tag: Option<&'static SectionTag> = None;
@@ -83,8 +85,13 @@ pub fn section_stream(
     async_stream::stream! {
         yield SectionEvent::Start;
 
-        while let Some(chunk) = chunk_stream.next().await {
-            buffer.push_str(&chunk);
+        while let Some( chunk) = chunk_stream.next().await {
+            let mut chunk:&str=chunk.as_str();
+            if current_tag.is_none(){
+                //避免标签之间有空白内容
+                chunk=chunk.trim_start();
+            }
+            buffer.push_str(chunk);
 
             // ========================================================
             // 阶段 A：安全的 Chunk 流式输出（滑动窗口）
@@ -202,7 +209,7 @@ pub fn section_stream(
         yield SectionEvent::End;
     }
 }
-
+#[cfg(test)]
 #[tokio::test]
 async fn test() {
     println!("=== 开始测试 Section Stream ===");

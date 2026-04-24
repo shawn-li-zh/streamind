@@ -70,10 +70,7 @@ mod read {
         path::PathBuf,
     };
 
-    use streamind_core::{
-        agent::AgentContext,
-        tool::{ToolCallContext, context},
-    };
+    use streamind_core::{agent::AgentContext, tool::ToolCallContext};
 
     use crate::read::{MODES, collection, file_kit};
     pub struct Context {
@@ -100,7 +97,6 @@ mod read {
         let path = std::path::Path::new(&path).to_path_buf();
         let file = OpenOptions::new().read(true).share_mode(1).open(&path)?;
         //
-
         ctx.path = Some(path);
         ctx.file = Some(file);
         ctx.pos_cache.clear();

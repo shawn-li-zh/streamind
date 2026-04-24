@@ -25,7 +25,7 @@ pub static ENGINE_POOL: LazyLock<RwLock<HashMap<String, Arc<LLMEngine>>>> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
 pub static TOOL_PACKAGE_TOOL: LazyLock<ToolPackagePool> = LazyLock::new(|| tool_pkg::tool_pool());
 
-pub static BASE_ITEMS: &str = include_str!("../../prompts/base_items.json");
+pub static CORE_STATE: &str = include_str!("../../prompts/core_state.md");
 pub static ITEM_GROUPS: LazyLock<Vec<(&str, &str)>> = LazyLock::new(|| {
     vec![
         ("fixed", "固定信息"),
@@ -56,8 +56,14 @@ pub async fn init() -> anyhow::Result<()> {
         .await?;
     // 如果为空，插入一个默认的agent
     if agents.is_empty() {
-        let base_items: HashMap<String, Vec<Item>> = serde_json::from_str(BASE_ITEMS)?;
-        let agent = entity_kit::new_agent("助手".to_string(), model, 0, base_items).await?;
+        let agent = entity_kit::new_agent(
+            "助手".to_string(),
+            model,
+            0,
+            CORE_STATE,
+            vec!["*".to_string()],
+        )
+        .await?;
         agents.push(agent);
     }
     {

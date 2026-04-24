@@ -207,32 +207,7 @@ fn get_utf8_len(first_byte: u8) -> io::Result<usize> {
     }
 }
 
-fn digits_usize_fast(n: usize) -> usize {
-    if n < 10 {
-        1
-    } else if n < 100 {
-        2
-    } else if n < 1000 {
-        3
-    } else if n < 10000 {
-        4
-    } else if n < 100000 {
-        5
-    } else if n < 1000000 {
-        6
-    } else if n < 10000000 {
-        7
-    } else if n < 100000000 {
-        8
-    } else if n < 1000000000 {
-        9
-    } else {
-        10
-    }
-}
-
 /// byte_pos的位置必须刚好等于全文第char_pos个字符的位置
-
 pub fn skim_read(
     file: &mut File,
     byte_pos: u64,
@@ -252,13 +227,6 @@ pub fn skim_read(
         return Err(anyhow::anyhow!("分隔符不能为空"));
     }
 
-    // 2. 位置校准与读取
-    if byte_pos != 0 {
-        let pos = find_boundary_near(file, byte_pos, true)?;
-        if pos != byte_pos {
-            return Err(anyhow::anyhow!("读取位置异常,非有效utf8字符"));
-        }
-    }
     let content: Vec<char> = read_n_chars(file, byte_pos, len)?;
     if content.is_empty() {
         return Ok("EOF".to_string());
@@ -268,7 +236,7 @@ pub fn skim_read(
     }
     // 3. 预处理分隔符为字符数组以加快匹配速度
     let delim_chars: Vec<Vec<char>> = delimiters.iter().map(|s| s.chars().collect()).collect();
-    let focus_chars = focus_words.iter().map(|s| s.chars().collect()).collect();
+    let focus_chars: Vec<Vec<char>> = focus_words.iter().map(|s| s.chars().collect()).collect();
     //分词+加权
     let mut words: Vec<(String, usize, usize, f32)> =
         split_word(&content, focus_chars, delim_chars, big_word_base);
@@ -315,7 +283,29 @@ pub fn skim_read(
 
     Ok(result)
 }
-
+fn digits_usize_fast(n: usize) -> usize {
+    if n < 10 {
+        1
+    } else if n < 100 {
+        2
+    } else if n < 1000 {
+        3
+    } else if n < 10000 {
+        4
+    } else if n < 100000 {
+        5
+    } else if n < 1000000 {
+        6
+    } else if n < 10000000 {
+        7
+    } else if n < 100000000 {
+        8
+    } else if n < 1000000000 {
+        9
+    } else {
+        10
+    }
+}
 fn split_word(
     content: &Vec<char>,
     focus_chars: Vec<Vec<char>>,

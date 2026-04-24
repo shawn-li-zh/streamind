@@ -1,19 +1,16 @@
 use std::{
     collections::{HashMap, HashSet},
-    sync::{
-        atomic::{AtomicI64, AtomicPtr, Ordering},
-        Arc,
-    },
+    sync::Arc,
 };
 
 use chrono::Local;
 
-use dashmap::DashMap;
+use entity::types::array::StringArray;
 use sea_orm::{
     prelude::Expr,
     ActiveModelTrait,
     ActiveValue::{self, Set},
-    ColumnTrait, DbErr, EntityTrait, ExprTrait, QueryFilter, TransactionTrait,
+    ColumnTrait, ConnectionTrait, DbErr, EntityTrait, ExprTrait, QueryFilter, TransactionTrait,
 };
 use serde::{Deserialize, Serialize};
 use streamind_core::{
@@ -25,14 +22,15 @@ use tokio::sync::RwLock;
 
 use crate::{
     agent::{
+        context::section::Section,
         event::{AgentEvent, AgentEventData},
-        global::{AGENT_CTX_POOL, BASE_ITEMS, ITEM_GROUPS, TOOL_PACKAGE_TOOL},
-        section::Section,
+        global::{AGENT_CTX_POOL, ITEM_GROUPS, TOOL_PACKAGE_TOOL},
     },
     global::DB,
 };
 
 pub async fn save_event(
+    db: &impl ConnectionTrait,
     agent_info: &AgentInfo,
     event_data: AgentEventData,
     force: bool,
@@ -47,7 +45,7 @@ pub async fn save_event(
     };
     let event_model = entity::event::ActiveModel {
         agent_id: Set(event.agent_id),
-        state_version: Set(agent_info.state_version),
+        state_id: Set(agent_info.state_id),
         step: Set(agent_info.step),
         event_type: Set(event.data.type_enum()),
         force: Set(event.force),
@@ -55,12 +53,13 @@ pub async fn save_event(
         payload: Set(event.data.json()),
         ..Default::default()
     };
-    let model: entity::event::Model = event_model.insert(DB.get().unwrap()).await?;
+    let model: entity::event::Model = event_model.insert(db).await?;
     Ok((event, model))
 }
 
 pub async fn save_section<T: Serialize>(
     agent_info: &AgentInfo,
+    resp_event_id: i64,
     section: &Section,
     taken_time: u32,
     meta: T,
@@ -69,7 +68,8 @@ pub async fn save_section<T: Serialize>(
 
     let model = entity::section::ActiveModel {
         agent_id: Set(agent_info.id),
-        state_version: Set(agent_info.state_version),
+        state_id: Set(agent_info.state_id),
+        event_id: Set(resp_event_id),
         step: Set(agent_info.step),
         name: Set(section.tag.name.to_string()),
         taken_time: Set(taken_time),
@@ -95,35 +95,41 @@ pub async fn incr_agent_step(agent_id: u32, cur_step: i64) -> anyhow::Result<i64
     Ok(cur_step + 1)
 }
 
-pub async fn incr_agent_state_version(
+pub async fn push_state_stack(
     agent_id: u32,
-    cur_version: i64,
+    pos: u32,
     title: String,
-    summary: String,
-) -> anyhow::Result<i64> {
+    content: String,
+) -> anyhow::Result<entity::state::Model> {
     let db = DB.get().unwrap();
-    //创建历史状态
-    let state = entity::state::ActiveModel {
-        agent_id: Set(agent_id),
-        state_version: Set(cur_version),
-        title: Set(title),
-        summary: Set(summary),
-        time: Set(Local::now()),
-        ..Default::default()
-    };
-    state.insert(db).await?;
-    //自增版本
-    let _ = entity::agent::Entity::update_many()
-        .col_expr(
-            entity::agent::Column::StateVersion,
-            Expr::col(entity::agent::Column::StateVersion).add(1),
-        ) // 版本自增
-        .filter(entity::agent::Column::Id.eq(agent_id))
-        .filter(entity::agent::Column::StateVersion.eq(cur_version)) // 版本锁核心条件
-        .exec(db)
+    let model = db
+        .transaction::<_, _, DbErr>(|txn| {
+            Box::pin(async move {
+                //创建历史状态
+                let state = entity::state::ActiveModel {
+                    agent_id: Set(agent_id),
+                    pos: Set(pos),
+                    dumped: Set(false),
+                    title: Set(title),
+                    content: Set(content),
+                    time: Set(Local::now()),
+                    ..Default::default()
+                };
+                let model = state.insert(txn).await?;
+                //指向最新状态
+                let _ = entity::agent::Entity::update_many()
+                    .col_expr(
+                        entity::agent::Column::StateId,
+                        Expr::col(entity::agent::Column::StateId).eq(model.id),
+                    )
+                    .filter(entity::agent::Column::Id.eq(agent_id))
+                    .exec(txn)
+                    .await?;
+                Ok(model)
+            })
+        })
         .await?;
-
-    Ok(cur_version + 1)
+    Ok(model)
 }
 
 pub async fn load_item_groups(agent_id: u32) -> Vec<ItemGroup> {
@@ -208,13 +214,13 @@ pub async fn update_item_group(
                 let mut models = vec![];
                 if !save_models.is_empty() {
                     let arr = entity::item::Entity::insert_many(save_models)
-                        .exec_with_returning(db)
+                        .exec_with_returning(txn)
                         .await?;
                     models.extend(arr);
                 }
                 //更新
                 for model in update_models {
-                    let model = model.update(db).await?;
+                    let model = model.update(txn).await?;
                     models.push(model);
                 }
                 //删除
@@ -222,7 +228,7 @@ pub async fn update_item_group(
                     .filter(entity::item::Column::AgentId.eq(agent_id))
                     .filter(entity::item::Column::Group.eq(group_name))
                     .filter(entity::item::Column::Name.is_in(removes))
-                    .exec(db)
+                    .exec(txn)
                     .await?;
                 Ok(models)
             })
@@ -232,14 +238,12 @@ pub async fn update_item_group(
     Ok(())
 }
 
-pub async fn build_agent_context(
-    model: entity::agent::Model,
-    item_groups: Vec<ItemGroup>,
-) -> Arc<RwLock<AgentContext>> {
+pub async fn build_agent_context(model: entity::agent::Model) -> Arc<RwLock<AgentContext>> {
     let agent = AgentInfo {
         id: model.id,
         parent_id: model.parent_id,
-        state_version: model.state_version,
+        state_id: model.state_id,
+        // state_pos: model.state_pos,
         step: model.step,
         name: model.name,
         model: model.model,
@@ -249,18 +253,19 @@ pub async fn build_agent_context(
     };
     //
     let tool_engine_context = {
-        let tool_packages: HashSet<&str> = model
-            .tool_packages
-            .0
-            .into_iter()
-            .map(|v| TOOL_PACKAGE_TOOL.get(v.as_str()).unwrap().name)
-            .collect();
-        ToolEngineContext::build(tool_packages, &*TOOL_PACKAGE_TOOL)
+        let mut tool_pkgs = HashSet::new();
+        for pkg_name in &model.tool_packages.0 {
+            if pkg_name == "*" {
+                tool_pkgs.extend(TOOL_PACKAGE_TOOL.keys());
+                break;
+            }
+            tool_pkgs.insert(TOOL_PACKAGE_TOOL.get(pkg_name.as_str()).expect("包不存在").name);
+        }
+        ToolEngineContext::build(tool_pkgs, &*TOOL_PACKAGE_TOOL)
     };
     let agent_context = AgentContext {
         info: agent,
-        item_groups,
-        tool_engine_context,
+        tool_engine_context: Arc::new(tool_engine_context),
     };
     //
     let id = agent_context.info.id;
@@ -276,38 +281,37 @@ pub async fn new_agent(
     name: String,
     model: String,
     parent_id: u32,
-    items: HashMap<String, Vec<Item>>,
+    core_state: &str,
+    tool_packages: Vec<String>,
 ) -> anyhow::Result<entity::agent::Model> {
     let database_connection = DB.get().unwrap();
     let agent = entity::agent::ActiveModel {
         name: Set(name),
         parent_id: Set(parent_id),
         step: Set(0),
-        state_version: Set(0),
+        state_id: Set(0),
         model: Set(model),
         create_time: Set(Local::now()),
         workspace: Set("/".to_string()),
         avatar: Set("".to_string()),
+        tool_packages: Set(StringArray(tool_packages)),
         ..Default::default()
     };
     let agent = agent.insert(database_connection).await?;
-    //保存记忆条目
-    let mut saved_items = vec![];
-    for (group, items) in items {
-        for item in items {
-            let model = entity::item::ActiveModel {
-                agent_id: Set(agent.id),
-                group: Set(group.clone()),
-                name: Set(item.name),
-                content: Set(item.content),
-                editable: Set(item.editable),
-                ..Default::default()
-            };
-            saved_items.push(model);
-        }
-    }
-    entity::item::Entity::insert_many(saved_items)
-        .exec(database_connection)
-        .await?;
+    push_state_stack(agent.id, 0, "核心记忆".to_string(), core_state.to_string()).await?;
     Ok(agent)
+}
+
+pub async fn dump_states(agent_id: u32, state_ids: Vec<i64>) -> anyhow::Result<()> {
+    let db = DB.get().unwrap();
+    entity::state::Entity::update_many()
+        .col_expr(
+            entity::state::Column::Dumped,
+            Expr::col(entity::state::Column::Dumped).eq(true),
+        )
+        .filter(entity::state::Column::AgentId.eq(agent_id))
+        .filter(entity::state::Column::Id.is_in(state_ids))
+        .exec(db)
+        .await?;
+    Ok(())
 }

@@ -5,8 +5,8 @@ use serde_json::json;
 use streamind_core::tool::engine::ToolCallEvent;
 
 use crate::agent::{
+    context::section::{Section, SectionEvent},
     event::{AgentEvent, AgentEventData},
-    section::{Section, SectionEvent},
 };
 
 pub enum WebEvent {
@@ -48,7 +48,10 @@ impl WebEvent {
                 AgentEventData::Timer(timer_data) => {
                     SsePayload::new("agent", "timer", timer_data).to_sse_event()
                 }
-                _ => todo!(),
+                AgentEventData::Error(err) => {
+                    SsePayload::new("agent", "error", err).to_sse_event()
+                }
+                AgentEventData::Interrupt(_) => todo!(),
             },
             WebEvent::ToolCall(tool_call_event) => match tool_call_event {
                 ToolCallEvent::Start(ids) => {
@@ -88,7 +91,7 @@ pub mod tool_call {
         pub id: i64,
         pub info: String,
         pub result: String,
-        pub taken_time:u32
+        pub taken_time: u32,
     }
 }
 

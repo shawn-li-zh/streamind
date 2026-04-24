@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use streamind_core::tool::ToolPackagePool;
 
 pub mod file;
+pub mod http;
 pub mod read;
 pub mod tool;
 
@@ -15,6 +16,10 @@ pub fn tool_pool() -> ToolPackagePool {
     let pkg = file::build_package();
     pool.insert(pkg.name, pkg);
     //阅读器
+    let pkg = read::build_package();
+    pool.insert(pkg.name, pkg);
+
+    //http
     let pkg = read::build_package();
     pool.insert(pkg.name, pkg);
     pool

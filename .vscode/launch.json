@@ -22,6 +22,20 @@
             "args": [],
             "cwd": "${workspaceFolder}"
         },
+        //  {
+        //     "type": "cppvsdbg",
+        //     "name": "Debug executable 'streamind'",
+        //     "request": "launch",
+        //     "program": "${workspaceFolder}/target/debug/streamind.exe",
+        //     "args": [],
+        //     "stopAtEntry": false,
+        //     "cwd": "${workspaceFolder}",
+        //     "environment": [],
+        //     "console": "integratedTerminal",
+        //     "preLaunchTask": "rust: cargo build",
+           
+
+        // },
         {
             "type": "lldb",
             "request": "launch",
