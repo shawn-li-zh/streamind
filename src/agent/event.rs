@@ -1,112 +1,17 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, path::PathBuf};
 
 use chrono::Local;
-use entity::event::EventTypeName;
-use sea_orm::sea_query::prelude::rust_decimal::str;
-use serde::{Deserialize, Serialize};
-use serde_json::json;
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolCallResultItem {
-    pub id: i64,
-    pub content: String,
-}
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TimerData {
-    pub attach: String,
-    pub source_event_id: u64,
-}
-#[derive(Debug, Clone)]
-pub enum AgentEventData {
-    //agent响应 占位
-    AgentResponse,
-    //用户输入
-    UserInput(String),
+use entity::{event::EnvEventType, section};
 
-    //定时器
-    Timer(TimerData),
-    //工具调用结果
-    ToolCallResult(Vec<ToolCallResultItem>),
-    //异常
-    Error(String),
-    //中断信号
-    Interrupt(String),
-}
-impl AgentEventData {
-    pub fn name(&self) -> &'static str {
-        match self {
-            AgentEventData::AgentResponse => "agent响应",
-            AgentEventData::UserInput(_) => "用户输入",
-            AgentEventData::Timer { .. } => "定时器",
-            AgentEventData::ToolCallResult(_) => "工具调用结果",
-            AgentEventData::Error(_) => "异常",
-            AgentEventData::Interrupt(_) => "中断信号",
-        }
-    }
-    pub fn type_enum(&self) -> EventTypeName {
-        match self {
-            AgentEventData::AgentResponse => EventTypeName::AgentResponse,
-            AgentEventData::UserInput(_) => EventTypeName::UserInput,
-            AgentEventData::Timer { .. } => EventTypeName::Timer,
-            AgentEventData::ToolCallResult(_) => EventTypeName::ToolCallResult,
-            AgentEventData::Error(_) => EventTypeName::Error,
-            AgentEventData::Interrupt(_) => todo!(),
-        }
-    }
-    pub fn content(&self) -> String {
-        match self {
-            AgentEventData::AgentResponse => String::new(),
-            AgentEventData::UserInput(content) => content.clone(),
-            AgentEventData::Timer(data) => {
-                format!(
-                    "附加信息：{},源事件id：{}",
-                    data.attach, data.source_event_id
-                )
-            }
-            AgentEventData::ToolCallResult(results) => {
-                let mut content = String::new();
-                for item in results {
-                    content.push_str(&item.content);
-                    content.push_str("\n---\n");
-                }
-                content
-            }
-            AgentEventData::Error(reason) => format!("{}", reason),
-            AgentEventData::Interrupt(reason) => format!("【中断信号:'{}'】", reason),
-        }
-    }
-    pub fn json(&self) -> serde_json::Value {
-        match self {
-            AgentEventData::AgentResponse => serde_json::Value::Null,
-            AgentEventData::UserInput(content) => {
-                json!({
-                    "content":content.clone()
-                })
-            }
-            AgentEventData::Timer(data) => {
-                json!(data)
-            }
-            AgentEventData::ToolCallResult(results) => {
-                json!(results)
-            }
-            AgentEventData::Error(info) => {
-                json!({
-                    "info":info.clone()
-                })
-            }
-            AgentEventData::Interrupt(reason) => {
-                json!({
-                    "reason":reason.clone()
-                })
-            }
-        }
-    }
-}
+use serde_json::json;
+use streamind_core::event::{EnvEvent, UserMessage};
+
 //事件
 #[derive(Debug, Clone)]
 pub struct AgentEvent {
     pub id: i64,
     pub agent_id: u32,
-    pub data: AgentEventData,
+    pub data: EnvEvent,
     //是否强制执行
     pub force: bool,
     pub time: chrono::DateTime<Local>,
@@ -116,37 +21,79 @@ impl AgentEvent {
     pub fn to_message(&self) -> String {
         let time = self.time.format("%Y-%m-%d %H:%M:%S").to_string();
         let head = format!("id={},type={},time={}", self.id, self.data.name(), time);
-        let content = self.data.content();
+        let (content, paths) = self.data.clone().to_message();
         return format!("{}\nContent:\n{}", head, content);
     }
     pub fn from_entity(event: entity::event::Model) -> Self {
         AgentEvent {
             id: event.id,
             agent_id: event.agent_id,
-            data: to_event_data(event.event_type, event.payload),
+            data: from_json(event.event_type, event.data),
             force: event.force,
             time: event.time,
         }
     }
 }
 
-fn to_event_data(type_name: EventTypeName, payload: serde_json::Value) -> AgentEventData {
+pub fn to_json(event: EnvEvent) -> serde_json::Value {
+    match event {
+        EnvEvent::AgentResponse(sections) => json!(sections),
+        EnvEvent::UserRequest(msg) => {
+            json!(msg)
+        }
+        EnvEvent::Timer(data) => {
+            json!(data)
+        }
+        EnvEvent::ToolCallResult(results) => {
+            json!(results)
+        }
+        EnvEvent::Error(info) => {
+            json!({
+                "info":info.clone()
+            })
+        }
+        EnvEvent::Interrupt(reason) => {
+            json!({
+                "reason":reason.clone()
+            })
+        }
+    }
+}
+
+pub fn from_json(type_name: EnvEventType, payload: serde_json::Value) -> EnvEvent {
     match type_name {
-        EventTypeName::AgentResponse => AgentEventData::AgentResponse,
-        EventTypeName::UserInput => {
-            let mut map: HashMap<String, String> = serde_json::from_value(payload).unwrap();
-            let content = map.remove("content").unwrap_or_default();
-            AgentEventData::UserInput(content)
+        EnvEventType::AgentResponse => {
+            EnvEvent::AgentResponse(serde_json::from_value(payload).unwrap())
+        }
+        EnvEventType::UserRequest => {
+            let msg: UserMessage = serde_json::from_value(payload).unwrap();
+            EnvEvent::UserRequest(msg)
         }
 
-        EventTypeName::ToolCallResult => {
-            AgentEventData::ToolCallResult(serde_json::from_value(payload).unwrap())
+        EnvEventType::ToolCallResult => {
+            EnvEvent::ToolCallResult(serde_json::from_value(payload).unwrap())
         }
-        EventTypeName::Error => {
+        EnvEventType::Error => {
             let mut map: HashMap<String, String> = serde_json::from_value(payload).unwrap();
             let info = map.remove("info").unwrap_or_default();
-            AgentEventData::Error(info)
+            EnvEvent::Error(info)
         }
-        EventTypeName::Timer => AgentEventData::Timer(serde_json::from_value(payload).unwrap()),
+        EnvEventType::Timer => EnvEvent::Timer(serde_json::from_value(payload).unwrap()),
+        EnvEventType::Interrupt => {
+            let mut map: HashMap<String, String> = serde_json::from_value(payload).unwrap();
+            let reason = map.remove("reason").unwrap_or_default();
+            EnvEvent::Interrupt(reason)
+        }
+    }
+}
+
+pub fn to_type_enum(event: &EnvEvent) -> EnvEventType {
+    match event {
+        EnvEvent::AgentResponse(_) => EnvEventType::AgentResponse,
+        EnvEvent::UserRequest(_) => EnvEventType::UserRequest,
+        EnvEvent::Timer { .. } => EnvEventType::Timer,
+        EnvEvent::ToolCallResult(_) => EnvEventType::ToolCallResult,
+        EnvEvent::Error(_) => EnvEventType::Error,
+        EnvEvent::Interrupt(_) => EnvEventType::Interrupt,
     }
 }

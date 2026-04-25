@@ -1,12 +1,8 @@
 use std::collections::HashMap;
 
-use async_openai::types::{
-    ChatCompletionRequestAssistantMessageArgs, ChatCompletionRequestMessage,
-    ChatCompletionRequestSystemMessageArgs,
-};
-use entity::event::EventTypeName;
+use async_openai::types::ChatCompletionRequestMessage;
+use entity::event::EnvEventType;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder};
-use streamind_core::agent::AgentContext;
 
 use crate::{
     agent::{
@@ -27,11 +23,8 @@ pub fn build_step_messages(events: &Vec<AgentEvent>) -> (ChatCompletionRequestMe
     }
     let c = msgs.join("\n\n");
     let size = c.len();
-    let msg = ChatCompletionRequestSystemMessageArgs::default()
-        .content(c)
-        .build()
-        .unwrap();
-    (ChatCompletionRequestMessage::System(msg), size)
+    let msg = prompt_kit::system_message(c);
+    (msg, size)
 }
 
 pub async fn load_stack(agent_id: u32) -> anyhow::Result<MindStack> {
@@ -55,7 +48,7 @@ pub async fn load_stack(agent_id: u32) -> anyhow::Result<MindStack> {
     let mut response_event_ids: Vec<i64> = vec![];
     let mut state_id_map_events: HashMap<i64, Vec<entity::event::Model>> = HashMap::new();
     for e in events {
-        if let EventTypeName::AgentResponse = &e.event_type {
+        if let EnvEventType::AgentResponse = &e.event_type {
             response_event_ids.push(e.id);
         }
         let events = state_id_map_events.entry(e.state_id).or_default();
@@ -83,12 +76,11 @@ pub async fn load_stack(agent_id: u32) -> anyhow::Result<MindStack> {
             content_len: 0,
         };
         //
-
         let events = state_id_map_events.remove(&state.id).unwrap_or_default();
         let mut steps = vec![];
         let mut last_step = 0;
         for event in events {
-            if let EventTypeName::AgentResponse = &event.event_type {
+            if let EnvEventType::AgentResponse = &event.event_type {
                 let sections = event_id_map_sections.remove(&event.id).unwrap_or_default();
                 let response = sections
                     .into_iter()
@@ -125,15 +117,3 @@ pub async fn load_stack(agent_id: u32) -> anyhow::Result<MindStack> {
     //
     Ok(stack)
 }
-
-// //构造当前状态下的上下文
-// pub async fn build_state_context(ctx: &AgentContext) -> Vec<ChatCompletionRequestMessage> {
-//     // 加载系统提示词和历史消息
-//     let system_prompt = prompt_kit::build_system_prompt(&ctx.info).await;
-//     let mut messages = vec![prompt_kit::system_message(system_prompt)];
-//     let msgs = load_messages(ctx.info.id, ctx.info.state_version)
-//         .await
-//         .unwrap();
-//     messages.extend(msgs);
-//     messages
-// }

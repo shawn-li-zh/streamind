@@ -4,13 +4,13 @@ use std::{
 };
 
 use async_openai::types::ChatCompletionRequestMessage;
-use entity::event::EventTypeName;
+use entity::event::EnvEventType;
 use futures::{stream, Stream, StreamExt};
 use rand::Rng;
 use tracing::{error, info};
 
 use crate::agent::{
-    event::AgentEvent,
+    event::{to_type_enum, AgentEvent},
     kit::{message_kit, prompt_kit},
     llm_engine::LLMEngine,
 };
@@ -50,7 +50,7 @@ pub struct MindStack {
     id_map_pos: HashMap<i64, usize>,
     //上下文长度
     pub content_len: usize,
-    last: EventTypeName,
+    last: EnvEventType,
 }
 impl MindStack {
     pub fn new() -> Self {
@@ -58,13 +58,13 @@ impl MindStack {
             nodes: vec![],
             id_map_pos: HashMap::new(),
             content_len: 0,
-            last: EventTypeName::AgentResponse,
+            last: EnvEventType::AgentResponse,
         }
     }
     pub fn push_events(&mut self, event_buffer: &mut Vec<AgentEvent>) {
         let buffer = std::mem::take(event_buffer);
         if let Some(last) = buffer.last() {
-            self.last = last.data.type_enum();
+            self.last = to_type_enum(&last.data);
         }
         let (msg, len) = message_kit::build_step_messages(&buffer);
         self.push_msg(msg, len);
@@ -130,8 +130,8 @@ impl MindStack {
     ) -> std::pin::Pin<Box<dyn Stream<Item = String> + Send>> {
         let o = &*OUTPUTS;
         match &self.last {
-            EventTypeName::UserInput => stream::iter(o.0.clone()).boxed(),
-            EventTypeName::ToolCallResult => stream::iter(o.1.clone()).boxed(),
+            EnvEventType::UserRequest => stream::iter(o.0.clone()).boxed(),
+            EnvEventType::ToolCallResult => stream::iter(o.1.clone()).boxed(),
             _ => stream::empty().boxed(),
         }
     }

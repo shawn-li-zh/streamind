@@ -7,7 +7,7 @@ pub fn handle_ctx(item_fn: &mut ItemFn, attr: Attribute) -> TokenStream {
     quote! {
         Box::new(|info|{
                 let ctx=#fn_ident(info);
-                Box::new(ctx)
+                Arc::new(RwLock::new(ctx))
             })
     }
 }

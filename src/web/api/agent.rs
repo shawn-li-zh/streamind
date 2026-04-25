@@ -1,10 +1,6 @@
 use std::{collections::HashMap, convert::Infallible, sync::Arc};
 
-use crate::{
-    agent::{event::AgentEventData, global::AGENT_POOL},
-    global::DB,
-    web::ApiResponse,
-};
+use crate::{agent::global::AGENT_POOL, global::DB, web::ApiResponse};
 use axum::{
     extract::{Path, State},
     response::{sse::Event, Sse},
@@ -13,12 +9,13 @@ use axum::{
 use futures::Stream;
 use sea_orm::{EntityTrait, QueryOrder};
 use serde::{Deserialize, Serialize};
+use streamind_core::event::EnvEvent;
 use tokio::sync::mpsc;
 use tokio_stream::{wrappers::UnboundedReceiverStream, StreamExt};
 use tracing::info;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct UserMessage {
+pub struct UserMessageReq {
     pub content: String,
     pub attachments: Vec<String>,
 }
@@ -46,13 +43,19 @@ pub async fn connect(
 
 pub async fn chat(
     Path(agent_id): Path<u32>,
-    Json(msg): Json<UserMessage>,
+    Json(msg): Json<UserMessageReq>,
 ) -> ApiResponse<entity::event::Model> {
     let p = AGENT_POOL.read().await;
     let agent_arc = p.get(&agent_id).expect("agent不存在！");
     let mut agent = agent_arc.write().await;
     let model = agent
-        .send_event(AgentEventData::UserInput(msg.content), false)
+        .send_event(
+            EnvEvent::UserRequest(streamind_core::event::UserMessage {
+                content: msg.content,
+                attachments: vec![],
+            }),
+            false,
+        )
         .await
         .unwrap();
 

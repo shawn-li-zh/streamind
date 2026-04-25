@@ -16,7 +16,7 @@ pub struct ToolPackageContext {
 }
 
 impl ToolPackageContext {
-    pub fn new<T: Send + Sync + 'static>(data: T, pkg: &ToolPackage) -> Self {
+    pub fn new(data: Arc<RwLock<SafeAny>>, pkg: &ToolPackage) -> Self {
         let map = DashMap::new();
         for (name, tool) in pkg.tools() {
             if let Some(rate_limit) = tool.rate_limit {
@@ -24,7 +24,7 @@ impl ToolPackageContext {
             }
         }
         Self {
-            data: Arc::new(RwLock::new(data)),
+            data: data,
             tool_limiter: map,
         }
     }

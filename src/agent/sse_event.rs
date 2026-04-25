@@ -2,111 +2,99 @@ use axum::response::sse;
 use sea_orm::sea_query::prelude::rust_decimal::str;
 use serde::Serialize;
 use serde_json::json;
-use streamind_core::tool::engine::ToolCallEvent;
-
-use crate::agent::{
-    context::section::{Section, SectionEvent},
-    event::{AgentEvent, AgentEventData},
-};
+use streamind_core::event::{EnvEvent, SectionEvent, ToolCallEvent};
 
 pub enum WebEvent {
+    Env(EnvEvent, i64),
     Section(SectionEvent, i64),
-    Agent(AgentEvent),
-    ToolCall(ToolCallEvent),
+    ToolCall(ToolCallEvent, i64),
 }
 impl WebEvent {
     pub fn to_sse_event(self) -> sse::Event {
         match self {
-            WebEvent::Section(section_event, id) => match section_event {
-                SectionEvent::Start => SsePayload::new("section", "start", ()).to_sse_event(),
+            WebEvent::Section(section_event, bind_event_id) => match section_event {
+                SectionEvent::Start => {
+                    SsePayload::new("section", "start", (), bind_event_id).to_sse_event()
+                }
 
                 SectionEvent::Open(section_tag) => {
-                    SsePayload::new("section", "open", section_tag.name).to_sse_event()
+                    SsePayload::new("section", "open", section_tag.name, bind_event_id)
+                        .to_sse_event()
                 }
                 SectionEvent::Chunk(_, chunk) => {
-                    SsePayload::new("section", "chunk", chunk).to_sse_event()
+                    SsePayload::new("section", "chunk", chunk, bind_event_id).to_sse_event()
                 }
                 SectionEvent::Close(section) => {
-                    let content = match section.tag.name {
+                    let content = match section.tag_name.as_str() {
                         "reply" | "think" => String::new(),
                         _ => section.content,
                     };
                     let data = json!({
-                        "id":id,
-                        "name":section.tag.name,
+                        // "id":id,
+                        "name":section.tag_name,
                         "content":content
                     });
-                    SsePayload::new("section", "close", data).to_sse_event()
+                    SsePayload::new("section", "close", data, bind_event_id).to_sse_event()
                 }
-                SectionEvent::End => SsePayload::new("section", "end", ()).to_sse_event(),
+                SectionEvent::End => {
+                    SsePayload::new("section", "end", (), bind_event_id).to_sse_event()
+                }
             },
-            WebEvent::Agent(agent_event) => match agent_event.data {
-                AgentEventData::AgentResponse
-                | AgentEventData::UserInput(_)
-                | AgentEventData::ToolCallResult(_) => unreachable!("调用出错"),
-
-                AgentEventData::Timer(timer_data) => {
-                    SsePayload::new("agent", "timer", timer_data).to_sse_event()
+            WebEvent::Env(event, bind_event_id) => match event {
+                EnvEvent::AgentResponse(_)
+                | EnvEvent::UserRequest(_)
+                | EnvEvent::ToolCallResult(_) => {
+                    unreachable!("调用出错")
                 }
-                AgentEventData::Error(err) => {
-                    SsePayload::new("agent", "error", err).to_sse_event()
+                EnvEvent::Timer(timer_data) => {
+                    SsePayload::new("env", "timer", timer_data, bind_event_id).to_sse_event()
                 }
-                AgentEventData::Interrupt(_) => todo!(),
+                EnvEvent::Error(err) => {
+                    SsePayload::new("env", "error", err, bind_event_id).to_sse_event()
+                }
+                EnvEvent::Interrupt(reason) => {
+                    SsePayload::new("env", "interrupt", reason, bind_event_id).to_sse_event()
+                }
             },
-            WebEvent::ToolCall(tool_call_event) => match tool_call_event {
-                ToolCallEvent::Start(ids) => {
-                    SsePayload::new("tool_call", "start", json!({"ids":ids})).to_sse_event()
-                }
-                ToolCallEvent::Active(id, active) => {
-                    SsePayload::new("tool_call", "active", json!({"id":id,"active":active}))
+            WebEvent::ToolCall(tool_call_event, bind_event_id) => match tool_call_event {
+                ToolCallEvent::Start(items) => {
+                    SsePayload::new("tool_call", "start", json!(items), bind_event_id)
                         .to_sse_event()
                 }
-                ToolCallEvent::Success(id, result) => {
-                    SsePayload::new("tool_call", "success", json!({"id":id,"result":result}))
+                ToolCallEvent::Active(info) => {
+                    SsePayload::new("tool_call", "active", json!(info), bind_event_id)
                         .to_sse_event()
                 }
-                ToolCallEvent::Failure(id, result) => {
-                    SsePayload::new("tool_call", "failure", json!({"id":id,"result":result}))
+                ToolCallEvent::Success(item) => {
+                    SsePayload::new("tool_call", "success", json!(item), bind_event_id)
                         .to_sse_event()
                 }
-                ToolCallEvent::End => SsePayload::new("tool_call", "end", ()).to_sse_event(),
+                ToolCallEvent::Failure(item) => {
+                    SsePayload::new("tool_call", "failure", json!(item), bind_event_id)
+                        .to_sse_event()
+                }
+                ToolCallEvent::End => {
+                    SsePayload::new("tool_call", "end", (), bind_event_id).to_sse_event()
+                }
             },
         }
-    }
-}
-pub mod tool_call {
-    pub struct Start {
-        pub items: Vec<CallItem>,
-    }
-    pub struct CallItem {
-        pub id: i64,
-        pub package: &'static str,
-        pub tool: &'static str,
-    }
-    pub struct Active {
-        pub id: i64,
-        pub info: String,
-    }
-    pub struct Complete {
-        pub id: i64,
-        pub info: String,
-        pub result: String,
-        pub taken_time: u32,
     }
 }
 
 #[derive(Debug, Serialize)]
 pub struct SsePayload<T: Serialize> {
+    pub bind_event_id: i64,
     pub r#type: &'static str,
     pub event: &'static str,
     pub data: T,
 }
 impl<T: Serialize> SsePayload<T> {
-    pub fn new(r#type: &'static str, event: &'static str, data: T) -> Self {
+    pub fn new(event: &'static str, r#type: &'static str, data: T, bind_event_id: i64) -> Self {
         Self {
             r#type,
             event,
             data,
+            bind_event_id,
         }
     }
     pub fn to_sse_event(self) -> sse::Event {

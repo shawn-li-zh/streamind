@@ -1,72 +1,15 @@
-use std::{pin::Pin, sync::LazyLock, time::Duration};
+use std::{
+    pin::Pin,
+    sync::LazyLock,
+    time::{Duration, Instant},
+};
 
 use futures::{Stream, StreamExt};
+use streamind_core::{
+    event::SectionEvent,
+    section::{Section, SectionTag, TAGS},
+};
 use tokio::sync::mpsc;
-
-#[derive(Debug, Clone)]
-// pub enum Section {
-//     //思考:内容
-//     Think(String),
-//     //函数调用
-//     ToolCall(String),
-//     //回复
-//     Reply(String),
-//     //客户端UI渲染代码
-//     Render(String),
-//     //异常
-//     Error(String),
-//     //中断
-//     Interrupt(String),
-//     //其他
-//     Other(String),
-// }
-pub struct Section {
-    pub tag: &'static SectionTag,
-    pub content: String,
-}
-
-impl Into<String> for &Section {
-    fn into(self) -> String {
-        format!("{}\n{}\n{}", self.tag.start, self.content, self.tag.end)
-    }
-}
-impl Section {
-    pub fn new(tag: &'static SectionTag, content: String) -> Section {
-        Section { tag, content }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct SectionTag {
-    pub name: &'static str,
-    pub start: &'static str,
-    pub end: &'static str,
-}
-impl SectionTag {
-    pub fn new(name: &'static str, start: &'static str, end: &'static str) -> Self {
-        SectionTag { name, start, end }
-    }
-}
-pub static TAGS: LazyLock<Vec<SectionTag>> = LazyLock::new(|| {
-    vec![
-        SectionTag::new("think", "<think>", "</think>"),
-        SectionTag::new("tool_call", "<tool_call>", "</tool_call>"),
-        SectionTag::new("reply", "<reply>", "</reply>"),
-        SectionTag::new("render", "<render>", "</render>"),
-        SectionTag::new("error", "<error>", "</error>"),
-        SectionTag::new("push", "<push>", "</push>"),
-        SectionTag::new("pop", "<pop>", "</pop>"),
-        SectionTag::new("interrupt", "<interrupt>", "</interrupt>"),
-    ]
-});
-#[derive(Debug, Clone)]
-pub enum SectionEvent {
-    Start,
-    Open(&'static SectionTag),
-    Chunk(&'static SectionTag, String),
-    Close(Section),
-    End,
-}
 
 /// 在流式输出中，解析不同的段内容
 
@@ -79,6 +22,7 @@ pub fn section_stream(
     let mut current_tag: Option<&'static SectionTag> = None;
     let mut tag_seek: usize = 0;
 
+    let mut start = Instant::now();
     let mut is_in_reply_stream = false;
     let tags: &'static Vec<SectionTag> = &*TAGS;
     let reply_tag = &tags[2];
@@ -115,6 +59,7 @@ pub fn section_stream(
                     } else {
                         // 处于正常文本内，也需要流式输出！
                         if !is_in_reply_stream {
+                            start = Instant::now();
                             yield SectionEvent::Open(reply_tag); // tags[2] 是 reply
                             is_in_reply_stream = true;
                         }
@@ -136,7 +81,8 @@ pub fn section_stream(
                             yield SectionEvent::Chunk(tag, buffer[tag_seek..pos].to_string());
                         }
                         let content = buffer[..pos].to_string();
-                        yield SectionEvent::Close(Section::new(&tag, content));
+                        let time=start.elapsed();
+                        yield SectionEvent::Close(Section::new(&tag, content,time));
 
                         // 截断 buffer，关键修复：重置状态！
                         buffer = buffer[pos + tag.end.len()..].to_string();
@@ -164,16 +110,17 @@ pub fn section_stream(
 
                         // 起始标签前面的内容处理
                         if pos > 0 && !&buffer[..pos].trim_start().is_empty() {
-                            if !is_in_reply_stream {
-                                yield SectionEvent::Open(reply_tag);
-                            }
-                            if tag_seek < pos {
-                                yield SectionEvent::Chunk(reply_tag, buffer[tag_seek..pos].to_string());
-                            }
-                            let content = buffer[..pos].to_string();
-
-                            yield SectionEvent::Close(Section::new(reply_tag,content));
-                            is_in_reply_stream = false;
+                           if !is_in_reply_stream {
+                           start = Instant::now();
+                           yield SectionEvent::Open(reply_tag);
+                           }
+                           if tag_seek < pos {
+                           yield SectionEvent::Chunk(reply_tag, buffer[tag_seek..pos].to_string());
+                           }
+                           let content = buffer[..pos].to_string();
+                           let time=start.elapsed();
+                           yield SectionEvent::Close(Section::new(reply_tag,content,time));
+                           is_in_reply_stream = false;
                         }
 
                         // 截断 buffer 进入新标签，关键修复：不盲目直接 yield buffer！
@@ -196,13 +143,16 @@ pub fn section_stream(
 
             if let Some(tag) = current_tag {
                 yield SectionEvent::Chunk(tag, remain);
-                yield SectionEvent::Close(Section::new(&tag, buffer.clone()));
+                let time=start.elapsed();
+                yield SectionEvent::Close(Section::new(&tag, buffer.clone(),time));
             } else if !&buffer.trim_start().is_empty(){
                 if !is_in_reply_stream {
+                    start = Instant::now();
                     yield SectionEvent::Open(reply_tag);
                 }
                 yield SectionEvent::Chunk(reply_tag, remain);
-                yield SectionEvent::Close(Section::new(reply_tag,buffer.clone()));
+                let time=start.elapsed();
+                yield SectionEvent::Close(Section::new(reply_tag,buffer.clone(),time));
             }
         }
 
@@ -254,7 +204,7 @@ async fn test() {
                 print!("{}", chunk)
             }
             SectionEvent::Close(section) => {
-                let s: String = (&section).into();
+                let s: String = (&section).to_string();
                 println!("[事件] 关闭标签，完整段落内容为: {:?}", s);
             }
             SectionEvent::End => {

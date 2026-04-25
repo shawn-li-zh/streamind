@@ -2,7 +2,7 @@ use axum::{
     extract::{Path, Query},
     response::sse::Event,
 };
-use entity::event::{self, EventTypeName};
+use entity::event::{self, EnvEventType};
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde::Deserialize;
 

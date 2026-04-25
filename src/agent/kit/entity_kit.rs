@@ -5,7 +5,7 @@ use std::{
 
 use chrono::Local;
 
-use entity::types::array::StringArray;
+use entity::{event::EnvEventType, types::array::StringArray};
 use sea_orm::{
     prelude::Expr,
     ActiveModelTrait,
@@ -15,15 +15,16 @@ use sea_orm::{
 use serde::{Deserialize, Serialize};
 use streamind_core::{
     agent::{AgentContext, AgentInfo, AgentStatus},
+    event::{EnvEvent, ToolCallDetailItem, ToolCallResultItem},
     item::{Item, ItemGroup},
+    section::Section,
     tool::engine::ToolEngineContext,
 };
 use tokio::sync::RwLock;
 
 use crate::{
     agent::{
-        context::section::Section,
-        event::{AgentEvent, AgentEventData},
+        event::{to_json, to_type_enum, AgentEvent},
         global::{AGENT_CTX_POOL, ITEM_GROUPS, TOOL_PACKAGE_TOOL},
     },
     global::DB,
@@ -32,52 +33,73 @@ use crate::{
 pub async fn save_event(
     db: &impl ConnectionTrait,
     agent_info: &AgentInfo,
-    event_data: AgentEventData,
+    event_data: EnvEvent,
     force: bool,
 ) -> anyhow::Result<(AgentEvent, entity::event::Model)> {
     //保存数据库
-    let event = AgentEvent {
+    let mut event = AgentEvent {
         id: 0,
         agent_id: agent_info.id,
-        data: event_data,
+        data: event_data.clone(),
         force,
         time: Local::now(),
     };
+    let event_type = to_type_enum(&event_data);
+    let json = to_json(event_data);
     let event_model = entity::event::ActiveModel {
         agent_id: Set(event.agent_id),
         state_id: Set(agent_info.state_id),
         step: Set(agent_info.step),
-        event_type: Set(event.data.type_enum()),
+        event_type: Set(event_type),
         force: Set(event.force),
         time: Set(event.time),
-        payload: Set(event.data.json()),
+        data: Set(json),
         ..Default::default()
     };
     let model: entity::event::Model = event_model.insert(db).await?;
+    event.id = model.id;
     Ok((event, model))
 }
 
-pub async fn save_section<T: Serialize>(
-    agent_info: &AgentInfo,
-    resp_event_id: i64,
-    section: &Section,
-    taken_time: u32,
-    meta: T,
-) -> anyhow::Result<entity::section::Model> {
-    let json = serde_json::to_value(meta)?;
-
-    let model = entity::section::ActiveModel {
-        agent_id: Set(agent_info.id),
-        state_id: Set(agent_info.state_id),
-        event_id: Set(resp_event_id),
-        step: Set(agent_info.step),
-        name: Set(section.tag.name.to_string()),
-        taken_time: Set(taken_time),
-        meta: Set(json),
+pub async fn update_tool_call_result(
+    event_id: i64,
+    details: Vec<ToolCallDetailItem>,
+) -> anyhow::Result<()> {
+    let db = DB.get().unwrap();
+    let data = serde_json::to_value(details)?;
+    let model = entity::event::ActiveModel {
+        data: Set(data),
         ..Default::default()
     };
-    let model = model.insert(DB.get().unwrap()).await?;
-    Ok(model)
+    let result = entity::event::Entity::update_many()
+        .set(model)
+        .filter(entity::event::Column::Id.eq(event_id))
+        .filter(entity::event::Column::EventType.eq(EnvEventType::ToolCallResult))
+        .exec(db)
+        .await?;
+    if result.rows_affected != 1 {
+        return Err(anyhow::anyhow!("更新失败"));
+    }
+    Ok(())
+}
+
+pub async fn update_agent_response(event_id: i64, sections: Vec<Section>) -> anyhow::Result<()> {
+    let db = DB.get().unwrap();
+    let data = serde_json::to_value(sections)?;
+    let model = entity::event::ActiveModel {
+        data: Set(data),
+        ..Default::default()
+    };
+    let result = entity::event::Entity::update_many()
+        .set(model)
+        .filter(entity::event::Column::Id.eq(event_id))
+        .filter(entity::event::Column::EventType.eq(EnvEventType::AgentResponse))
+        .exec(db)
+        .await?;
+    if result.rows_affected != 1 {
+        return Err(anyhow::anyhow!("更新失败"));
+    }
+    Ok(())
 }
 
 pub async fn incr_agent_step(agent_id: u32, cur_step: i64) -> anyhow::Result<i64> {
@@ -259,7 +281,12 @@ pub async fn build_agent_context(model: entity::agent::Model) -> Arc<RwLock<Agen
                 tool_pkgs.extend(TOOL_PACKAGE_TOOL.keys());
                 break;
             }
-            tool_pkgs.insert(TOOL_PACKAGE_TOOL.get(pkg_name.as_str()).expect("包不存在").name);
+            tool_pkgs.insert(
+                TOOL_PACKAGE_TOOL
+                    .get(pkg_name.as_str())
+                    .expect("包不存在")
+                    .name,
+            );
         }
         ToolEngineContext::build(tool_pkgs, &*TOOL_PACKAGE_TOOL)
     };

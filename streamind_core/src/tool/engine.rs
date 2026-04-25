@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context, Error, Result, anyhow};
@@ -14,31 +15,10 @@ use tracing::debug;
 
 use crate::{
     agent::AgentContext,
-    tool::{
-        Tool, ToolPackagePool,
-        context::ToolPackageContext,
-        core::{ToolCallReturn, ToolPackage},
-    },
+    event::{ActiveInfo, ToolCallEvent, ToolCallResultItem, ToolCallStatus},
+    tool::{Tool, ToolPackagePool, context::ToolPackageContext, core::ToolPackage},
 };
-#[derive(Debug, Clone)]
-pub enum ToolCallEvent {
-    //调用id组
-    Start(Vec<i64>),
-    // section id+工具活动描述
-    Active(i64, String),
-    // section id+调用结果
-    Success(i64, String),
-    Failure(i64, String),
-    End,
-}
-impl ToolCallEvent {
-    pub fn from(id: i64, res: anyhow::Result<String>) -> Self {
-        match res {
-            Ok(c) => Self::Success(id, c),
-            Err(e) => Self::Failure(id, format!("{:?}", e)),
-        }
-    }
-}
+
 pub struct ToolEngineContext {
     pub tool_packages: HashSet<&'static str>,
     pub package_pool: &'static ToolPackagePool,
@@ -98,22 +78,28 @@ impl ToolEngine {
         async fn send(
             sender: mpsc::Sender<ToolCallEvent>,
             id: i64,
-            res: Result<ToolCallReturn, anyhow::Error>,
+            res: Result<serde_json::Value, anyhow::Error>,
+            time: Duration,
         ) {
-            match res {
+            let mut item = ToolCallResultItem {
+                id,
+                content: String::new(),
+                time,
+                status: ToolCallStatus::Undo,
+            };
+            let event = match res {
                 Ok(res) => {
-                    sender
-                        .send(ToolCallEvent::Success(id, res.data.to_string()))
-                        .await
-                        .unwrap();
+                    item.content = res.to_string();
+                    item.status = ToolCallStatus::Success;
+                    ToolCallEvent::Success(item)
                 }
                 Err(e) => {
-                    sender
-                        .send(ToolCallEvent::Failure(id, format!("{e}")))
-                        .await
-                        .unwrap();
+                    item.content = format!("{e}");
+                    item.status = ToolCallStatus::Failure;
+                    ToolCallEvent::Failure(item)
                 }
-            }
+            };
+            sender.send(event).await.unwrap();
         }
 
         for ToolCall {
@@ -122,20 +108,21 @@ impl ToolEngine {
             tool,
             args,
             context,
-            active_tip,
+            active_tip: tip,
             is_await,
         } in calls
         {
             debug!("{}.{}(...)", package.name, tool.name);
+            let start = Instant::now();
             sender
-                .send(ToolCallEvent::Active(id, active_tip))
+                .send(ToolCallEvent::Active(ActiveInfo { id, tip }))
                 .await
                 .unwrap();
             if is_await {
                 // 串行：立即执行并等待结果，存入对应的索引位置
                 let res = tool.call(args, &context, self.agent_context.clone()).await;
                 let is_error = res.is_err();
-                send(sender.clone(), id, res).await;
+                send(sender.clone(), id, res, start.elapsed()).await;
                 if is_error {
                     return Err(anyhow!("同步函数调用失败!"));
                 }
@@ -143,9 +130,8 @@ impl ToolEngine {
                 let sender: mpsc::Sender<ToolCallEvent> = sender.clone();
                 let agent_ctx = self.agent_context.clone();
                 let handle = tokio::spawn(async move {
-                    let res: std::result::Result<ToolCallReturn, anyhow::Error> =
-                        tool.call(args, &context, agent_ctx).await;
-                    send(sender, id, res).await
+                    let res = tool.call(args, &context, agent_ctx).await;
+                    send(sender, id, res, start.elapsed()).await
                 });
                 concurrent_tasks.push(handle);
             }
@@ -157,14 +143,14 @@ impl ToolEngine {
         }
         Ok(())
     }
-    pub fn batch_preprocess(&self, codes: Vec<(i64, String)>) -> PreprocessResult {
+    pub fn batch_preprocess(&self, codes: Vec<String>) -> PreprocessResult {
         //
         //语法解析
         let mut valid_tasks = Vec::with_capacity(codes.len());
         let mut invalid = Vec::with_capacity(codes.len());
         for i in 0..codes.len() {
-            let (id, code) = &codes[i];
-            let id = *id;
+            let code = &codes[i];
+            let id = i as i64;
             match self.preprocess(id, code) {
                 Ok(d) => {
                     valid_tasks.push(d);

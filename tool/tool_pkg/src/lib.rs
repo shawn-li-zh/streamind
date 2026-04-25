@@ -18,9 +18,8 @@ pub fn tool_pool() -> ToolPackagePool {
     //阅读器
     let pkg = read::build_package();
     pool.insert(pkg.name, pkg);
-
     //http
-    let pkg = read::build_package();
+    let pkg = http::build_package();
     pool.insert(pkg.name, pkg);
     pool
 }

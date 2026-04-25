@@ -7,7 +7,7 @@ pub mod file {
     use anyhow::Ok;
     use chrono::Local;
 
-    use streamind_core::tool::{ToolCallContext, ToolCallReturn};
+    use streamind_core::tool::ToolCallContext;
 
     pub struct Context {
         pub root_path: String,
@@ -38,11 +38,9 @@ pub mod file {
         example = r#"create_file("/usr/a.txt")"#,
         active = "正在创建{path}文件"
     )]
-    pub async fn create_file(
-        #[arg("文件路径")] path: String
-    ) -> anyhow::Result<ToolCallReturn> {
+    pub fn create_file(#[arg("文件路径")] path: String) -> anyhow::Result<()> {
         let file = std::fs::File::create_new(path)?;
-        Ok(().into())
+        Ok(())
     }
     #[tool(
         anno = "创建文件夹",

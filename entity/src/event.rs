@@ -1,7 +1,6 @@
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
-
 use crate::format::date_time;
 
 #[sea_orm::model]
@@ -18,11 +17,11 @@ pub struct Model {
     #[sea_orm(not_null)]
     pub state_id: i64,
     #[sea_orm(column_type = "Text", not_null)]
-    pub event_type: EventTypeName,
+    pub event_type: EnvEventType,
     #[sea_orm(not_null)]
     pub force: bool,
     #[sea_orm(column_type = "Text", not_null)]
-    pub payload: serde_json::Value,
+    pub data: serde_json::Value,
     #[sea_orm(default_value = "0")]
     pub source_event_id: i64,
     #[sea_orm(column_type = "Timestamp", not_null)]
@@ -38,12 +37,13 @@ impl ActiveModelBehavior for ActiveModel {}
     db_type = "String(StringLen::None)",
     rename_all = "camelCase"
 )]
-pub enum EventTypeName {
+pub enum EnvEventType {
     #[default]
     AgentResponse,
-    UserInput,
+    UserRequest,
 
     ToolCallResult,
     Error,
     Timer,
+    Interrupt,
 }

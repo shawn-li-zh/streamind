@@ -1,4 +1,5 @@
 use std::{
+    any::Any,
     collections::HashMap,
     path::{Path, PathBuf},
     time::{Duration, Instant},
@@ -12,9 +13,18 @@ use reqwest::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use streamind_core::tool::ToolPackage;
 use tokio::{fs::File, io::AsyncWriteExt};
 use tool_macro::package;
 
+// pub fn build() -> ToolPackage {
+//     let mut pkg = http::build_package();
+//     pkg.context_builder = Box::new(|ag| {
+//         let ctx = http::new_context(ag);
+//         Box::new(ctx)
+//     });
+//     pkg
+// }
 #[package("HTTP网络请求与测试工具")]
 pub mod http {
     use anyhow::{Result, anyhow};
@@ -24,7 +34,7 @@ pub mod http {
     };
     use serde::Serialize;
     use serde_json::{Value, json};
-    use std::{collections::HashMap, time::Duration};
+    use std::{any::Any, collections::HashMap, time::Duration};
     use std::{path::Path, sync::Arc, time::Instant};
     use streamind_core::{agent::AgentContext, tool::ToolCallContext};
     use tokio::sync::RwLock;
@@ -39,6 +49,7 @@ pub mod http {
         pub config: HTTPConfig,
         pub response_cache: std::sync::Arc<tokio::sync::RwLock<HashMap<String, ResponseEntry>>>,
     }
+
     #[derive(Serialize, Clone)]
     pub struct HTTPConfig {
         pub default_headers: HashMap<String, String>,
@@ -142,7 +153,7 @@ pub mod http {
         let response = rb.send().await?;
         // 4. 处理响应 Body (区分文本和二进制)
         let entry = process_response(response, start_time, &store_path).await?;
-        let res = format!("resquestId: {},status:{}", &entry.id, entry.status);
+        let res = format!("requestId: {},status:{}", &entry.id, entry.status);
         // 5. 存入缓存
         let mut cache = cache_ptr.write().await;
         cache.insert(entry.id.clone(), entry);
@@ -344,12 +355,16 @@ async fn process_response_body(
     //初始化文件
     let file_id = uuid::Uuid::new_v4().simple().to_string();
     let file_name = format!("{}.bin", file_id);
+    if !store_path.exists() {
+        std::fs::create_dir_all(&store_path)?;
+    }
     let full_path = store_path.join(&file_name);
     //写入临时文件
     {
+        
         let ref mut f = File::create(&full_path)
             .await
-            .map_err(|e| anyhow::anyhow!("创建临时文件失败: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("创建临时文件失败:{} {}", full_path.to_str().unwrap(), e))?;
         let mut stream = response.bytes_stream();
 
         while let Some(chunk_result) = stream.next().await {

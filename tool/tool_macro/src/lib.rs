@@ -18,7 +18,7 @@ pub fn package(args: TokenStream, input: TokenStream) -> TokenStream {
 
     let mut generated_types: Vec<proc_macro2::TokenStream> = Vec::new();
     let mut generated_tools = Vec::new();
-    let mut ctx_t = quote! {Box::new(|_|Box::new(()))};
+    let mut ctx_t = quote! {Box::new(|_|Arc::new(RwLock::new(())))};
     // 遍历模块中的所有的项 (struct, fn 等)
     if let Some((_, ref mut items)) = module.content {
         for item in items.iter_mut() {
@@ -58,6 +58,8 @@ pub fn package(args: TokenStream, input: TokenStream) -> TokenStream {
         let build_fn = quote! {
             pub fn build_package() -> streamind_core::tool::ToolPackage {
                 use std::collections::HashMap;
+                use tokio::sync::RwLock;
+                use std::sync::Arc;
                 use streamind_core::tool::{
                     ToolCallContext,
                     Tool, ToolHandler, ToolPackage,
@@ -79,7 +81,7 @@ pub fn package(args: TokenStream, input: TokenStream) -> TokenStream {
                  )
             }
         };
-
+        // eprintln!("{}", build_fn);
         // 将生成的函数追加到模块的 items 中
         items.push(syn::parse2(build_fn).unwrap());
     }

@@ -6,6 +6,7 @@ use std::{
 use crate::common::prompt_cache::PromptCache;
 
 use sea_orm::{ConnectOptions, Database, DatabaseConnection};
+use tracing::level_filters::LevelFilter;
 
 pub static PROMPT_CACHE: LazyLock<PromptCache> =
     LazyLock::new(|| PromptCache::new("./prompts".into()));
@@ -17,7 +18,10 @@ pub static TIME_FMT: &str = "%H:%M:%S";
 pub async fn init() -> anyhow::Result<()> {
     //初始化数据库连接
     let url = std::env::var("DATABASE_URL")?;
-    let opt = ConnectOptions::new(url);
+    let mut opt = ConnectOptions::new(url);
+    opt.sqlx_logging(false);
+    opt.max_connections(500);
+
     let db = Database::connect(opt).await.expect("数据库连接失败");
     db.get_schema_registry("entity::*").sync(&db).await?;
     DB.set(db).unwrap();

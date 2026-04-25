@@ -1,11 +1,12 @@
 use std::sync::Arc;
+use streamind_core::{event::{EnvEvent, SectionEvent}, section::Section};
 use tracing::{error, info};
 
 use crate::agent::{
-    context::section::{section_stream, Section, SectionEvent},
+    context::section::section_stream,
     context::stack::{self, MindNode, MindStack},
     core::{Agent, AgentChannel},
-    event::{AgentEvent, AgentEventData},
+    event::AgentEvent,
     kit::{entity_kit, message_kit, prompt_kit, string_kit},
     llm_engine::LLMEngine,
 };
@@ -74,7 +75,7 @@ impl StreamMind {
     fn drain_events(&mut self) {
         while let Ok(event) = self.event_receiver.try_recv() {
             match event.data {
-                AgentEventData::Interrupt(_) => {
+                EnvEvent::Interrupt(_) => {
                     // 在 drain 阶段遇到打断信号可以直接忽略
                     // 因为我们本身就是在打断后的重新整理阶段
                     println!("[队列提取] 忽略多余的打断信号");
@@ -165,7 +166,7 @@ impl StreamMind {
                     let is_end= matches!(&section_event,SectionEvent::End);
                     if let SectionEvent::Close(section)=&section_event{
                         watch_section(self,&section).await?;
-                        let s:String=section.into();
+                        let s:String=section.to_string();
                         response.push_str(&s);
                         response.push_str("\n");
                     }
@@ -237,7 +238,7 @@ pub async fn run_mind(
                 let mut agent = agent.write().await;
                 agent
                     .send_event(
-                        AgentEventData::Error("上下文溢出告警,请执行出栈操作".to_string()),
+                        EnvEvent::Error("上下文溢出告警,请执行出栈操作".to_string()),
                         true,
                     )
                     .await
@@ -248,7 +249,7 @@ pub async fn run_mind(
 }
 
 async fn watch_section(mind: &mut StreamMind, section: &Section) -> anyhow::Result<()> {
-    match section.tag.name {
+    match section.tag_name.as_str() {
         "push" => push_state(mind.agent_id, &mut mind.stack, section).await?,
         "pop" => pop_state(mind.agent_id, &mut mind.stack, section).await?,
         _ => {}

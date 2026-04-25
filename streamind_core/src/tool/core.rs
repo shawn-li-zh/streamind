@@ -19,12 +19,12 @@ use crate::{
         value_type::{ToolValueType, TypeInfo, TypeItemInfo},
     },
 };
-pub type SafeAny = dyn Any + Send + Sync + 'static;
+
 pub type ToolHandler = Box<
     dyn Fn(
             HashMap<String, serde_json::Value>,
             ToolCallContext,
-        ) -> BoxFuture<'static, anyhow::Result<ToolCallReturn>>
+        ) -> BoxFuture<'static, anyhow::Result<serde_json::Value>>
         + Send
         + Sync,
 >;
@@ -34,12 +34,13 @@ pub type ActiveFn = Box<
         + Send
         + Sync,
 >;
-pub type ContextBuilder = Box<dyn Fn(&AgentContext) -> Box<SafeAny> + Send + Sync>;
+pub type SafeAny = dyn Any + Send + Sync + 'static;
+pub type ContextBuilder = Box<dyn Fn(&AgentContext) -> Arc<RwLock<SafeAny>> + Send + Sync>;
 
 pub fn async_tool_handler<F, Fut>(f: F) -> ToolHandler
 where
     F: Fn(HashMap<String, serde_json::Value>, ToolCallContext) -> Fut + Send + Sync + 'static,
-    Fut: std::future::Future<Output = anyhow::Result<ToolCallReturn>> + Send + 'static,
+    Fut: std::future::Future<Output = anyhow::Result<serde_json::Value>> + Send + 'static,
 {
     Box::new(move |args, ctx| f(args, ctx).boxed())
 }
@@ -48,7 +49,7 @@ where
     F: Fn(
             HashMap<String, serde_json::Value>,
             ToolCallContext,
-        ) -> Result<ToolCallReturn, anyhow::Error>
+        ) -> Result<serde_json::Value, anyhow::Error>
         + Send
         + Sync
         + 'static,
@@ -124,7 +125,7 @@ impl Tool {
         args: HashMap<String, serde_json::Value>,
         ctx: &ToolPackageContext,
         agent_ctx: Arc<RwLock<AgentContext>>,
-    ) -> anyhow::Result<ToolCallReturn> {
+    ) -> anyhow::Result<serde_json::Value> {
         if ctx.is_limited(self.name) {
             return Err(anyhow::anyhow!("调用频率过高"));
         };
@@ -192,7 +193,7 @@ pub struct ToolPackage {
     pub annotation: &'static str,
     types: HashMap<&'static str, TypeInfo>,
     tools: HashMap<&'static str, Tool>,
-    context_builder: ContextBuilder,
+    pub context_builder: ContextBuilder,
 }
 impl ToolPackage {
     pub fn new(
@@ -216,7 +217,7 @@ impl ToolPackage {
     pub fn get_type(&self, type_name: &str) -> Option<&TypeInfo> {
         self.types.get(type_name)
     }
-    pub fn new_context(&self, agent: &AgentContext) -> Box<dyn Any + Send + Sync + 'static> {
+    pub fn new_context(&self, agent: &AgentContext) -> Arc<RwLock<SafeAny>> {
         let ctx = (self.context_builder)(&agent);
         return ctx;
     }
@@ -225,24 +226,3 @@ impl ToolPackage {
     }
 }
 
-pub struct ToolCallReturn {
-    pub data: serde_json::Value,
-    pub info: HashMap<String, serde_json::Value>,
-}
-impl ToolCallReturn {
-    pub fn new<T: Serialize>(data: T) -> Self {
-        Self {
-            data: json!(data),
-            info: HashMap::new(),
-        }
-    }
-    pub fn set_info<V: Serialize>(&mut self, key: String, value: V) {
-        self.info.insert(key, json!(value));
-    }
-}
-
-impl<T: serde::Serialize> From<T> for ToolCallReturn {
-    fn from(data: T) -> Self {
-        ToolCallReturn::new(data)
-    }
-}
