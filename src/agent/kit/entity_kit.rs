@@ -1,6 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
+    collections::{HashMap, HashSet}, path::PathBuf, sync::Arc
 };
 
 use chrono::Local;
@@ -12,10 +11,10 @@ use sea_orm::{
     ActiveValue::{self, Set},
     ColumnTrait, ConnectionTrait, DbErr, EntityTrait, ExprTrait, QueryFilter, TransactionTrait,
 };
-use serde::{Deserialize, Serialize};
+
 use streamind_core::{
     agent::{AgentContext, AgentInfo, AgentStatus},
-    event::{EnvEvent, ToolCallDetailItem, ToolCallResultItem},
+    event::{EnvEvent, ToolCallDetailItem},
     item::{Item, ItemGroup},
     section::Section,
     tool::engine::ToolEngineContext,
@@ -269,7 +268,7 @@ pub async fn build_agent_context(model: entity::agent::Model) -> Arc<RwLock<Agen
         step: model.step,
         name: model.name,
         model: model.model,
-        workspace: model.workspace,
+        workspace: PathBuf::from(&model.workspace),
         avatar: model.avatar,
         status: AgentStatus::Idle,
     };
@@ -288,15 +287,16 @@ pub async fn build_agent_context(model: entity::agent::Model) -> Arc<RwLock<Agen
                     .name,
             );
         }
-        ToolEngineContext::build(tool_pkgs, &*TOOL_PACKAGE_TOOL)
+        ToolEngineContext::build(&agent, tool_pkgs, &*TOOL_PACKAGE_TOOL)
     };
+
     let agent_context = AgentContext {
         info: agent,
         tool_engine_context: Arc::new(tool_engine_context),
     };
     //
     let id = agent_context.info.id;
-    agent_context.tool_engine_context.init(&agent_context);
+
     let agent_context = Arc::new(RwLock::new(agent_context));
     //
     let mut p = AGENT_CTX_POOL.write().await;

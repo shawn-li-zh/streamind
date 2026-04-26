@@ -45,6 +45,8 @@ tower-http = { version = "0.5", features = ["cors"] } # 处理跨域
 thiserror = "2.0.18"
 dashmap = "6.1.0"
 rand = "0.8"
+# 可读时间
+humantime = "2.1"
 [dev-dependencies]
 cargo-nextest = "0.9"
 

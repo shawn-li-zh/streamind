@@ -8,11 +8,12 @@ use crate::common;
 #[derive(Debug, FromMeta, Default)]
 #[darling(default)]
 pub struct ToolArgs {
-     #[darling(rename = "anno")]
+    #[darling(rename = "anno")]
     pub anno: Option<String>,
     pub example: Option<String>,
-    pub active: Option<syn::Expr>,
-     #[darling(rename = "limit")]
+    // pub active: Option<syn::Expr>,
+    pub timeout: Option<String>,
+    #[darling(rename = "limit")]
     pub rate_limit: Option<String>,
 }
 
@@ -29,10 +30,21 @@ pub fn handle_fn(
 
     // 4. 解析限流配置为 Rust Token
     let rate_limit_tokens = parse_rate_limit_to_tokens(args.rate_limit.as_deref().unwrap_or(""));
-
+    let timeout_tokens = args
+        .timeout
+        .as_deref()
+        .map(parse_time)
+        .map(|v| quote! {Some(#v)})
+        .unwrap_or(quote! {None});
     // 5. 生成工具注册代码
-    let tool_registration =
-        build_tool_registration(item_fn, args, arg_extractors, arg_names, rate_limit_tokens);
+    let tool_registration = build_tool_registration(
+        item_fn,
+        args,
+        arg_extractors,
+        arg_names,
+        timeout_tokens,
+        rate_limit_tokens,
+    );
 
     generated_tools.push(tool_registration);
 }
@@ -45,7 +57,7 @@ fn build_arg_extractors(
 
     for arg in &mut sig.inputs {
         if let syn::FnArg::Typed(pat_type) = arg {
-            let ty=pat_type.ty.to_token_stream();
+            let ty = pat_type.ty.to_token_stream();
             if let syn::Pat::Ident(pat_ident) = &*pat_type.pat {
                 let arg_ident = &pat_ident.ident;
                 let arg_name_str = arg_ident.to_string();
@@ -75,13 +87,16 @@ fn parse_rate_limit_to_tokens(rate_limit: &str) -> proc_macro2::TokenStream {
     if rate_limit.is_empty() {
         return quote!(None);
     }
-
     // 编译期切分 "10s:5"
     let (time_str, count_str) = rate_limit
         .split_once(':')
         .expect("rate_limit 格式必须为 '时间:次数' (例如 10s:5)");
     let times: u32 = count_str.parse().expect("限流次数解析失败");
-
+    let dur_tokens = parse_time(time_str);
+    quote!(Some((#dur_tokens, #times)))
+}
+//解析时间code，转换成Duration
+fn parse_time(time_str: &str) -> proc_macro2::TokenStream {
     // 分离数字和单位，如 "10" 和 "s"
     let unit_idx = time_str
         .find(|c: char| c.is_alphabetic())
@@ -98,8 +113,7 @@ fn parse_rate_limit_to_tokens(rate_limit: &str) -> proc_macro2::TokenStream {
         "d" => quote!(std::time::Duration::from_secs(#num * 86400)),
         _ => panic!("不支持的时间单位: '{}'", unit),
     };
-
-    quote!(Some((#dur_tokens, #times)))
+    dur_tokens
 }
 
 fn build_tool_registration(
@@ -107,6 +121,7 @@ fn build_tool_registration(
     args: ToolArgs,
     extractors: Vec<proc_macro2::TokenStream>,
     arg_names: Vec<proc_macro2::TokenStream>,
+    timeout_tokens: proc_macro2::TokenStream,
     rate_limit_tokens: proc_macro2::TokenStream,
 ) -> proc_macro2::TokenStream {
     let (args_t, return_t) = parse_fn_signature(item_fn);
@@ -115,24 +130,24 @@ fn build_tool_registration(
     let tool_name = fn_ident.to_string();
     let annotation = args.anno.unwrap_or_default();
     let example = args.example.unwrap_or_default();
-    let active = match args.active {
-        Some(expr) => {
-            quote! {
-                Box::new(|mut args: std::collections::HashMap<String, serde_json::Value>,ctx:ToolCallContext| {
-                    #(#extractors)*
-                    let res = #expr;
-                    Ok(res.into())
-                })
-            }
-        }
-        None => {
-            quote! {
-                Box::new(|mut args: std::collections::HashMap<String, serde_json::Value>,ctx:ToolCallContext| {
-                    Ok(format!("正在调用'{}'...",#tool_name))
-                })
-            }
-        }
-    };
+    // let active = match args.active {
+    //     Some(expr) => {
+    //         quote! {
+    //             Box::new(|mut args: std::collections::HashMap<String, serde_json::Value>,ctx:ToolCallContext| {
+    //                 #(#extractors)*
+    //                 let res = #expr;
+    //                 Ok(res.into())
+    //             })
+    //         }
+    //     }
+    //     None => {
+    //         quote! {
+    //             Box::new(|mut args: std::collections::HashMap<String, serde_json::Value>,ctx:ToolCallContext| {
+    //                 Ok(format!("正在调用'{}'...",#tool_name))
+    //             })
+    //         }
+    //     }
+    // };
 
     let is_async = item_fn.sig.asyncness.is_some();
 
@@ -156,16 +171,18 @@ fn build_tool_registration(
     };
 
     // 返回最终向 tools 插入的 TokenStream
+
     quote! {
-        tools.insert(#tool_name, Tool::new(
+        let mut tool=Tool::new(
             #tool_name,
             #annotation,
             #example,
-            #rate_limit_tokens,
             (vec![ #(#args_t),*],#return_t),
-            #active,
             #handler_closure,
-        ));
+        );
+        tool.timeout=#timeout_tokens;
+        tool.rate_limit=#rate_limit_tokens;
+        tools.insert(#tool_name, tool);
     }
 }
 

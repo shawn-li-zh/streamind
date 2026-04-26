@@ -1,4 +1,4 @@
-use std::{path::PathBuf, time::Duration};
+use std::{collections::HashMap, path::PathBuf, time::Duration};
 
 use serde::{Deserialize, Serialize};
 
@@ -19,7 +19,8 @@ pub struct ToolCallDetailItem {
     pub tool: String,
     pub content: String,
     pub status: ToolCallStatus,
-    pub time: u32,
+    pub args: HashMap<String, serde_json::Value>,
+    pub time: String,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TimerData {
@@ -113,7 +114,7 @@ pub enum ToolCallEvent {
     //调用id组
     Start(Vec<CallItem>),
     // section id+工具活动描述
-    Active(ActiveInfo),
+    Active(i64),
     // section id+调用结果
     Success(ToolCallResultItem),
     Failure(ToolCallResultItem),

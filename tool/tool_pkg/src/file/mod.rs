@@ -2,7 +2,9 @@ pub use self::file::build_package;
 use tool_macro::package;
 #[package("文件操作工具包")]
 pub mod file {
-    use streamind_core::agent::AgentContext;
+    use std::path::PathBuf;
+
+    use streamind_core::agent::AgentInfo;
 
     use anyhow::Ok;
     use chrono::Local;
@@ -10,13 +12,13 @@ pub mod file {
     use streamind_core::tool::ToolCallContext;
 
     pub struct Context {
-        pub root_path: String,
+        pub root_path: PathBuf,
     }
 
     #[context]
-    pub fn new_context(agent: &AgentContext) -> Context {
+    pub fn new_context(agent: &AgentInfo) -> Context {
         Context {
-            root_path: agent.info.workspace.to_string(),
+            root_path: agent.workspace.clone(),
         }
     }
     #[class("文件对象")]
@@ -33,11 +35,7 @@ pub mod file {
         pub change_time: Option<chrono::DateTime<Local>>,
         pub file_size: u64,
     }
-    #[tool(
-        anno = "创建文件",
-        example = r#"create_file("/usr/a.txt")"#,
-        active = "正在创建{path}文件"
-    )]
+    #[tool(anno = "创建文件", example = r#"create_file("/usr/a.txt")"#)]
     pub fn create_file(#[arg("文件路径")] path: String) -> anyhow::Result<()> {
         let file = std::fs::File::create_new(path)?;
         Ok(())
@@ -45,7 +43,6 @@ pub mod file {
     #[tool(
         anno = "创建文件夹",
         example = r#"create_dir("/usr/a.txt")"#,
-        active = format!("正在创建{path}文件夹"),
         limit = "30s:10"
     )]
     pub fn create_dir(

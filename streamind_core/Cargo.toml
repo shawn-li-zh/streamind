@@ -14,6 +14,7 @@ chrono = "0.4.44"
 dashmap = "6.1.0"
 futures = "0.3"
 tracing = "0.1"
-
+# id生成
+nanoid = "0.5.0"
 # 可读时间
 humantime = "2.1"

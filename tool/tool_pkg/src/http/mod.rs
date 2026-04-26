@@ -1,6 +1,8 @@
 use std::{
     any::Any,
     collections::HashMap,
+    fs::File,
+    io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
@@ -13,8 +15,8 @@ use reqwest::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use streamind_core::tool::ToolPackage;
-use tokio::{fs::File, io::AsyncWriteExt};
+
+use streamind_core::simple_id;
 use tool_macro::package;
 
 // pub fn build() -> ToolPackage {
@@ -27,6 +29,9 @@ use tool_macro::package;
 // }
 #[package("HTTP网络请求与测试工具")]
 pub mod http {
+    use crate::http::{
+        PreparedBody, ResponseEntry, assemble_body, assemble_headers, process_response,
+    };
     use anyhow::{Result, anyhow};
     use reqwest::{
         Client, Method,
@@ -36,12 +41,9 @@ pub mod http {
     use serde_json::{Value, json};
     use std::{any::Any, collections::HashMap, time::Duration};
     use std::{path::Path, sync::Arc, time::Instant};
+    use streamind_core::agent::AgentInfo;
     use streamind_core::{agent::AgentContext, tool::ToolCallContext};
     use tokio::sync::RwLock;
-
-    use crate::http::{
-        PreparedBody, ResponseEntry, assemble_body, assemble_headers, process_response,
-    };
 
     pub struct Context {
         pub root_path: String,
@@ -56,7 +58,7 @@ pub mod http {
         pub timeout_secs: u64,
     }
     #[context]
-    pub fn new_context(ctx: &AgentContext) -> Context {
+    pub fn new_context(ctx: &AgentInfo) -> Context {
         let mut default_headers = HashMap::new();
         default_headers.insert(
             "User-Agent".to_string(),
@@ -113,6 +115,7 @@ pub mod http {
         anno = "发起网络请求。支持在 body 中嵌入 '<file:相对路径>' 语法自动提取文件进行 multipart/form-data 上传",
         example = r#"request(method="POST", url="http://api.com/upload", body={"name":"avatar", "file":"<file:./test.png>"})"#,
         limit = "30s:15"
+        timeout="5m"
     )]
     pub async fn request(
         #[arg("请求方法，如 GET, POST, PUT, DELETE")] method: String,
@@ -124,7 +127,6 @@ pub mod http {
         body: Option<Value>,
         #[ctx] ctx: ToolCallContext,
     ) -> Result<String> {
-        let (root_path, store_path) = ctx.get_safe_path("/tool/http").await?;
         let start_time = Instant::now();
         // 1. 获取 Context
         let (client, config, cache_ptr) = {
@@ -137,7 +139,7 @@ pub mod http {
         // 2. 组装请求
         let method_enum = Method::from_bytes(method.to_uppercase().as_bytes())?;
         let header_map = assemble_headers(&config.default_headers, headers)?;
-        let prepared_body = assemble_body(&root_path, body)?;
+        let prepared_body = assemble_body(&ctx.workspace, body)?;
 
         let mut rb = client
             .request(method_enum, &url)
@@ -152,7 +154,8 @@ pub mod http {
         // 3. 执行请求
         let response = rb.send().await?;
         // 4. 处理响应 Body (区分文本和二进制)
-        let entry = process_response(response, start_time, &store_path).await?;
+        let (path, file) = ctx.new_temp_result_file("bin");
+        let entry = process_response(response, start_time, path, file).await?;
         let res = format!("requestId: {},status:{}", &entry.id, entry.status);
         // 5. 存入缓存
         let mut cache = cache_ptr.write().await;
@@ -194,7 +197,15 @@ pub mod http {
                     result.insert("headers".into(), serde_json::to_value(&entry.headers)?);
                 }
                 "body" => {
-                    result.insert("body".into(), entry.body.clone().into());
+                    let body = match &entry.body {
+                        super::ProcessedBody::Text(c) => c.clone(),
+                        super::ProcessedBody::File(path, _) => {
+                            let path = ctx.to_short_path(&path);
+                            let path = path.to_str().unwrap();
+                            format!("<file:{path}>")
+                        }
+                    };
+                    result.insert("body".into(), body.into());
                 }
                 "time" => {
                     let time = humantime::format_duration(entry.time.clone());
@@ -214,15 +225,14 @@ pub mod http {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone)]
 pub struct ResponseEntry {
     pub id: String,
     pub status: u16,
     pub headers: HashMap<String, String>,
-    pub body: String, // 可能是纯文本，也可能是 "<file:temp_xxx.bin>"
     pub time: Duration,
     pub size: u64,
-    pub file_path: PathBuf,
+    pub body: ProcessedBody,
 }
 
 /// 内部使用的 Body 类型，区分普通 JSON 和 带文件的多部分表单
@@ -314,7 +324,8 @@ fn assemble_body(root_path: &PathBuf, body: Option<Value>) -> anyhow::Result<Pre
 async fn process_response(
     response: reqwest::Response,
     start: Instant,
-    store_path: &PathBuf,
+    store_path: PathBuf,
+    store_file: File,
 ) -> anyhow::Result<ResponseEntry> {
     // 处理响应 Body (区分文本和二进制)
     let status = response.status().as_u16();
@@ -328,18 +339,20 @@ async fn process_response(
         .unwrap_or_default()
         .to_lowercase();
 
-    let (body, size, file_path) =
-        process_response_body(response, &content_type, &store_path).await?;
+    let body = process_response_body(response, &content_type, store_path, store_file).await?;
+    let size = match &body {
+        ProcessedBody::Text(t) => t.len() as _,
+        ProcessedBody::File(_, size) => *size,
+    };
     let time = start.elapsed();
-    let request_id = uuid::Uuid::new_v4().to_string()[..8].to_string();
+    let request_id = simple_id(16);
     let entry = ResponseEntry {
-        id: request_id.clone(),
+        id: request_id,
         status,
         headers: resp_headers,
-        body,
         time,
         size,
-        file_path,
+        body,
     };
     Ok(entry)
 }
@@ -347,34 +360,25 @@ async fn process_response(
 async fn process_response_body(
     response: reqwest::Response,
     content_type: &String,
-    store_path: &PathBuf,
-) -> anyhow::Result<(String, u64, PathBuf)> {
+    store_path: PathBuf,
+    ref mut store_file: File,
+) -> anyhow::Result<ProcessedBody> {
     // 设定内存阈值：2kb
     let max_memory_size = 2 * 1024;
     let mut total_size = 0u64;
-    //初始化文件
-    let file_id = uuid::Uuid::new_v4().simple().to_string();
-    let file_name = format!("{}.bin", file_id);
-    if !store_path.exists() {
-        std::fs::create_dir_all(&store_path)?;
-    }
-    let full_path = store_path.join(&file_name);
+
     //写入临时文件
     {
-        
-        let ref mut f = File::create(&full_path)
-            .await
-            .map_err(|e| anyhow::anyhow!("创建临时文件失败:{} {}", full_path.to_str().unwrap(), e))?;
         let mut stream = response.bytes_stream();
 
         while let Some(chunk_result) = stream.next().await {
             let chunk = chunk_result.map_err(|e| anyhow::anyhow!("网络流读取中断: {}", e))?;
             total_size += chunk.len() as u64;
             // 写入当前 chunk
-            f.write_all(&chunk).await?;
+            store_file.write_all(&chunk)?;
         }
         // --- 收尾处理 ---
-        f.flush().await?;
+        store_file.flush()?;
     }
     //
     if total_size <= max_memory_size
@@ -383,10 +387,18 @@ async fn process_response_body(
             || content_type.contains("/xml"))
     {
         //尝试读取为文本
-        let bytes = std::fs::read(&full_path)?;
+        store_file.seek(SeekFrom::Start(0))?;
+        let mut bytes = Vec::with_capacity(max_memory_size as _);
+        store_file.read(&mut bytes)?;
         if let Ok(text) = String::from_utf8(bytes) {
-            return Ok((text, total_size, full_path));
+            return Ok(ProcessedBody::Text(text));
         }
     }
-    Ok((format!("<file:{}>", file_name), total_size, full_path))
+
+    Ok(ProcessedBody::File(store_path, total_size))
+}
+#[derive(Clone)]
+enum ProcessedBody {
+    Text(String),
+    File(PathBuf, u64),
 }

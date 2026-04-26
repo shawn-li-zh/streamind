@@ -1,21 +1,13 @@
-use std::{
-    any::Any,
-    collections::{HashMap, HashSet},
-    path::PathBuf,
-    sync::Arc,
-    time::Duration,
-};
+use std::{any::Any, collections::HashMap, sync::Arc, time::Duration};
 
 use futures::{FutureExt, future::BoxFuture};
 
-use serde::Serialize;
-use serde_json::{Value, json};
 use tokio::sync::RwLock;
 
 use crate::{
-    agent::AgentContext,
+    agent::AgentInfo,
     tool::{
-        context::ToolPackageContext,
+        context::ToolCallContext,
         value_type::{ToolValueType, TypeInfo, TypeItemInfo},
     },
 };
@@ -35,7 +27,7 @@ pub type ActiveFn = Box<
         + Sync,
 >;
 pub type SafeAny = dyn Any + Send + Sync + 'static;
-pub type ContextBuilder = Box<dyn Fn(&AgentContext) -> Arc<RwLock<SafeAny>> + Send + Sync>;
+pub type ContextBuilder = Box<dyn Fn(&AgentInfo) -> Arc<RwLock<SafeAny>> + Send + Sync>;
 
 pub fn async_tool_handler<F, Fut>(f: F) -> ToolHandler
 where
@@ -61,27 +53,18 @@ where
 }
 
 pub type ToolPackagePool = HashMap<&'static str, ToolPackage>;
-pub struct ToolCallContext {
-    pub agent_context: Arc<RwLock<AgentContext>>,
-    pub context_data: Arc<RwLock<SafeAny>>,
-}
-impl ToolCallContext {
-    pub async fn get_safe_path(&self, path: &str) -> anyhow::Result<(PathBuf, PathBuf)> {
-        let ctx = self.agent_context.read().await;
-        ctx.get_safe_path(path)
-    }
-}
 
 pub struct Tool {
     pub name: &'static str,
     //函数描述
     pub annotation: &'static str,
     pub example: &'static str,
-    pub rate_limit: Option<(Duration, u32)>,
     pub type_signature: (Vec<TypeItemInfo>, Option<ToolValueType>),
-
-    pub active: ActiveFn,
+    //
     pub handler: ToolHandler,
+    //
+    pub rate_limit: Option<(Duration, u32)>,
+    pub timeout: Option<Duration>,
 }
 
 impl Tool {
@@ -89,9 +72,7 @@ impl Tool {
         name: &'static str,
         annotation: &'static str,
         example: &'static str,
-        rate_limit: Option<(Duration, u32)>,
         type_signature: (Vec<TypeItemInfo>, Option<ToolValueType>),
-        active: ActiveFn,
         handler: ToolHandler,
     ) -> Self {
         Self {
@@ -99,41 +80,17 @@ impl Tool {
             annotation,
             example,
             type_signature,
-            rate_limit,
-            active,
             handler,
+            rate_limit: None,
+            timeout: None,
         }
     }
-    pub fn active_tip(
-        &self,
-        args: HashMap<String, serde_json::Value>,
-        ctx: &ToolPackageContext,
-        agent_ctx: Arc<RwLock<AgentContext>>,
-    ) -> String {
-        let ctx = ToolCallContext {
-            context_data: ctx.data.clone(),
-            agent_context: agent_ctx,
-        };
-        match (self.active)(args, ctx) {
-            Ok(r) => r,
-            Err(e) => format!("参数异常:{e}"),
-        }
+    //=====设置
+    pub fn rate_limit(&mut self, window_time: Duration, times: u32) {
+        self.rate_limit = Some((window_time, times))
     }
-
-    pub async fn call(
-        &self,
-        args: HashMap<String, serde_json::Value>,
-        ctx: &ToolPackageContext,
-        agent_ctx: Arc<RwLock<AgentContext>>,
-    ) -> anyhow::Result<serde_json::Value> {
-        if ctx.is_limited(self.name) {
-            return Err(anyhow::anyhow!("调用频率过高"));
-        };
-        let ctx = ToolCallContext {
-            context_data: ctx.data.clone(),
-            agent_context: agent_ctx,
-        };
-        (self.handler)(args, ctx).await
+    pub fn timeout(&mut self, time: Duration) {
+        self.timeout = Some(time);
     }
 
     pub fn to_doc(&self) -> String {
@@ -217,12 +174,8 @@ impl ToolPackage {
     pub fn get_type(&self, type_name: &str) -> Option<&TypeInfo> {
         self.types.get(type_name)
     }
-    pub fn new_context(&self, agent: &AgentContext) -> Arc<RwLock<SafeAny>> {
-        let ctx = (self.context_builder)(&agent);
-        return ctx;
-    }
+
     pub fn tools(&self) -> &HashMap<&'static str, Tool> {
         &self.tools
     }
 }
-

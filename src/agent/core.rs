@@ -95,7 +95,7 @@ impl Agent {
         //通道
         let event = mpsc::channel(100);
         let section = mpsc::channel(100);
-        let inject = mpsc::unbounded_channel();
+        let inject: (mpsc::UnboundedSender<(String, bool)>, mpsc::UnboundedReceiver<(String, bool)>) = mpsc::unbounded_channel();
         let call_watcher: (watch::Sender<bool>, watch::Receiver<bool>) = watch::channel(false);
         let reorganize_watcher: (watch::Sender<bool>, watch::Receiver<bool>) =
             watch::channel(false);
@@ -373,7 +373,8 @@ async fn call(
             tool: call.tool.name.to_string(),
             content: "".to_string(),
             status: ToolCallStatus::Undo,
-            time: 0,
+            args: call.args.clone(),
+            time: "".to_string(),
         };
         details.insert(detail.id, detail);
     }
@@ -399,7 +400,7 @@ async fn call(
             let detial = details.get_mut(&item.id).unwrap();
             detial.content = item.content;
             detial.status = item.status;
-            detial.time = item.time.subsec_millis();
+            detial.time = humantime::format_duration(item.time).to_string();
         }
         //排序
         let details: Vec<ToolCallDetailItem> = call_ids

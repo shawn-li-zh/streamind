@@ -6,9 +6,6 @@ pub mod tool {
 
     use anyhow::Ok;
 
-    pub struct Context {
-        pub root_path: String,
-    }
     #[tool(
         anno = "列出指定区间内的工具包的基础信息",
         example = r#"list_packages(start=0,num=100)"#,

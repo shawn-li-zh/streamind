@@ -1,81 +1,125 @@
 use std::{
-    any::Any,
-    collections::VecDeque,
-    sync::{Arc, Mutex},
-    time::{Duration, Instant},
+    collections::HashMap,
+    fs::File,
+    path::{Path, PathBuf},
+    sync::{Arc, LazyLock},
+    time::Duration,
 };
 
-use dashmap::DashMap;
 use tokio::sync::RwLock;
 
-use crate::tool::{SafeAny, ToolPackage};
-
+use crate::{
+    agent::{AgentContext, AgentInfo},
+    tool::{
+        SafeAny, Tool, ToolPackage, call,
+        plugin::{
+            interceptor::{ContentSizeLimiter, RateLimiter, ToolCallnterceptor},
+            wrapper::TimeoutWrapper,
+        },
+    },
+};
+static TIME_OUT: LazyLock<u64> = LazyLock::new(|| {
+    //默认5分钟
+    let timeout = std::env::var("TOOL_CALL_TIME_OUT")
+        .map(|v| u64::from_str_radix(&v, 10).expect("env TOOL_CALL_TIME_OUT"))
+        .unwrap_or(60 * 5);
+    timeout
+});
+pub struct ToolContext {
+    pub wrapper: TimeoutWrapper,
+    pub interceptors: Vec<Box<dyn ToolCallnterceptor + 'static + Send + Sync>>,
+}
+impl ToolContext {
+    pub fn from(agent_info: &AgentInfo, pkg: &'static ToolPackage, tool: &'static Tool) -> Self {
+        let mut ctx = ToolContext {
+            wrapper: TimeoutWrapper {
+                time: Duration::from_secs(*TIME_OUT),
+            },
+            interceptors: vec![],
+        };
+        if let Some(build) = RateLimiter::build(agent_info, pkg, tool) {
+            ctx.interceptors.push(Box::new(build));
+        }
+        if let Some(build) = ContentSizeLimiter::build(agent_info, pkg, tool) {
+            ctx.interceptors.push(Box::new(build));
+        }
+        ctx
+    }
+}
 pub struct ToolPackageContext {
     pub data: Arc<RwLock<SafeAny>>,
-    tool_limiter: DashMap<&'static str, RateLimiter>,
+    pub tool_contexts: HashMap<&'static str, Arc<ToolContext>>,
 }
 
 impl ToolPackageContext {
-    pub fn new(data: Arc<RwLock<SafeAny>>, pkg: &ToolPackage) -> Self {
-        let map = DashMap::new();
+    pub fn form(agent_info: &AgentInfo, pkg: &'static ToolPackage) -> Self {
+        let data = (pkg.context_builder)(agent_info);
+
+        let mut map = HashMap::new();
         for (name, tool) in pkg.tools() {
-            if let Some(rate_limit) = tool.rate_limit {
-                map.insert(*name, RateLimiter::new(rate_limit.0, rate_limit.1));
-            }
+            let ctx = ToolContext::from(agent_info, pkg, tool);
+            map.insert(*name, Arc::new(ctx));
         }
         Self {
             data: data,
-            tool_limiter: map,
+            tool_contexts: map,
         }
     }
+
     pub fn data(&self) -> Arc<RwLock<SafeAny>> {
         self.data.clone()
     }
-
-    pub fn is_limited(&self, tool_name: &str) -> bool {
-        if let Some(counter) = self.tool_limiter.get(tool_name) {
-            return !counter.value().check();
-        }
-        false
-    }
 }
 
-pub struct RateLimiter {
-    slots: Mutex<VecDeque<Instant>>,
-    window_size: Duration,
-    limit_times: usize,
+pub struct ToolCallContext {
+    pub agent_context: Arc<RwLock<AgentContext>>,
+    pub context_data: Arc<RwLock<SafeAny>>,
+    pub workspace: PathBuf,
+    pkg: &'static ToolPackage,
+    tool: &'static Tool,
 }
 
-impl RateLimiter {
-    pub fn new(window_size: Duration, limit_times: u32) -> Self {
+impl ToolCallContext {
+    pub async fn new(
+        agent_context: Arc<RwLock<AgentContext>>,
+        context_data: Arc<RwLock<SafeAny>>,
+        pkg: &'static ToolPackage,
+        tool: &'static Tool,
+    ) -> Self {
+        let workspace = {
+            let ctx = agent_context.read().await;
+            PathBuf::from(&ctx.info.workspace)
+        };
         Self {
-            slots: Mutex::new(VecDeque::new()),
-            window_size,
-            limit_times: limit_times as usize,
+            agent_context,
+            context_data,
+            workspace,
+            pkg,
+            tool,
         }
     }
+    pub fn get_real_path(&self, path: &str) -> (PathBuf, bool) {
+        let real_path = self.workspace.join(path);
+        let is_safe = real_path.starts_with(&self.workspace);
+        (real_path, is_safe)
+    }
+    pub fn to_short_path(&self, path: &PathBuf) -> PathBuf {
+        // 1. 获取工作区的绝对路径
+        let root = Path::new(&self.workspace);
 
-    pub fn check(&self) -> bool {
-        let mut slots = self.slots.lock().unwrap();
-        let now = Instant::now();
-        // 移除窗口外的陈旧数据
-        self.remove_past(&now, &mut slots);
-        let total = slots.len();
-        if total >= self.limit_times {
-            return false;
+        let path = Path::new(path);
+        if let Ok(path) = path.strip_prefix(root) {
+            return path.to_path_buf();
         }
-        // 记录当前时刻的计数
-        slots.push_back(now);
-        true
+        path.to_path_buf()
     }
 
-    fn remove_past(&self, now: &Instant, slots: &mut VecDeque<Instant>) {
-        while let Some((time)) = slots.front() {
-            if now.duration_since(*time) > self.window_size {
-                slots.pop_front();
-            } else {
-                break;
-            }
-        }
+    pub fn new_temp_result_file(&self, ext: &str) -> (PathBuf, File) {
+        call::new_temp_result_file(
+            &PathBuf::from(&self.workspace),
+            self.pkg.name,
+            self.tool.name,
+            ext,
+        )
     }
 }
