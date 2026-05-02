@@ -13,9 +13,13 @@ impl WebEvent {
     pub fn to_sse_event(self) -> sse::Event {
         match self {
             WebEvent::Section(section_event, bind_event_id) => match section_event {
-                SectionEvent::Start => {
-                    SsePayload::new("section", "start", (), bind_event_id).to_sse_event()
-                }
+                SectionEvent::Start(reaction_id, response_id) => SsePayload::new(
+                    "section",
+                    "start",
+                    json!({ "reaction_id": reaction_id, "response_id": response_id }),
+                    bind_event_id,
+                )
+                .to_sse_event(),
 
                 SectionEvent::Open(section_tag) => {
                     SsePayload::new("section", "open", section_tag.name, bind_event_id)
@@ -25,27 +29,30 @@ impl WebEvent {
                     SsePayload::new("section", "chunk", chunk, bind_event_id).to_sse_event()
                 }
                 SectionEvent::Close(section) => {
-                    let content = match section.tag_name.as_str() {
-                        "reply" | "think" => String::new(),
-                        _ => section.content,
-                    };
-                    let data = json!({
-                        // "id":id,
-                        "name":section.tag_name,
-                        "content":content
-                    });
+                    // let content = match section.tag_name.as_str() {
+                    //     "reply" | "think" => String::new(),
+                    //     _ => section.content,
+                    // };
+                    let data = json!(section);
                     SsePayload::new("section", "close", data, bind_event_id).to_sse_event()
                 }
-                SectionEvent::End => {
-                    SsePayload::new("section", "end", (), bind_event_id).to_sse_event()
-                }
+                SectionEvent::End(reaction_id, response_id) => SsePayload::new(
+                    "section",
+                    "end",
+                    json!({ "reaction_id": reaction_id, "response_id": response_id }),
+                    bind_event_id,
+                )
+                .to_sse_event(),
             },
             WebEvent::Env(event, bind_event_id) => match event {
-                EnvEvent::AgentResponse(_)
+                EnvEvent::AgentReaction(_)
+                | EnvEvent::AgentResponse(_)
                 | EnvEvent::UserRequest(_)
+                | EnvEvent::Interaction(_)
                 | EnvEvent::ToolCallResult(_) => {
                     unreachable!("调用出错")
                 }
+
                 EnvEvent::Timer(timer_data) => {
                     SsePayload::new("env", "timer", timer_data, bind_event_id).to_sse_event()
                 }
@@ -80,6 +87,12 @@ impl WebEvent {
         }
     }
 }
+
+
+
+
+
+
 
 #[derive(Debug, Serialize)]
 pub struct SsePayload<T: Serialize> {

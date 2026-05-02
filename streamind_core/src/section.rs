@@ -3,6 +3,7 @@ use std::{sync::LazyLock, time::Duration};
 use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Section {
+    pub id: i64,
     pub tag_name: String,
     pub content: String,
     pub time: String,
@@ -12,6 +13,7 @@ impl Section {
     pub fn new(tag: &'static SectionTag, content: String, time: Duration) -> Section {
         let time = humantime::format_duration(time).to_string();
         Section {
+            id: 0,
             tag_name: tag.name.to_string(),
             content,
             time,

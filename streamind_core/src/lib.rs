@@ -3,6 +3,7 @@ pub mod event;
 pub mod item;
 pub mod section;
 pub mod tool;
+pub mod render;
 
 pub fn simple_id(digit: usize) -> String {
     const ALPHABET: [char; 16] = [

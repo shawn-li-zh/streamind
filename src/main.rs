@@ -28,7 +28,11 @@ async fn main() -> anyhow::Result<()> {
 
     let mut app = Router::new();
     app = inject_router(app);
-
+    //映射本地资源
+    let serve_dir = tower_http::services::ServeDir::new("./public")
+        .precompressed_gzip()
+        .append_index_html_on_directories(true);
+    app = app.nest_service("/public", serve_dir);
     // 定义 CORS 策略
     let cors = CorsLayer::new()
         // 1. 必须指定明确的源，不能用 Any

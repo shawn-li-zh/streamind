@@ -1,5 +1,9 @@
+use anyhow::Context;
 use std::sync::Arc;
-use streamind_core::{event::{EnvEvent, SectionEvent}, section::Section};
+use streamind_core::{
+    event::{EnvEvent, SectionEvent},
+    section::Section,
+};
 use tracing::{error, info};
 
 use crate::agent::{
@@ -163,7 +167,7 @@ impl StreamMind {
                 }
                 // 分支 A：段落生成流
                 Some(section_event) = section_stream.next() =>  {
-                    let is_end= matches!(&section_event,SectionEvent::End);
+                    let is_end= matches!(&section_event,SectionEvent::End(_, _));
                     if let SectionEvent::Close(section)=&section_event{
                         watch_section(self,&section).await?;
                         let s:String=section.to_string();
@@ -180,7 +184,7 @@ impl StreamMind {
                 Some(event) = self.event_receiver.recv() => {
                     if event.force{
                         self.event_buffer.push(event);
-                        self.section_sender.send(SectionEvent::End).await.unwrap();
+                        self.section_sender.send(SectionEvent::End(0, 0)).await.unwrap();
                         break; // 跳出内部 loop,强制处理
                     }
                     // 如果是普通任务，先默默存起来，不打断当前生成
@@ -260,17 +264,17 @@ async fn watch_section(mind: &mut StreamMind, section: &Section) -> anyhow::Resu
 fn parse_state(content: &str) -> anyhow::Result<(usize, String, String)> {
     let (head, content) = content
         .split_once("\n")
-        .ok_or_else(|| anyhow::anyhow!("格式异常"))?;
+        .with_context(|| anyhow::anyhow!("栈格式异常:{content}"))?;
     let (pos, title) = head
         .split_once(":")
-        .ok_or_else(|| anyhow::anyhow!("格式异常"))?;
+        .with_context(|| anyhow::anyhow!("栈头格式异常:{head}"))?;
     let pos =
         usize::from_str_radix(pos.trim(), 10).map_err(|e| anyhow::anyhow!("栈指针格式异常"))?;
     Ok((pos, title.trim().to_string(), content.trim().to_string()))
 }
 
 async fn push_state(agent_id: u32, stack: &mut MindStack, section: &Section) -> anyhow::Result<()> {
-    let (pos, title, content) = parse_state(&section.content)?;
+    let (pos, title, content) = parse_state(&section.content.trim())?;
     let model = entity_kit::push_state_stack(agent_id, pos as _, title, content).await?;
     let node = MindNode {
         id: model.id,
@@ -289,7 +293,7 @@ async fn push_state(agent_id: u32, stack: &mut MindStack, section: &Section) -> 
 //content
 //</back>
 async fn pop_state(agent_id: u32, stack: &mut MindStack, section: &Section) -> anyhow::Result<()> {
-    let (pos, title, content) = parse_state(&section.content)?;
+    let (pos, title, content) = parse_state(&section.content.trim())?;
     //更新节点内容
     {
         let node = match stack.nodes.get_mut(pos) {

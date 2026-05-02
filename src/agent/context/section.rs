@@ -27,7 +27,7 @@ pub fn section_stream(
     let tags: &'static Vec<SectionTag> = &*TAGS;
     let reply_tag = &tags[2];
     async_stream::stream! {
-        yield SectionEvent::Start;
+        yield SectionEvent::Start(0, 0); 
 
         while let Some( chunk) = chunk_stream.next().await {
             let mut chunk:&str=chunk.as_str();
@@ -156,7 +156,7 @@ pub fn section_stream(
             }
         }
 
-        yield SectionEvent::End;
+        yield SectionEvent::End(0, 0);
     }
 }
 #[cfg(test)]
@@ -194,7 +194,7 @@ async fn test() {
     // 4. 消费解析出来的事件
     while let Some(event) = event_stream.next().await {
         match event {
-            SectionEvent::Start => {
+            SectionEvent::Start(reaction_id, response_id) => {
                 println!("\n[事件] >>> 流开始 <<<");
             }
             SectionEvent::Open(tag) => {
@@ -207,7 +207,7 @@ async fn test() {
                 let s: String = (&section).to_string();
                 println!("[事件] 关闭标签，完整段落内容为: {:?}", s);
             }
-            SectionEvent::End => {
+            SectionEvent::End(reaction_id, response_id) => {
                 println!("\n[事件] >>> 流结束 <<<");
             }
         }

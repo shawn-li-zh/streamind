@@ -7,6 +7,7 @@ use std::{
 use axum::response::sse;
 use chrono::Local;
 
+use entity::event::EnvEventType;
 use sea_orm::{DbErr, TransactionTrait};
 use serde_json::json;
 use streamind_core::{
@@ -15,7 +16,12 @@ use streamind_core::{
         CallItem, EnvEvent, SectionEvent, ToolCallDetailItem, ToolCallEvent, ToolCallResultItem,
         ToolCallStatus,
     },
-    tool::engine::{PreprocessResult, ToolEngine, ToolEngineContext},
+    render::RenderContext,
+    section::Section,
+    tool::{
+        call::ToolCall,
+        engine::{PreprocessResult, ToolEngine, ToolEngineContext},
+    },
 };
 use tokio::sync::{mpsc, oneshot::Receiver, watch, Mutex, RwLock};
 use tracing::{debug, error, info, warn};
@@ -25,7 +31,10 @@ use crate::{
         context::stream::{self, MindFlag, StreamMind},
         event::AgentEvent,
         global::{AGENT_POOL, ENGINE_POOL, TOOL_PACKAGE_TOOL},
-        kit::{entity_kit, message_kit, prompt_kit},
+        kit::{
+            entity_kit::{self, update_section_payload},
+            message_kit, prompt_kit,
+        },
         sse_event::WebEvent,
     },
     global::DB,
@@ -89,13 +98,17 @@ pub struct Agent {
 
 impl Agent {
     pub async fn new(model: entity::agent::Model) -> Arc<RwLock<Agent>> {
+        let agent_id = model.id;
         let agent_model = model.model.clone();
         //
         let agent_context = entity_kit::build_agent_context(model).await;
         //通道
         let event = mpsc::channel(100);
         let section = mpsc::channel(100);
-        let inject: (mpsc::UnboundedSender<(String, bool)>, mpsc::UnboundedReceiver<(String, bool)>) = mpsc::unbounded_channel();
+        let inject: (
+            mpsc::UnboundedSender<(String, bool)>,
+            mpsc::UnboundedReceiver<(String, bool)>,
+        ) = mpsc::unbounded_channel();
         let call_watcher: (watch::Sender<bool>, watch::Receiver<bool>) = watch::channel(false);
         let reorganize_watcher: (watch::Sender<bool>, watch::Receiver<bool>) =
             watch::channel(false);
@@ -144,6 +157,7 @@ impl Agent {
         //运行时
         let mut runtime = AgentRuntime {
             agent: agent.clone(),
+            agent_id,
             section_receiver: section.1,
             call_watcher: call_watcher.0,
             tool_engine: tool_engine,
@@ -202,6 +216,7 @@ impl Agent {
 
 pub struct AgentRuntime {
     pub agent: Arc<RwLock<Agent>>,
+    agent_id: u32,
     tool_engine: ToolEngine,
     section_receiver: mpsc::Receiver<SectionEvent>,
     call_watcher: watch::Sender<bool>,
@@ -238,25 +253,37 @@ impl AgentRuntime {
     }
 
     async fn react(&mut self) -> anyhow::Result<()> {
-        let mut tool_calls: Vec<String> = vec![];
-        let mut resp_event_id = 0;
+        let mut tool_calls: Vec<ToolCall> = vec![];
+        let mut response_event_id = 0;
+        let mut reaction_event_id = 0;
         //
         let ctx = {
             let agent = self.agent.read().await;
             agent.ctx.clone()
         };
-        let mut sections = vec![];
+        let mut response_sections = vec![];
+        let mut reaction_sections = vec![];
         while let Some(section_event) = self.section_receiver.recv().await {
-            match &section_event {
-                SectionEvent::Start => {
+            let sec_event = section_event.clone();
+            match section_event {
+                SectionEvent::Start(_, _) => {
                     {
                         let mut ctx = ctx.write().await;
                         ctx.info.status = AgentStatus::Running;
                     }
                     {
+                        let ctx = ctx.read().await;
+                        //
+                        let (event, model) = entity_kit::save_event(
+                            DB.get().unwrap(),
+                            &ctx.info,
+                            EnvEvent::AgentReaction(vec![]),
+                            false,
+                        )
+                        .await
+                        .expect("保存agent反应失败");
+                        reaction_event_id = model.id;
                         //保存一个空事件
-                        let agent = self.agent.read().await;
-                        let ctx = agent.ctx.read().await;
                         let (event, model) = entity_kit::save_event(
                             DB.get().unwrap(),
                             &ctx.info,
@@ -265,38 +292,89 @@ impl AgentRuntime {
                         )
                         .await
                         .expect("保存agent回复失败");
-                        resp_event_id = model.id;
+                        response_event_id = model.id;
                     };
-                    let web_event = WebEvent::Section(section_event.clone(), resp_event_id);
+                    let web_event = WebEvent::Section(
+                        SectionEvent::Start(reaction_event_id, response_event_id),
+                        reaction_event_id,
+                    );
                     send_web_event(self.agent.clone(), web_event).await;
                 }
                 SectionEvent::Open(tag) => {
-                    let web_event = WebEvent::Section(section_event.clone(), resp_event_id);
+                    let event_id = match tag.name {
+                        "reply" | "render" => response_event_id,
+                        _ => reaction_event_id,
+                    };
+                    let web_event = WebEvent::Section(section_event.clone(), event_id);
                     send_web_event(self.agent.clone(), web_event).await;
                 }
-                SectionEvent::Chunk(tag, _) => match tag.name {
-                    "reply" | "think" => {
-                        let web_event = WebEvent::Section(section_event.clone(), resp_event_id);
-                        send_web_event(self.agent.clone(), web_event).await;
+                SectionEvent::Chunk(tag, _) => {
+                    let event_id = match tag.name {
+                        "reply" | "render" => response_event_id,
+                        _ => reaction_event_id,
+                    };
+                    match tag.name {
+                        "reply" | "think" => {
+                            let web_event = WebEvent::Section(section_event.clone(), event_id);
+                            send_web_event(self.agent.clone(), web_event).await;
+                        }
+                        _ => {
+                            continue;
+                        }
                     }
-                    _ => {
-                        continue;
-                    }
-                },
-                SectionEvent::Close(section) => {
-                    sections.push(section.clone());
+                }
+                SectionEvent::Close(mut section) => {
+                    let (event_id, sections) = match section.tag_name.as_str() {
+                        "reply" | "render" => (response_event_id, &mut response_sections),
+                        _ => (reaction_event_id, &mut reaction_sections),
+                    };
+                    //保存section
+                    {
+                        let model = entity_kit::save_section(
+                            self.agent_id,
+                            event_id,
+                            section.clone(),
+                            serde_json::Value::Null,
+                        )
+                        .await?;
+                        section.id = model.id;
+                        sections.push(section.clone());
+                    };
+                    let payload = match section.tag_name.as_str() {
+                        "render" => {
+                            let section_content = section.content.trim();
+                            let ctx: RenderContext = serde_json::from_str(section_content)?;
+                            serde_json::to_value(ctx)?
+                        }
+                        "tool_call" => {
+                            let call = self
+                                .tool_engine
+                                .preprocess(section.id, section.content.as_str())?;
+                            let detail = ToolCallDetailItem {
+                                id: call.id,
+                                package: call.package.name.to_string(),
+                                tool: call.tool.name.to_string(),
+                                content: "".to_string(),
+                                status: ToolCallStatus::Undo,
+                                args: call.args.clone(),
+                                time: "".to_string(),
+                            };
+                            tool_calls.push(call);
+                            json!(&detail)
+                        }
+                        _ => serde_json::Value::Null,
+                    };
+                    entity_kit::update_section_payload(section.id, payload).await?;
                     //发送到前端
-                    let web_event = WebEvent::Section(section_event.clone(), resp_event_id);
-                    send_web_event(self.agent.clone(), web_event).await;
                     info!("SECTION:{}", &section.tag_name);
-                    //
-                    if &section.tag_name == "tool_call" {
-                        tool_calls.push(section.content.clone());
-                        continue;
-                    }
+                    let web_event = WebEvent::Section(SectionEvent::Close(section), event_id);
+                    send_web_event(self.agent.clone(), web_event).await;
                 }
-                SectionEvent::End => {
-                    let web_event = WebEvent::Section(section_event.clone(), resp_event_id);
+                SectionEvent::End(_, _) => {
+                    let web_event = WebEvent::Section(
+                        SectionEvent::End(reaction_event_id, response_event_id),
+                        response_event_id,
+                    );
                     send_web_event(self.agent.clone(), web_event).await;
                     //没有调用的话，则等待外部事件触发循环
                     if tool_calls.is_empty() {
@@ -304,7 +382,9 @@ impl AgentRuntime {
                     }
                     //加入临时阻塞事件接收机制，防止执行函数调用时，中间有事件触发
                     self.call_watcher.send(true).unwrap();
-                    if let Err(e) = call(tool_calls, self.agent.clone(), &self.tool_engine).await {
+                    if let Err(e) =
+                        tool_call(tool_calls, self.agent.clone(), &self.tool_engine).await
+                    {
                         error!("{}", &e);
                         //发送事件处理
                         let mut agent = self.agent.write().await;
@@ -318,26 +398,37 @@ impl AgentRuntime {
                 }
             }
         }
-        entity_kit::update_agent_response(resp_event_id, sections).await?;
+        entity_kit::update_agent_response(
+            reaction_event_id,
+            EnvEventType::AgentReaction,
+            reaction_sections,
+        )
+        .await?;
+        entity_kit::update_agent_response(
+            response_event_id,
+            EnvEventType::AgentResponse,
+            response_sections,
+        )
+        .await?;
         info!("step end");
 
         Ok(())
     }
 }
 
-async fn call(
-    codes: Vec<String>,
+async fn tool_call(
+    tool_calls: Vec<ToolCall>,
     agent: Arc<RwLock<Agent>>,
     tool_engine: &ToolEngine,
 ) -> anyhow::Result<()> {
     // let call_ids = tool_call_ids.clone();
-    let tool_calls = match tool_engine.batch_preprocess(codes) {
-        PreprocessResult::Valid(tool_calls) => tool_calls,
-        PreprocessResult::Invalid(items) => {
-            let items: Vec<String> = items.iter().map(|(id, e)| format!("{e}")).collect();
-            return Err(anyhow::anyhow!(items.join("\n")));
-        }
-    };
+    // let tool_calls: Vec<ToolCall> = match tool_engine.batch_preprocess(codes) {
+    //     PreprocessResult::Valid(tool_calls) => tool_calls,
+    //     PreprocessResult::Invalid(items) => {
+    //         let items: Vec<String> = items.iter().map(|(id, e)| format!("{e}")).collect();
+    //         return Err(anyhow::anyhow!(items.join("\n")));
+    //     }
+    // };
 
     // //保存一个空响应事件
     let mut bind_event = {
@@ -364,6 +455,7 @@ async fn call(
             id: call.id,
             package: call.package.name,
             tool: call.tool.name,
+            args: call.args.clone(),
         };
         items.push(item);
         //

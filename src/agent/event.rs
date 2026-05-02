@@ -37,6 +37,7 @@ impl AgentEvent {
 
 pub fn to_json(event: EnvEvent) -> serde_json::Value {
     match event {
+        EnvEvent::AgentReaction(sections) => json!(sections),
         EnvEvent::AgentResponse(sections) => json!(sections),
         EnvEvent::UserRequest(msg) => {
             json!(msg)
@@ -57,6 +58,9 @@ pub fn to_json(event: EnvEvent) -> serde_json::Value {
                 "reason":reason.clone()
             })
         }
+        EnvEvent::Interaction(data) => {
+            json!(data)
+        }
     }
 }
 
@@ -64,6 +68,9 @@ pub fn from_json(type_name: EnvEventType, payload: serde_json::Value) -> EnvEven
     match type_name {
         EnvEventType::AgentResponse => {
             EnvEvent::AgentResponse(serde_json::from_value(payload).unwrap())
+        }
+        EnvEventType::AgentReaction => {
+            EnvEvent::AgentReaction(serde_json::from_value(payload).unwrap())
         }
         EnvEventType::UserRequest => {
             let msg: UserMessage = serde_json::from_value(payload).unwrap();
@@ -84,16 +91,21 @@ pub fn from_json(type_name: EnvEventType, payload: serde_json::Value) -> EnvEven
             let reason = map.remove("reason").unwrap_or_default();
             EnvEvent::Interrupt(reason)
         }
+        EnvEventType::Interaction => {
+            EnvEvent::Interaction(serde_json::from_value(payload).unwrap())
+        }
     }
 }
 
 pub fn to_type_enum(event: &EnvEvent) -> EnvEventType {
     match event {
+        EnvEvent::AgentReaction(_) => EnvEventType::AgentReaction,
         EnvEvent::AgentResponse(_) => EnvEventType::AgentResponse,
         EnvEvent::UserRequest(_) => EnvEventType::UserRequest,
         EnvEvent::Timer { .. } => EnvEventType::Timer,
         EnvEvent::ToolCallResult(_) => EnvEventType::ToolCallResult,
         EnvEvent::Error(_) => EnvEventType::Error,
         EnvEvent::Interrupt(_) => EnvEventType::Interrupt,
+        EnvEvent::Interaction(_) => EnvEventType::Interaction,
     }
 }

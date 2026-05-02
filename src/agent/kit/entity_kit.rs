@@ -1,10 +1,12 @@
 use std::{
-    collections::{HashMap, HashSet}, path::PathBuf, sync::Arc
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+    sync::Arc,
 };
 
 use chrono::Local;
 
-use entity::{event::EnvEventType, types::array::StringArray};
+use entity::{agent, event::EnvEventType, types::array::StringArray};
 use sea_orm::{
     prelude::Expr,
     ActiveModelTrait,
@@ -12,10 +14,12 @@ use sea_orm::{
     ColumnTrait, ConnectionTrait, DbErr, EntityTrait, ExprTrait, QueryFilter, TransactionTrait,
 };
 
+use serde::Serialize;
 use streamind_core::{
     agent::{AgentContext, AgentInfo, AgentStatus},
     event::{EnvEvent, ToolCallDetailItem},
     item::{Item, ItemGroup},
+    render::RenderContext,
     section::Section,
     tool::engine::ToolEngineContext,
 };
@@ -64,12 +68,18 @@ pub async fn update_tool_call_result(
     event_id: i64,
     details: Vec<ToolCallDetailItem>,
 ) -> anyhow::Result<()> {
-    let db = DB.get().unwrap();
+    let db = DB.get().unwrap(); 
+    //更新section
+    for ele in &details {
+        update_section_payload(ele.id, ele.clone()).await?;
+    }
+    //
     let data = serde_json::to_value(details)?;
     let model = entity::event::ActiveModel {
         data: Set(data),
         ..Default::default()
     };
+
     let result = entity::event::Entity::update_many()
         .set(model)
         .filter(entity::event::Column::Id.eq(event_id))
@@ -82,8 +92,25 @@ pub async fn update_tool_call_result(
     Ok(())
 }
 
-pub async fn update_agent_response(event_id: i64, sections: Vec<Section>) -> anyhow::Result<()> {
+pub async fn update_agent_response(
+    event_id: i64,
+    event_type: EnvEventType,
+    sections: Vec<Section>,
+) -> anyhow::Result<()> {
     let db = DB.get().unwrap();
+    if sections.is_empty() {
+        //删除
+        let result = entity::event::Entity::delete_many()
+            .filter(entity::event::Column::Id.eq(event_id))
+            .filter(entity::event::Column::EventType.eq(event_type))
+            .exec(db)
+            .await?;
+        return if result.rows_affected == 1 {
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!("更新失败"))
+        };
+    }
     let data = serde_json::to_value(sections)?;
     let model = entity::event::ActiveModel {
         data: Set(data),
@@ -92,7 +119,7 @@ pub async fn update_agent_response(event_id: i64, sections: Vec<Section>) -> any
     let result = entity::event::Entity::update_many()
         .set(model)
         .filter(entity::event::Column::Id.eq(event_id))
-        .filter(entity::event::Column::EventType.eq(EnvEventType::AgentResponse))
+        .filter(entity::event::Column::EventType.eq(event_type))
         .exec(db)
         .await?;
     if result.rows_affected != 1 {
@@ -151,112 +178,6 @@ pub async fn push_state_stack(
         })
         .await?;
     Ok(model)
-}
-
-pub async fn load_item_groups(agent_id: u32) -> Vec<ItemGroup> {
-    let db = DB.get().unwrap();
-    let items = entity::item::Entity::find()
-        .filter(entity::item::Column::AgentId.eq(agent_id))
-        .all(db)
-        .await
-        .unwrap();
-    let mut map: HashMap<String, HashMap<String, Item>> = HashMap::new();
-    for item in items {
-        let g = item.group;
-        let item = Item {
-            id: item.id,
-            name: item.name,
-            content: item.content,
-            editable: item.editable,
-            removable: item.removable,
-        };
-        let items = map.entry(g).or_default();
-        items.insert(item.name.to_string(), item);
-    }
-    let mut groups = vec![];
-    for (name, desc) in &*ITEM_GROUPS {
-        let items = map.remove(*name).unwrap_or_default();
-        let g = ItemGroup {
-            name,
-            description: desc,
-            items,
-        };
-        groups.push(g);
-    }
-    groups
-}
-
-pub async fn update_item_group(
-    agent_id: u32,
-    group: &mut ItemGroup,
-    (saves, removes): (Vec<(String, String)>, Vec<String>),
-) -> anyhow::Result<()> {
-    let db = DB.get().unwrap();
-    let mut save_models = vec![];
-    let mut update_models = vec![];
-
-    for (name, content) in saves {
-        let item = group
-            .items
-            .entry(name.to_string())
-            .or_insert_with(move || Item {
-                id: 0,
-                name: name,
-                content: "".to_string(),
-                editable: true,
-                removable: true,
-            });
-        item.content = content;
-        let mut model = entity::item::ActiveModel {
-            agent_id: Set(agent_id),
-            group: Set(group.name.to_string()),
-            name: Set(item.name.to_string()),
-            content: Set(item.content.to_string()),
-            editable: Set(item.editable),
-            removable: Set(item.removable),
-            ..Default::default()
-        };
-        if item.id != 0 {
-            model.id = Set(item.id);
-            update_models.push(model);
-        } else {
-            save_models.push(model);
-        }
-    }
-    //
-    for name in &removes {
-        group.items.remove(name);
-    }
-    let group_name = group.name;
-    let models = db
-        .transaction::<_, Vec<entity::item::Model>, DbErr>(|txn| {
-            Box::pin(async move {
-                //保存
-                let mut models = vec![];
-                if !save_models.is_empty() {
-                    let arr = entity::item::Entity::insert_many(save_models)
-                        .exec_with_returning(txn)
-                        .await?;
-                    models.extend(arr);
-                }
-                //更新
-                for model in update_models {
-                    let model = model.update(txn).await?;
-                    models.push(model);
-                }
-                //删除
-                entity::item::Entity::delete_many()
-                    .filter(entity::item::Column::AgentId.eq(agent_id))
-                    .filter(entity::item::Column::Group.eq(group_name))
-                    .filter(entity::item::Column::Name.is_in(removes))
-                    .exec(txn)
-                    .await?;
-                Ok(models)
-            })
-        })
-        .await?;
-
-    Ok(())
 }
 
 pub async fn build_agent_context(model: entity::agent::Model) -> Arc<RwLock<AgentContext>> {
@@ -340,5 +261,70 @@ pub async fn dump_states(agent_id: u32, state_ids: Vec<i64>) -> anyhow::Result<(
         .filter(entity::state::Column::Id.is_in(state_ids))
         .exec(db)
         .await?;
+    Ok(())
+}
+
+// pub async fn new_render_state(
+//     agent_id: u32,
+//     response_event_id: i64,
+//     section_id: i64,
+//     ctx: RenderContext,
+// ) -> anyhow::Result<entity::render_state::Model> {
+//     let db: &sea_orm::DatabaseConnection = DB.get().unwrap();
+//     let comp = entity::render_component::Entity::find()
+//         .filter(entity::render_component::Column::Path.eq(ctx.path.clone()))
+//         .one(db)
+//         .await?
+//         .ok_or_else(|| anyhow::anyhow!("组件不存在"))?;
+//     let model = entity::render_state::ActiveModel {
+//         agent_id: Set(agent_id),
+//         response_event_id: Set(response_event_id),
+//         section_index: Set(section_index),
+//         component_id: Set(comp.id),
+//         component_path: Set(ctx.path),
+//         title: Set(ctx.title),
+//         class: Set(ctx.class.unwrap_or_default()),
+//         style: Set(ctx.style.unwrap_or_default()),
+//         state: Set(ctx.state),
+//         ..Default::default()
+//     };
+//     let model = model.insert(db).await?;
+//     Ok(model)
+// }
+
+pub async fn save_section(
+    agent_id: u32,
+    event_id: i64,
+    section: Section,
+    payload: serde_json::Value,
+) -> anyhow::Result<entity::section::Model> {
+    let db = DB.get().unwrap();
+    let model = entity::section::ActiveModel {
+        agent_id: Set(agent_id),
+        event_id: Set(event_id),
+        name: Set(section.tag_name),
+        content: Set(section.content),
+        payload: Set(payload),
+        time: Set(section.time),
+        ..Default::default()
+    };
+    let model = model.insert(db).await?;
+    Ok(model)
+}
+
+pub async fn update_section_payload<T: Serialize>(id: i64, payload: T) -> anyhow::Result<()> {
+    let db = DB.get().unwrap();
+    let model = entity::section::ActiveModel {
+        payload: Set(serde_json::to_value(payload)?),
+        ..Default::default()
+    };
+    let result = entity::section::Entity::update_many()
+        .set(model)
+        .filter(entity::section::Column::Id.eq(id))
+        .exec(db)
+        .await?;
+    if result.rows_affected != 1 {
+        return Err(anyhow::anyhow!("更新失败"));
+    }
     Ok(())
 }

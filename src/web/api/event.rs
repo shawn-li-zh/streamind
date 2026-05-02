@@ -1,12 +1,10 @@
-use axum::{
-    extract::{Path, Query},
-    response::sse::Event,
-};
-use entity::event::{self, EnvEventType};
+use axum::extract::{Path, Query};
+
+use entity::event::EnvEventType;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
 use serde::Deserialize;
 
-use crate::{global::DB, web::ApiResponse};
+use crate::{agent::global::AGENT_POOL, global::DB, web::ApiResponse};
 #[derive(Debug, Deserialize)]
 pub struct QueryReq {
     pub agent_id: u32,
@@ -30,6 +28,7 @@ pub struct LoadReq {
     pub agent_id: u32,
     pub event_id: Option<i64>,
     pub size: Option<u64>,
+    pub types: Option<Vec<EnvEventType>>,
 }
 pub async fn load(Query(req): Query<LoadReq>) -> ApiResponse<Vec<entity::event::Model>> {
     let db = DB.get().unwrap();
@@ -38,7 +37,10 @@ pub async fn load(Query(req): Query<LoadReq>) -> ApiResponse<Vec<entity::event::
     if let Some(event_id) = req.event_id {
         select = select.filter(entity::event::Column::Id.lt(event_id))
     }
-   let size= req.size.unwrap_or(30);
+    if let Some(types) = req.types {
+        select = select.filter(entity::event::Column::EventType.is_in(types));
+    }
+    let size = req.size.unwrap_or(30);
     let events = select
         .order_by_asc(entity::event::Column::Id)
         .limit(size)

@@ -39,6 +39,7 @@ impl ActiveModelBehavior for ActiveModel {}
 )]
 pub enum EnvEventType {
     #[default]
+    AgentReaction,
     AgentResponse,
     UserRequest,
 
@@ -46,4 +47,5 @@ pub enum EnvEventType {
     Error,
     Timer,
     Interrupt,
+    Interaction,
 }

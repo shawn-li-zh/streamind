@@ -86,7 +86,7 @@ pub async fn load_stack(agent_id: u32) -> anyhow::Result<MindStack> {
                     .into_iter()
                     .map(|v| {
                         let map: HashMap<String, serde_json::Value> =
-                            serde_json::from_value(v.meta).unwrap();
+                            serde_json::from_value(v.payload).unwrap();
                         let content = map
                             .get("content")
                             .map(|v| v.as_str().unwrap_or_default())

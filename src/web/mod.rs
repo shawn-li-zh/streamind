@@ -2,6 +2,7 @@ use axum::{body::Body, http::Response, response::IntoResponse, Json, Router};
 use serde::Serialize;
 
 pub mod api;
+pub mod feature;
 
 #[derive(Serialize)]
 pub struct ApiResponse<T> {
@@ -50,6 +51,8 @@ where
     }
 }
 
-pub fn inject_router(router: Router) -> Router {
-    api::inject_router(router)
+pub fn inject_router(mut router: Router) -> Router {
+    router = api::inject_router(router);
+    router = feature::inject_router(router);
+    router
 }

@@ -2,17 +2,26 @@ use std::{collections::HashMap, convert::Infallible, sync::Arc};
 
 use crate::{agent::global::AGENT_POOL, global::DB, web::ApiResponse};
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     response::{sse::Event, Sse},
     Json,
 };
 use futures::Stream;
 use sea_orm::{EntityTrait, QueryOrder};
 use serde::{Deserialize, Serialize};
-use streamind_core::event::EnvEvent;
+use streamind_core::event::{EnvEvent, InteractionData};
 use tokio::sync::mpsc;
 use tokio_stream::{wrappers::UnboundedReceiverStream, StreamExt};
 use tracing::info;
+
+pub async fn get_by_id(Path(id): Path<u32>) -> ApiResponse<entity::agent::Model> {
+    let db = DB.get().unwrap();
+    let agent = entity::agent::Entity::find_by_id(id).one(db).await.unwrap();
+    if agent.is_none() {
+        return ApiResponse::error("Agent不存在");
+    }
+    ApiResponse::success(agent.unwrap())
+}
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct UserMessageReq {
@@ -41,6 +50,25 @@ pub async fn connect(
     Sse::new(stream).keep_alive(axum::response::sse::KeepAlive::default())
 }
 
+pub async fn tree() -> ApiResponse<Vec<entity::agent::Model>> {
+    let agents = entity::agent::Entity::find()
+        .order_by_asc(entity::agent::Column::ParentId)
+        .all(DB.get().unwrap())
+        .await
+        .unwrap();
+    let mut id_map_agent = HashMap::new();
+    for agent in agents {
+        if agent.parent_id == 0 {
+            id_map_agent.insert(agent.id, agent);
+            continue;
+        }
+        if let Some(parent) = id_map_agent.get_mut(&agent.parent_id) {
+            parent.children.push(agent);
+        }
+    }
+    ApiResponse::success(id_map_agent.into_values().collect())
+}
+
 pub async fn chat(
     Path(agent_id): Path<u32>,
     Json(msg): Json<UserMessageReq>,
@@ -62,21 +90,23 @@ pub async fn chat(
     ApiResponse::success(model)
 }
 
-pub async fn tree() -> ApiResponse<Vec<entity::agent::Model>> {
-    let agents = entity::agent::Entity::find()
-        .order_by_asc(entity::agent::Column::ParentId)
-        .all(DB.get().unwrap())
-        .await
-        .unwrap();
-    let mut id_map_agent = HashMap::new();
-    for agent in agents {
-        if agent.parent_id == 0 {
-            id_map_agent.insert(agent.id, agent);
-            continue;
-        }
-        if let Some(parent) = id_map_agent.get_mut(&agent.parent_id) {
-            parent.children.push(agent);
-        }
-    }
-    ApiResponse::success(id_map_agent.into_values().collect())
+#[derive(Debug, Deserialize)]
+pub struct InteractionEvent {
+    pub render_state_id: i64,
+    pub message: String,
+}
+pub async fn ui_interaction(
+    Path(agent_id): Path<u32>,
+    Json(req): Json<InteractionEvent>,
+) -> ApiResponse<entity::event::Model> {
+    let event = EnvEvent::Interaction(InteractionData {
+        render_state_id: req.render_state_id,
+        message: req.message,
+    });
+    let p = AGENT_POOL.read().await;
+    let agent_arc = p.get(&agent_id).expect("agent不存在！");
+    let mut agent = agent_arc.write().await;
+    let model = agent.send_event(event, false).await.unwrap();
+
+    ApiResponse::success(model)
 }

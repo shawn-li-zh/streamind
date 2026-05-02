@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    sync::{LazyLock, OnceLock},
+    sync::{LazyLock, OnceLock}, time::Duration,
 };
 
 use crate::common::prompt_cache::PromptCache;
@@ -21,6 +21,8 @@ pub async fn init() -> anyhow::Result<()> {
     let mut opt = ConnectOptions::new(url);
     opt.sqlx_logging(false);
     opt.max_connections(500);
+    opt.connect_timeout(Duration::from_mins(1));
+    opt.acquire_timeout(Duration::from_mins(3));
 
     let db = Database::connect(opt).await.expect("数据库连接失败");
     db.get_schema_registry("entity::*").sync(&db).await?;

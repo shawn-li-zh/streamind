@@ -124,15 +124,12 @@ impl ToolEngine {
         }
         Ok(())
     }
-    pub fn batch_preprocess(&self, codes: Vec<String>) -> PreprocessResult {
-        //
+    pub fn batch_preprocess(&self, codes: Vec<(i64, String)>) -> PreprocessResult {
         //语法解析
         let mut valid_tasks: Vec<ToolCall> = Vec::with_capacity(codes.len());
         let mut invalid = Vec::with_capacity(codes.len());
-        for i in 0..codes.len() {
-            let code = &codes[i];
-            let id = i as i64;
-            match ToolCall::from(id, code, self.context.as_ref()) {
+        for (id, code) in codes {
+            match ToolCall::from(id, code.as_str(), self.context.as_ref()) {
                 Ok(d) => {
                     valid_tasks.push(d);
                 }
@@ -145,6 +142,10 @@ impl ToolEngine {
             return PreprocessResult::Invalid(invalid);
         }
         PreprocessResult::Valid(valid_tasks)
+    }
+
+    pub fn preprocess(&self, id: i64, code: &str) -> anyhow::Result<ToolCall> {
+        ToolCall::from(id, code, self.context.as_ref())
     }
 }
 

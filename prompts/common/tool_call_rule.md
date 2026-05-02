@@ -4,15 +4,15 @@
 函数调用格式:包名.工具名(...参数列表)
 
 ## 举例
-假设有一个common工具包。
+假设有一个mock工具包。
 ```text
 异步调用：
-<tool_call>common.get_weather("shanghai")</tool_call>
-<tool_call>common.println("hello world")</tool_call>
+<tool_call>mock.get_weather("shanghai")</tool_call>
+<tool_call>mock.println("hello world")</tool_call>
 ps:以上两个函数会同时异步执行。
 
-同步调用：每次输出一个<tool_call>即可
-
+同步调用：
+每轮对话输出一个<tool_call>即可
 ```
 
 ## 注意事项

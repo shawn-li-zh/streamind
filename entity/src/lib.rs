@@ -4,6 +4,8 @@ pub mod item;
 pub mod section;
 pub mod state;
 pub mod types;
+pub mod render_component;
+pub mod render_state;
 
 pub mod rule_group;
 pub mod trigger_rule;
