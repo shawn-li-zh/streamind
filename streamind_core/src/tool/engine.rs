@@ -58,11 +58,11 @@ impl ToolEngineContext {
 }
 
 pub struct ToolEngine {
-    agent_context: Arc<RwLock<AgentContext>>,
+    agent_context: Arc<AgentContext>,
     context: Arc<ToolEngineContext>,
 }
 impl ToolEngine {
-    pub fn new(agent_context: Arc<RwLock<AgentContext>>, context: Arc<ToolEngineContext>) -> Self {
+    pub fn new(agent_context: Arc<AgentContext>, context: Arc<ToolEngineContext>) -> Self {
         Self {
             agent_context,
             context,

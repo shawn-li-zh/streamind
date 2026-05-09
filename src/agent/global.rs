@@ -5,70 +5,46 @@ use std::{
 
 use async_openai::{config::OpenAIConfig, Client};
 
-use sea_orm::{ActiveModelTrait, ActiveValue::Set, EntityTrait, IntoActiveModel};
+use entity::model::ModelStatus;
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 
-use streamind_core::{agent::AgentContext, item::Item, tool::ToolPackagePool};
+use streamind_core::{agent::AgentContext, tool::ToolPackagePool};
 use tokio::sync::RwLock;
 
-use crate::{
-    agent::{core::Agent, kit::entity_kit, llm_engine::LLMEngine},
-    global::DB,
-};
+use crate::agent::{core::Agent, llm_engine::LLMEngine};
 //全局agent池
 pub static AGENT_POOL: LazyLock<RwLock<HashMap<u32, Arc<RwLock<Agent>>>>> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
 
-pub static AGENT_CTX_POOL: LazyLock<RwLock<HashMap<u32, Arc<RwLock<AgentContext>>>>> =
+pub static AGENT_CTX_POOL: LazyLock<RwLock<HashMap<u32, Arc<AgentContext>>>> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
 
-pub static ENGINE_POOL: LazyLock<RwLock<HashMap<String, Arc<LLMEngine>>>> =
+pub static ENGINE_POOL: LazyLock<RwLock<HashMap<u32, Arc<LLMEngine>>>> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
 pub static TOOL_PACKAGE_TOOL: LazyLock<ToolPackagePool> = LazyLock::new(|| tool_pkg::tool_pool());
 
-pub static CORE_STATE: &str = include_str!("../../prompts/core_state.md");
-pub static ITEM_GROUPS: LazyLock<Vec<(&str, &str)>> = LazyLock::new(|| {
-    vec![
-        ("fixed", "固定信息"),
-        ("focus", "当前需要关注的信息"),
-        ("goal", "当前的行动目标"),
-    ]
-});
 pub async fn init() -> anyhow::Result<()> {
-    //初始化大模型
-    let client = Client::with_config(
-        OpenAIConfig::new()
-            .with_api_base(std::env::var("API_BASE")?)
-            .with_api_key(std::env::var("API_KEY")?),
-    );
-    let model = std::env::var("MODEL")?.to_string();
-    let engine = LLMEngine {
-        model: model.clone(),
-        client,
-    };
-    {
+    // 初始化引擎
+    let models = entity_service::model::query(None, None, Some(ModelStatus::Active)).await?;
+    let model_ids = models.iter().map(|m| m.id).collect::<Vec<u32>>();
+    for model in models {
         let mut p = ENGINE_POOL.write().await;
-        p.insert(engine.model.to_string(), Arc::new(engine));
+        let client = Client::with_config(
+            OpenAIConfig::new()
+                .with_api_base(model.api_url.clone())
+                .with_api_key(model.api_key.clone()),
+        );
+        let engine = LLMEngine {
+            model: model.clone(),
+            client,
+        };
+        p.insert(model.id, Arc::new(engine));
     }
-    let database_connection = DB.get().unwrap();
     //初始化agent
-    let mut agents: Vec<entity::agent::Model> = entity::agent::Entity::find()
-        .all(database_connection)
-        .await?;
-    // 如果为空，插入一个默认的agent
-    if agents.is_empty() {
-        let agent = entity_kit::new_agent(
-            "助手".to_string(),
-            model,
-            0,
-            CORE_STATE,
-            vec!["*".to_string()],
-        )
-        .await?;
-        agents.push(agent);
-    }
+    let agents = entity_service::agent::list_by_model_ids(model_ids).await?;
+
     {
         let mut p = AGENT_POOL.write().await;
-
         for agent_info in agents {
             let id = agent_info.id;
             let agent = Agent::new(agent_info).await;

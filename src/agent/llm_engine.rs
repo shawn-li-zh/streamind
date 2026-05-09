@@ -9,7 +9,7 @@ use async_openai::{
 };
 #[derive(Debug, Clone)]
 pub struct LLMEngine {
-    pub model: String,
+    pub model: entity::model::Model,
     pub client: Client<OpenAIConfig>,
 }
 impl LLMEngine {
@@ -18,10 +18,9 @@ impl LLMEngine {
         messages: Vec<ChatCompletionRequestMessage>,
     ) -> Result<ChatCompletionResponseStream, OpenAIError> {
         let request = CreateChatCompletionRequestArgs::default()
-            .model(self.model.clone())
+            .model(self.model.name.clone())
             .messages(messages)
             .build()?;
-
         let stream = self.client.chat().create_stream(request).await;
         return stream;
     }
@@ -31,7 +30,7 @@ impl LLMEngine {
         messages: Vec<ChatCompletionRequestMessage>,
     ) -> Result<CreateChatCompletionResponse, OpenAIError> {
         let request = CreateChatCompletionRequestArgs::default()
-            .model(self.model.clone())
+            .model(self.model.name.clone())
             .messages(messages)
             .build()?;
         let res = self.client.chat().create(request).await;

@@ -1,19 +1,50 @@
 use std::{
-    any::Any,
-    collections::HashSet,
     path::{Path, PathBuf},
-    sync::{
-        Arc, RwLock,
-        atomic::{AtomicI64, AtomicPtr},
-    },
+    sync::Arc,
 };
 
-use crate::{item::ItemGroup, tool::engine::ToolEngineContext};
+use chrono::Local;
+use dashmap::DashMap;
+use serde::{Deserialize, Serialize};
+
+use crate::{event::EnvEvent, tool::engine::ToolEngineContext};
 
 pub struct AgentContext {
     pub info: AgentInfo,
     // pub item_groups: Vec<ItemGroup>,
     pub tool_engine_context: Arc<ToolEngineContext>,
+    pub permissions: DashMap<String, AgentPermission>,
+}
+
+pub struct AgentPermission {
+    pub code: String,
+    pub sub_code: Option<String>,
+    pub life: PermissionLife,
+    pub use_times: u32,
+    pub create_time: chrono::DateTime<chrono::Local>,
+}
+impl AgentPermission {
+    pub fn is_valid(&self) -> bool {
+        match self.life {
+            PermissionLife::None => false,
+            PermissionLife::Once => self.use_times == 0,
+            PermissionLife::Times(times) => self.use_times < times,
+            PermissionLife::Duration(duration) => {
+                let expire_time = self.create_time + chrono::Duration::from_std(duration).unwrap();
+                chrono::Local::now() < expire_time
+            }
+            PermissionLife::Forever => true,
+        }
+    }
+}
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub enum PermissionLife {
+    #[default]
+    None,
+    Once,
+    Times(u32),
+    Duration(std::time::Duration),
+    Forever,
 }
 
 impl AgentContext {
@@ -26,8 +57,8 @@ impl AgentContext {
 }
 pub struct AgentInfo {
     pub id: u32,
+    pub model_id: u32,
     pub parent_id: u32,
-    pub step: i64,
     pub state_id: i64,
     // pub state_pos: u32,
     pub name: String,
@@ -72,4 +103,22 @@ pub enum AgentStatus {
     Organizing,
     //离线
     Offline,
+}
+
+//事件
+#[derive(Debug, Clone)]
+pub struct AgentEvent {
+    pub id: i64,
+    pub data: EnvEvent,
+    //是否强制执行
+    pub force: bool,
+    pub time: chrono::DateTime<Local>,
+}
+impl AgentEvent {
+    pub fn to_message(&self) -> String {
+        let time = self.time.format("%Y-%m-%d %H:%M:%S").to_string();
+        let head = format!("id={},type={},time={}", self.id, self.data.name(), time);
+        let (content, paths) = self.data.clone().to_message();
+        return format!("{}\nContent:\n{}", head, content);
+    }
 }

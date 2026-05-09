@@ -3,7 +3,7 @@ use std::{
     fs::OpenOptions,
     io::Write,
     path::{Path, PathBuf},
-    sync::Mutex,
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
@@ -22,11 +22,11 @@ pub trait ToolCallnterceptor {
     fn build(agent: &AgentInfo, pkg: &'static ToolPackage, tool: &'static Tool) -> Option<Self>
     where
         Self: Sized;
-    fn on_call(&self, call: &ToolCall) -> anyhow::Result<()> {
+    fn on_call(&self, agent_ctx: Arc<AgentContext>, call: &ToolCall) -> anyhow::Result<()> {
         Ok(())
     }
     //调用成功后，对消息进行处理
-    fn on_success(&self, call: &ToolCall, content: String) -> String {
+    fn on_success(&self, agent_ctx: Arc<AgentContext>, call: &ToolCall, content: String) -> String {
         content
     }
 }
@@ -82,7 +82,7 @@ impl ToolCallnterceptor for RateLimiter {
             None
         }
     }
-    fn on_call(&self, call: &ToolCall) -> anyhow::Result<()> {
+    fn on_call(&self, agent_ctx: Arc<AgentContext>, call: &ToolCall) -> anyhow::Result<()> {
         if self.is_limited() {
             return Err(anyhow::anyhow!("调用频率过高"));
         }
@@ -110,7 +110,7 @@ impl ToolCallnterceptor for ContentSizeLimiter {
         })
     }
 
-    fn on_success(&self, call: &ToolCall, content: String) -> String {
+    fn on_success(&self, agent_ctx: Arc<AgentContext>, call: &ToolCall, content: String) -> String {
         if content.len() >= self.max_size {
             let (path, mut file) =
                 new_temp_result_file(&self.workspace, call.package.name, call.tool.name, "txt");
@@ -130,4 +130,28 @@ fn split_after_folder(path: &Path, marker: &str) -> Option<PathBuf> {
 
     // 收集该位置之后的所有部分
     Some(comps.iter().skip(pos + 1).collect())
+}
+
+//权限校验==========
+pub struct PermissonChecker {}
+impl ToolCallnterceptor for PermissonChecker {
+    fn build(agent: &AgentInfo, pkg: &'static ToolPackage, tool: &'static Tool) -> Option<Self>
+    where
+        Self: Sized,
+    {
+        Some(PermissonChecker {})
+    }
+
+    fn on_call(&self, agent_ctx: Arc<AgentContext>, call: &ToolCall) -> anyhow::Result<()> {
+        let valid = call.tool.permissions.iter().any(|v| {
+            if let Some(rf) = agent_ctx.permissions.get(*v) {
+                return rf.is_valid();
+            }
+            false
+        });
+        if !valid {
+            return Err(anyhow::anyhow!("权限缺失:{:#?}", &call.tool.permissions));
+        }
+        Ok(())
+    }
 }

@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
+    path::PathBuf,
     sync::{atomic::Ordering, Arc},
     time::{Duration, Instant},
 };
@@ -7,11 +8,13 @@ use std::{
 use axum::response::sse;
 use chrono::Local;
 
+use dashmap::DashMap;
 use entity::event::EnvEventType;
+use entity_service::DB;
 use sea_orm::{DbErr, TransactionTrait};
 use serde_json::json;
 use streamind_core::{
-    agent::{AgentContext, AgentStatus},
+    agent::{AgentContext, AgentEvent, AgentInfo, AgentStatus, PermissionLife},
     event::{
         CallItem, EnvEvent, SectionEvent, ToolCallDetailItem, ToolCallEvent, ToolCallResultItem,
         ToolCallStatus,
@@ -26,18 +29,10 @@ use streamind_core::{
 use tokio::sync::{mpsc, oneshot::Receiver, watch, Mutex, RwLock};
 use tracing::{debug, error, info, warn};
 
-use crate::{
-    agent::{
-        context::stream::{self, MindFlag, StreamMind},
-        event::AgentEvent,
-        global::{AGENT_POOL, ENGINE_POOL, TOOL_PACKAGE_TOOL},
-        kit::{
-            entity_kit::{self, update_section_payload},
-            message_kit, prompt_kit,
-        },
-        sse_event::WebEvent,
-    },
-    global::DB,
+use crate::agent::{
+    context::stream,
+    global::{AGENT_CTX_POOL, AGENT_POOL, ENGINE_POOL, TOOL_PACKAGE_TOOL},
+    sse_event::WebEvent,
 };
 
 #[derive(Debug, Clone)]
@@ -92,16 +87,17 @@ impl AgentChannel {
     }
 }
 pub struct Agent {
-    pub ctx: Arc<RwLock<AgentContext>>,
+    pub ctx: Arc<AgentContext>,
     pub channel: AgentChannel,
 }
 
 impl Agent {
-    pub async fn new(model: entity::agent::Model) -> Arc<RwLock<Agent>> {
-        let agent_id = model.id;
-        let agent_model = model.model.clone();
+    pub async fn new(agent: entity::agent::Model) -> Arc<RwLock<Agent>> {
+        let agent_id = agent.id;
+        let agent_name = agent.name.clone();
+        let model_id = agent.model_id;
         //
-        let agent_context = entity_kit::build_agent_context(model).await;
+        let agent_context = build_agent_context(agent).await;
         //通道
         let event = mpsc::channel(100);
         let section = mpsc::channel(100);
@@ -116,8 +112,10 @@ impl Agent {
 
         //工具执行器
         let tool_engine = {
-            let a = agent_context.read().await;
-            ToolEngine::new(agent_context.clone(), a.tool_engine_context.clone())
+            ToolEngine::new(
+                agent_context.clone(),
+                agent_context.tool_engine_context.clone(),
+            )
         };
         //初始化
         let channel = AgentChannel {
@@ -140,7 +138,7 @@ impl Agent {
         tokio::spawn(async move {
             let engine = {
                 let p = ENGINE_POOL.read().await;
-                let engine = p.get(&agent_model).unwrap().clone();
+                let engine = p.get(&model_id).unwrap().clone();
                 engine
             };
             stream::run_mind(
@@ -163,7 +161,10 @@ impl Agent {
             tool_engine: tool_engine,
         };
         tokio::spawn(async move {
-            info!("运行时已启动");
+            entity_service::agent::startup(DB.get().unwrap(), agent_id)
+                .await
+                .unwrap();
+            info!("智能体【{}】运行时已启动", agent_name);
             runtime.react_loop().await.unwrap()
         });
 
@@ -191,8 +192,8 @@ impl Agent {
                 Box::pin(async move {
                     //保存数据库
                     let (event, model) = {
-                        let ctx = ctx.read().await;
-                        entity_kit::save_event(txn, &ctx.info, event_data, force).await?
+                        let ctx = ctx.clone();
+                        entity_service::event::save(txn, &ctx.info, event_data, force).await?
                     };
                     if block {
                         channel.send_event(event).await?;
@@ -229,10 +230,10 @@ impl AgentRuntime {
             agent.ctx.clone()
         };
         loop {
-            {
-                let mut ctx = ctx.write().await;
-                ctx.info.status = AgentStatus::Idle;
-            }
+            // {
+            //     let mut ctx = ctx.clone();
+            //     ctx.info.status = AgentStatus::Idle;
+            // }
             if let Err(e) = self.react().await {
                 let mut agent = self.agent.write().await;
                 agent
@@ -240,19 +241,12 @@ impl AgentRuntime {
                     .await
                     .unwrap();
             };
-            {
-                let mut ctx = ctx.write().await;
-                let step = ctx.info.step;
-                let _ = entity_kit::incr_agent_step(ctx.info.id, step)
-                    .await
-                    .unwrap();
-                ctx.info.step += 1;
-                info!("step+1");
-            }
         }
     }
 
     async fn react(&mut self) -> anyhow::Result<()> {
+        let db = DB.get().unwrap();
+        //
         let mut tool_calls: Vec<ToolCall> = vec![];
         let mut response_event_id = 0;
         let mut reaction_event_id = 0;
@@ -264,18 +258,17 @@ impl AgentRuntime {
         let mut response_sections = vec![];
         let mut reaction_sections = vec![];
         while let Some(section_event) = self.section_receiver.recv().await {
-            let sec_event = section_event.clone();
+            // let sec_event = section_event.clone();
             match section_event {
                 SectionEvent::Start(_, _) => {
+                    // {
+                    //     let mut ctx = ctx.write().await;
+                    //     ctx.info.status = AgentStatus::Running;
+                    // }
                     {
-                        let mut ctx = ctx.write().await;
-                        ctx.info.status = AgentStatus::Running;
-                    }
-                    {
-                        let ctx = ctx.read().await;
                         //
-                        let (event, model) = entity_kit::save_event(
-                            DB.get().unwrap(),
+                        let (event, model) = entity_service::event::save(
+                            db,
                             &ctx.info,
                             EnvEvent::AgentReaction(vec![]),
                             false,
@@ -284,8 +277,8 @@ impl AgentRuntime {
                         .expect("保存agent反应失败");
                         reaction_event_id = model.id;
                         //保存一个空事件
-                        let (event, model) = entity_kit::save_event(
-                            DB.get().unwrap(),
+                        let (event, model) = entity_service::event::save(
+                            db,
                             &ctx.info,
                             EnvEvent::AgentResponse(vec![]),
                             false,
@@ -330,7 +323,8 @@ impl AgentRuntime {
                     };
                     //保存section
                     {
-                        let model = entity_kit::save_section(
+                        let model = entity_service::section::save(
+                            db,
                             self.agent_id,
                             event_id,
                             section.clone(),
@@ -364,7 +358,7 @@ impl AgentRuntime {
                         }
                         _ => serde_json::Value::Null,
                     };
-                    entity_kit::update_section_payload(section.id, payload).await?;
+                    entity_service::section::update_payload(db, section.id, payload).await?;
                     //发送到前端
                     info!("SECTION:{}", &section.tag_name);
                     let web_event = WebEvent::Section(SectionEvent::Close(section), event_id);
@@ -398,13 +392,15 @@ impl AgentRuntime {
                 }
             }
         }
-        entity_kit::update_agent_response(
+        entity_service::event::update_agent_response(
+            db,
             reaction_event_id,
             EnvEventType::AgentReaction,
             reaction_sections,
         )
         .await?;
-        entity_kit::update_agent_response(
+        entity_service::event::update_agent_response(
+            db,
             response_event_id,
             EnvEventType::AgentResponse,
             response_sections,
@@ -421,6 +417,7 @@ async fn tool_call(
     agent: Arc<RwLock<Agent>>,
     tool_engine: &ToolEngine,
 ) -> anyhow::Result<()> {
+    let db = DB.get().unwrap();
     // let call_ids = tool_call_ids.clone();
     // let tool_calls: Vec<ToolCall> = match tool_engine.batch_preprocess(codes) {
     //     PreprocessResult::Valid(tool_calls) => tool_calls,
@@ -433,15 +430,11 @@ async fn tool_call(
     // //保存一个空响应事件
     let mut bind_event = {
         let agent = agent.read().await;
-        let ctx = agent.ctx.read().await;
-        let (event, model) = entity_kit::save_event(
-            DB.get().unwrap(),
-            &ctx.info,
-            EnvEvent::ToolCallResult(vec![]),
-            false,
-        )
-        .await
-        .expect("创建工具调用结果事件失败");
+        let ctx = agent.ctx.clone();
+        let (event, model) =
+            entity_service::event::save(db, &ctx.info, EnvEvent::ToolCallResult(vec![]), false)
+                .await
+                .expect("创建工具调用结果事件失败");
         event
     };
     let bind_event_id = bind_event.id;
@@ -499,7 +492,7 @@ async fn tool_call(
             .iter()
             .map(|id| details.remove(id).unwrap())
             .collect();
-        entity_kit::update_tool_call_result(bind_event_id, details.clone())
+        entity_service::event::update_tool_call_result(db, bind_event_id, details.clone())
             .await
             .unwrap();
         //发送完整事件
@@ -526,4 +519,74 @@ async fn tool_call(
 async fn send_web_event(agent: Arc<RwLock<Agent>>, e: WebEvent) {
     let mut agent = agent.write().await;
     agent.channel.send_web_event(e).await
+}
+
+pub async fn build_agent_context(agent: entity::agent::Model) -> Arc<AgentContext> {
+    let pool = ENGINE_POOL.read().await;
+    let engine = pool.get(&agent.id).expect("模型不存在");
+
+    let agent_info = AgentInfo {
+        id: agent.id,
+        model_id: agent.model_id,
+        parent_id: agent.parent_id,
+        state_id: agent.state_id,
+        // state_pos: model.state_pos,
+        name: agent.name,
+        model: engine.model.name.clone(),
+        workspace: PathBuf::from(&agent.workspace),
+        avatar: agent.avatar,
+        status: AgentStatus::Idle,
+    };
+    //tool engine context
+    let tool_engine_context = {
+        let mut tool_pkgs = HashSet::new();
+        for pkg_name in &agent.tool_packages.0 {
+            if pkg_name == "*" {
+                tool_pkgs.extend(TOOL_PACKAGE_TOOL.keys());
+                break;
+            }
+            tool_pkgs.insert(
+                TOOL_PACKAGE_TOOL
+                    .get(pkg_name.as_str())
+                    .expect("包不存在")
+                    .name,
+            );
+        }
+        ToolEngineContext::build(&agent_info, tool_pkgs, &*TOOL_PACKAGE_TOOL)
+    };
+    //获取权限
+    let db = DB.get().unwrap();
+
+    let permissions = {
+        let permissions = entity_service::agent_permission::list(db, agent.id)
+            .await
+            .unwrap();
+        let map = DashMap::new();
+        for item in permissions {
+            let life: PermissionLife = serde_json::from_value(item.life).unwrap();
+
+            let p = streamind_core::agent::AgentPermission {
+                code: item.code,
+                sub_code: item.sub_code,
+                life: life,
+                use_times: item.use_times,
+                create_time: item.create_time,
+            };
+            map.insert(p.code.clone(), p);
+        }
+        map
+    };
+    let agent_context = AgentContext {
+        info: agent_info,
+        tool_engine_context: Arc::new(tool_engine_context),
+        permissions,
+    };
+    //
+    let id = agent_context.info.id;
+
+    let agent_context = Arc::new(agent_context);
+    //
+    let mut p = AGENT_CTX_POOL.write().await;
+    p.insert(id, agent_context.clone());
+    agent_context
 }

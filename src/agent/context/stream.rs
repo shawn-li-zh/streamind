@@ -1,6 +1,8 @@
 use anyhow::Context;
+use entity_service::DB;
 use std::sync::Arc;
 use streamind_core::{
+    agent::AgentEvent,
     event::{EnvEvent, SectionEvent},
     section::Section,
 };
@@ -10,8 +12,7 @@ use crate::agent::{
     context::section::section_stream,
     context::stack::{self, MindNode, MindStack},
     core::{Agent, AgentChannel},
-    event::AgentEvent,
-    kit::{entity_kit, message_kit, prompt_kit, string_kit},
+    kit::{message_kit, prompt_kit, string_kit},
     llm_engine::LLMEngine,
 };
 use futures::stream;
@@ -219,11 +220,8 @@ pub async fn run_mind(
 
     let (agent_id, stack) = {
         let agent = agent.read().await;
-        let ctx = agent.ctx.read().await;
-        (
-            ctx.info.id,
-            message_kit::load_stack(ctx.info.id).await.unwrap(),
-        )
+        let agent_id = agent.ctx.info.id;
+        (agent_id, message_kit::load_stack(agent_id).await.unwrap())
     };
     let mut mind_stream = StreamMind::new(
         agent_id,
@@ -275,7 +273,8 @@ fn parse_state(content: &str) -> anyhow::Result<(usize, String, String)> {
 
 async fn push_state(agent_id: u32, stack: &mut MindStack, section: &Section) -> anyhow::Result<()> {
     let (pos, title, content) = parse_state(&section.content.trim())?;
-    let model = entity_kit::push_state_stack(agent_id, pos as _, title, content).await?;
+    let db = DB.get().unwrap();
+    let model = entity_service::state::push(db, agent_id, pos as _, title, content).await?;
     let node = MindNode {
         id: model.id,
         title: model.title,
@@ -307,6 +306,7 @@ async fn pop_state(agent_id: u32, stack: &mut MindStack, section: &Section) -> a
     }
     let nodes = stack.back_to(pos);
     let state_ids = nodes.iter().map(|n| n.id).collect();
-    entity_kit::dump_states(agent_id, state_ids).await?;
+    let db = DB.get().unwrap();
+    entity_service::state::dumps(db, agent_id, state_ids).await?;
     Ok(())
 }

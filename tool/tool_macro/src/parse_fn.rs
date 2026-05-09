@@ -15,6 +15,8 @@ pub struct ToolArgs {
     pub timeout: Option<String>,
     #[darling(rename = "limit")]
     pub rate_limit: Option<String>,
+    #[darling(rename = "perms")]
+    pub permissions: Option<String>,
 }
 
 pub fn handle_fn(
@@ -28,14 +30,28 @@ pub fn handle_fn(
     // 3. 构建参数提取器 (extractors) 和 函数入参变量名 (arg_names)
     let (arg_extractors, arg_names) = build_arg_extractors(&mut item_fn.sig);
 
-    // 4. 解析限流配置为 Rust Token
+    //限流
     let rate_limit_tokens = parse_rate_limit_to_tokens(args.rate_limit.as_deref().unwrap_or(""));
+    //超时
     let timeout_tokens = args
         .timeout
         .as_deref()
         .map(parse_time)
         .map(|v| quote! {Some(#v)})
         .unwrap_or(quote! {None});
+    //权限
+    let  permissions_tokens= {
+        if let Some(perms) = &args.permissions {
+            let perms_vec: Vec<String> = perms
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            quote! {vec![#(#perms_vec),*].into_iter().collect()}
+        } else {
+            quote! {std::collections::HashSet::new()}
+        }
+    };
     // 5. 生成工具注册代码
     let tool_registration = build_tool_registration(
         item_fn,
@@ -44,6 +60,7 @@ pub fn handle_fn(
         arg_names,
         timeout_tokens,
         rate_limit_tokens,
+        permissions_tokens,
     );
 
     generated_tools.push(tool_registration);
@@ -123,6 +140,7 @@ fn build_tool_registration(
     arg_names: Vec<proc_macro2::TokenStream>,
     timeout_tokens: proc_macro2::TokenStream,
     rate_limit_tokens: proc_macro2::TokenStream,
+    permissions: proc_macro2::TokenStream,
 ) -> proc_macro2::TokenStream {
     let (args_t, return_t) = parse_fn_signature(item_fn);
     let fn_ident = &item_fn.sig.ident;
@@ -130,24 +148,6 @@ fn build_tool_registration(
     let tool_name = fn_ident.to_string();
     let annotation = args.anno.unwrap_or_default();
     let example = args.example.unwrap_or_default();
-    // let active = match args.active {
-    //     Some(expr) => {
-    //         quote! {
-    //             Box::new(|mut args: std::collections::HashMap<String, serde_json::Value>,ctx:ToolCallContext| {
-    //                 #(#extractors)*
-    //                 let res = #expr;
-    //                 Ok(res.into())
-    //             })
-    //         }
-    //     }
-    //     None => {
-    //         quote! {
-    //             Box::new(|mut args: std::collections::HashMap<String, serde_json::Value>,ctx:ToolCallContext| {
-    //                 Ok(format!("正在调用'{}'...",#tool_name))
-    //             })
-    //         }
-    //     }
-    // };
 
     let is_async = item_fn.sig.asyncness.is_some();
 
@@ -171,7 +171,6 @@ fn build_tool_registration(
     };
 
     // 返回最终向 tools 插入的 TokenStream
-
     quote! {
         let mut tool=Tool::new(
             #tool_name,
@@ -182,6 +181,7 @@ fn build_tool_registration(
         );
         tool.timeout=#timeout_tokens;
         tool.rate_limit=#rate_limit_tokens;
+        tool.permissions=#permissions;
         tools.insert(#tool_name, tool);
     }
 }

@@ -1,4 +1,9 @@
-use std::{any::Any, collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    any::Any,
+    collections::{HashMap, HashSet},
+    sync::Arc,
+    time::Duration,
+};
 
 use futures::{FutureExt, future::BoxFuture};
 
@@ -65,6 +70,8 @@ pub struct Tool {
     //
     pub rate_limit: Option<(Duration, u32)>,
     pub timeout: Option<Duration>,
+    //或
+    pub permissions: HashSet<&'static str>,
 }
 
 impl Tool {
@@ -83,15 +90,24 @@ impl Tool {
             handler,
             rate_limit: None,
             timeout: None,
+            permissions: HashSet::new(),
         }
     }
-    //=====设置
+    //=====额外设置
     pub fn rate_limit(&mut self, window_time: Duration, times: u32) {
         self.rate_limit = Some((window_time, times))
     }
     pub fn timeout(&mut self, time: Duration) {
         self.timeout = Some(time);
     }
+    pub fn permissions(&mut self, permissions: &'static str) {
+        self.permissions = permissions
+            .split(',')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .collect();
+    }
+    //
 
     pub fn to_doc(&self) -> String {
         //注释

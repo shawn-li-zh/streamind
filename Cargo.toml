@@ -3,33 +3,44 @@ name = "streamind"
 version = "0.1.0"
 edition = "2021"
 [workspace]
-members = [".", "streamind_core", "entity", "tool/tool_macro", "tool/tool_pkg"]
+members = [
+    ".",
+    "streamind_core",
+    "entity",
+    "tool/tool_macro",
+    "tool/tool_pkg",
+    "runtime",
+    "entity_service", "web",
+]
 [dependencies]
 entity = { path = "entity" }
+entity_service = { path = "entity_service" }
 streamind_core = { path = "streamind_core" }
+web = { path = "web" }
 # tool_core = { path = "tool/tool_core" }
 tool_pkg = { path = "tool/tool_pkg" }
 
+# ai
 async-openai = "0.25"
-dotenvy = "0.15"
-reqwest = { version = "0.12", features = ["json"] }
-axum = "0.7"
+
+# 异步库
 tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+async_once = "0.2.6"
+async-stream = "0.3.6"
+tokio-stream = "0.1.18"
+futures = "0.3"
+# 序列化
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# 日志
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-anyhow = "1"
-schemars = "0.8"
-futures = "0.3"
-chrono = "0.4.44"
+# 错误处理
+anyhow = { version = "1", features = ["std"] }
+thiserror = "2.0.18"
+# 数据库
 rusqlite = { version = "0.32", features = ["bundled"] }
-once_cell = "1.19"
-regex = "1"
-pest = "2.8.6"
-pest_derive = "2.8.6"
-rayon = "1.8" # 用于并行计算
-notify = "6"
 sea-orm = { version = "2.0.0-rc.37", features = [
     "sqlx-sqlite",
     "runtime-tokio-native-tls",
@@ -37,16 +48,31 @@ sea-orm = { version = "2.0.0-rc.37", features = [
     "schema-sync",
     "entity-registry",
 ] }
-async-trait = "0.1"
-async_once = "0.2.6"
-async-stream = "0.3.6"
-tokio-stream = "0.1.18"
-tower-http = { version = "0.5", features = ["cors","fs"] } # 处理跨域
-thiserror = "2.0.18"
+
+
+# 语法解析
+pest = "2.8.6"
+pest_derive = "2.8.6"
+
+
+# HTTP 客户端和服务器 web
+reqwest = { version = "0.12", features = ["json"] }
+axum = { version = "0.8.9", features = ["default"] }
+tower-http = { version = "0.5", features = ["cors", "fs"] }           # 处理跨域
+jsonwebtoken = { version = "10.3.0", features = ["rust_crypto"] }     # JWT 认证
+tower_governor = "0.8.0"
+tower = { version = "0.5.2", features = ["util", "limit", "buffer"] }
+
+# 工具库
 dashmap = "6.1.0"
 rand = "0.8"
-# 可读时间
-humantime = "2.1"
+humantime = "2.1" # 可读时间
+regex = "1"
+chrono = "0.4.44"
+dotenvy = "0.15"
+
+rayon = "1.8" # 用于并行计算
+notify = "6"  # 文件系统监视
 [dev-dependencies]
 cargo-nextest = "0.9"
 

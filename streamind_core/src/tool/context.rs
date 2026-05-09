@@ -13,7 +13,7 @@ use crate::{
     tool::{
         SafeAny, Tool, ToolPackage, call,
         plugin::{
-            interceptor::{ContentSizeLimiter, RateLimiter, ToolCallnterceptor},
+            interceptor::{ContentSizeLimiter, PermissonChecker, RateLimiter, ToolCallnterceptor},
             wrapper::TimeoutWrapper,
         },
     },
@@ -41,6 +41,9 @@ impl ToolContext {
             ctx.interceptors.push(Box::new(build));
         }
         if let Some(build) = ContentSizeLimiter::build(agent_info, pkg, tool) {
+            ctx.interceptors.push(Box::new(build));
+        }
+        if let Some(build) = PermissonChecker::build(agent_info, pkg, tool) {
             ctx.interceptors.push(Box::new(build));
         }
         ctx
@@ -72,7 +75,7 @@ impl ToolPackageContext {
 }
 
 pub struct ToolCallContext {
-    pub agent_context: Arc<RwLock<AgentContext>>,
+    pub agent_context: Arc<AgentContext>,
     pub context_data: Arc<RwLock<SafeAny>>,
     pub workspace: PathBuf,
     pkg: &'static ToolPackage,
@@ -81,15 +84,12 @@ pub struct ToolCallContext {
 
 impl ToolCallContext {
     pub async fn new(
-        agent_context: Arc<RwLock<AgentContext>>,
+        agent_context: Arc<AgentContext>,
         context_data: Arc<RwLock<SafeAny>>,
         pkg: &'static ToolPackage,
         tool: &'static Tool,
     ) -> Self {
-        let workspace = {
-            let ctx = agent_context.read().await;
-            PathBuf::from(&ctx.info.workspace)
-        };
+        let workspace = { PathBuf::from(&agent_context.info.workspace) };
         Self {
             agent_context,
             context_data,
@@ -121,5 +121,9 @@ impl ToolCallContext {
             self.tool.name,
             ext,
         )
+    }
+    pub fn has_permission(&self, code: &str, sub_code: Option<&str>) -> bool {
+        let code = format!("{}:{}", code, sub_code.unwrap_or_default());
+        self.agent_context.permissions.contains_key(&code)
     }
 }

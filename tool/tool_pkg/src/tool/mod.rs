@@ -15,7 +15,7 @@ pub mod tool {
         #[arg("关键字")] key: String,
         #[ctx] ctx: ToolCallContext,
     ) -> anyhow::Result<Vec<String>> {
-        let agent_context = ctx.agent_context.blocking_read();
+        let agent_context = ctx.agent_context.clone();
         let tool_engine_context = &agent_context.tool_engine_context;
         let tool_packages = &tool_engine_context.tool_packages;
         let mut res = vec![];
@@ -44,7 +44,7 @@ pub mod tool {
         #[arg("数量")] num: usize,
         #[ctx] ctx: ToolCallContext,
     ) -> anyhow::Result<Vec<String>> {
-        let agent_context = ctx.agent_context.blocking_read();
+        let agent_context = ctx.agent_context.clone();
         let tool_engine_context = &agent_context.tool_engine_context;
         let tool_packages = &tool_engine_context.tool_packages;
         let total = tool_packages.len();
@@ -75,7 +75,7 @@ pub mod tool {
         #[arg("tool关键词")] tool_key: Option<String>,
         #[ctx] ctx: ToolCallContext,
     ) -> anyhow::Result<Vec<String>> {
-        let agent_context = ctx.agent_context.blocking_read();
+        let agent_context = ctx.agent_context.clone();
         let tool_engine_context = &agent_context.tool_engine_context;
         let pkg = match tool_engine_context.get_package(&pkg_name) {
             Some(e) => e,
@@ -98,7 +98,7 @@ pub mod tool {
         #[arg("工具name")] tool_name: String,
         #[ctx] ctx: ToolCallContext,
     ) -> anyhow::Result<String> {
-        let agent_context = ctx.agent_context.blocking_read();
+        let agent_context = ctx.agent_context.clone();
         let tool_engine_context = &agent_context.tool_engine_context;
         let pkg = match tool_engine_context.get_package(&pkg_name) {
             Some(e) => e,

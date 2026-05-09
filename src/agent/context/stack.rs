@@ -7,10 +7,11 @@ use async_openai::types::ChatCompletionRequestMessage;
 use entity::event::EnvEventType;
 use futures::{stream, Stream, StreamExt};
 use rand::Rng;
+use streamind_core::agent::AgentEvent;
 use tracing::{error, info};
 
 use crate::agent::{
-    event::{to_type_enum, AgentEvent},
+    event::to_type_enum,
     kit::{message_kit, prompt_kit},
     llm_engine::LLMEngine,
 };

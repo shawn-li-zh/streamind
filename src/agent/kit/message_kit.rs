@@ -2,15 +2,15 @@ use std::collections::HashMap;
 
 use async_openai::types::ChatCompletionRequestMessage;
 use entity::event::EnvEventType;
+use entity_service::DB;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder};
+use streamind_core::agent::AgentEvent;
 
 use crate::{
     agent::{
         context::stack::{MindNode, MindStack},
-        event::AgentEvent,
         kit::prompt_kit,
     },
-    global::DB,
 };
 
 pub fn build_step_messages(events: &Vec<AgentEvent>) -> (ChatCompletionRequestMessage, usize) {
@@ -108,7 +108,8 @@ pub async fn load_stack(agent_id: u32) -> anyhow::Result<MindStack> {
                 steps = vec![];
                 continue;
             }
-            let event = AgentEvent::from_entity(event);
+
+            let event = entity_service::event::convert::from_entity(event);
             steps.push(event);
         }
         //

@@ -1,11 +1,14 @@
 pub mod agent;
+pub mod agent_permission;
 pub mod event;
 pub mod item;
 pub mod section;
 pub mod state;
 pub mod types;
+pub mod model;
 pub mod render_component;
 pub mod render_state;
+pub mod render_dependence;
 
 pub mod rule_group;
 pub mod trigger_rule;

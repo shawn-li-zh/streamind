@@ -1,15 +1,22 @@
-use std::{collections::HashMap, fs::{File, OpenOptions}, path::PathBuf, sync::Arc};
+use std::{
+    collections::HashMap,
+    fs::{File, OpenOptions},
+    path::PathBuf,
+    sync::Arc,
+};
 
 use anyhow::Context;
 use chrono::Local;
 use tokio::sync::RwLock;
 
 use crate::{
-    agent::AgentContext, simple_id, tool::{
+    agent::AgentContext,
+    simple_id,
+    tool::{
         Tool, ToolCallContext, ToolPackage,
         context::{ToolContext, ToolPackageContext},
         engine::ToolEngineContext,
-    }
+    },
 };
 
 pub struct ToolCall {
@@ -70,12 +77,9 @@ impl ToolCall {
             tool_context,
         })
     }
-    pub async fn exec(
-        self,
-        agent_ctx: Arc<RwLock<AgentContext>>,
-    ) -> anyhow::Result<serde_json::Value> {
+    pub async fn exec(self, agent_ctx: Arc<AgentContext>) -> anyhow::Result<serde_json::Value> {
         for interceptor in &self.tool_context.interceptors {
-            interceptor.on_call(&self)?;
+            interceptor.on_call(agent_ctx.clone(), &self)?;
         }
         let ctx_data = self.package_context.data.clone();
         let ctx = ToolCallContext::new(agent_ctx, ctx_data, self.package, self.tool).await;
@@ -154,7 +158,12 @@ fn split_top_level(s: &str, delimiter: char) -> anyhow::Result<Vec<String>> {
     Ok(parts)
 }
 
-pub fn new_temp_result_file(root:&PathBuf, pkg_name: &str, tool_name: &str, ext: &str) -> (PathBuf, File) {
+pub fn new_temp_result_file(
+    root: &PathBuf,
+    pkg_name: &str,
+    tool_name: &str,
+    ext: &str,
+) -> (PathBuf, File) {
     let pkg_dir = format!("tool/{}/temp_result", pkg_name);
     let pkg_dir = root.join(&pkg_dir);
     if !pkg_dir.exists() {

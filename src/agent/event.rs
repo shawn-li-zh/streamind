@@ -4,34 +4,17 @@ use chrono::Local;
 use entity::{event::EnvEventType, section};
 
 use serde_json::json;
-use streamind_core::event::{EnvEvent, UserMessage};
+use streamind_core::{
+    agent::AgentEvent,
+    event::{EnvEvent, UserMessage},
+};
 
-//事件
-#[derive(Debug, Clone)]
-pub struct AgentEvent {
-    pub id: i64,
-    pub agent_id: u32,
-    pub data: EnvEvent,
-    //是否强制执行
-    pub force: bool,
-    pub time: chrono::DateTime<Local>,
-}
-
-impl AgentEvent {
-    pub fn to_message(&self) -> String {
-        let time = self.time.format("%Y-%m-%d %H:%M:%S").to_string();
-        let head = format!("id={},type={},time={}", self.id, self.data.name(), time);
-        let (content, paths) = self.data.clone().to_message();
-        return format!("{}\nContent:\n{}", head, content);
-    }
-    pub fn from_entity(event: entity::event::Model) -> Self {
-        AgentEvent {
-            id: event.id,
-            agent_id: event.agent_id,
-            data: from_json(event.event_type, event.data),
-            force: event.force,
-            time: event.time,
-        }
+pub fn from_entity(event: entity::event::Model) -> AgentEvent {
+    AgentEvent {
+        id: event.id,
+        data: from_json(event.event_type, event.data),
+        force: event.force,
+        time: event.time,
     }
 }
 

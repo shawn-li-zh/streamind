@@ -3,14 +3,33 @@
 </think>
 <tool_call>http.request(method="get",url="https://crates.io/crates/nanoid")</tool_call>
 <tool_call>http.request(method="get",url="https://crates.io111111123/crates/nanoid")</tool_call>
+<push>
+1:测试
 
+我需要调用天气查询工具来获取北京的天气信息。
+</push>
 <end/>
 <think>
-用户想了解北京的天气，我需要调用天气查询工具... 
+已获得查询结果
 </think>
 <reply>
 根据查询结果，北京现在的天气是晴天，气温约为 25 摄氏度，非常宜人。
 </reply>
 <render>
-<div>111</div>
+{
+   "path":"Grant", 
+   "title":"获取/usr/info.json文件的创建权限", 
+   "class":"flex flex-col", 
+   "style":"with:100px;", 
+   "state":{
+    "appName":"Agent",
+    "reason":"需要保存您的个人基本信息以提供个性化服务。",
+    "duration":"30s"
+    }
+}
 </render>
+<pop>
+1:测试
+
+重置
+</pop>
