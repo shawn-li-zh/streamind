@@ -1,0 +1,36 @@
+[package]
+name = "web"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+entity = { path = "../entity" }
+entity_service = { path = "../entity_service" }
+kernel = { path = "../kernel" }
+# 异步库
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+async_once = "0.2.6"
+async-stream = "0.3.6"
+tokio-stream = "0.1.18"
+futures = "0.3"
+# HTTP 客户端和服务器 web
+reqwest = { version = "0.12", features = ["json"] }
+axum = { version = "0.8.9", features = ["default"] }
+tower-http = { version = "0.5", features = ["cors", "fs"] }           # 处理跨域
+jsonwebtoken = { version = "10.3.0", features = ["rust_crypto"] }     # JWT 认证
+tower_governor = "0.8.0"
+tower = { version = "0.5.2", features = ["util", "limit", "buffer"] }
+
+
+# 序列化
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# 错误处理
+anyhow = { version = "1", features = ["std"] }
+
+# 工具库
+chrono = "0.4.44"
+dotenvy = "0.15"
+
+

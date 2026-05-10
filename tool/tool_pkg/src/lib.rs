@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use streamind_core::tool::ToolPackagePool;
+use kernel::tool::ToolPackagePool;
 
 pub mod file;
 pub mod http;

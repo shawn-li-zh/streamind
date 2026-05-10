@@ -4,10 +4,11 @@ use tracing::info;
 use tracing_subscriber::EnvFilter;
 use web::feature::auth::LOGIN_CODE;
 
-mod agent;
+// mod agent;
 mod common;
 mod global;
 mod rule;
+mod web_api;
 
 // mod web;
 
@@ -22,10 +23,12 @@ async fn main() -> anyhow::Result<()> {
 
     //
     entity_service::init().await?;
-    agent::global::init().await?;
+    info!("存储服务初始化成功!");
+    runtime::global::init().await?;
+    info!("智能体运行时初始化成功!");
     //
     let web_service = web::Service {
-        router: Router::new(),
+        router: web_api::inject_router(Router::new()),
         addr: "0.0.0.0:3000".parse().unwrap(),
     };
     info!("Starting StreamInd AI Client");

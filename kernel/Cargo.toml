@@ -1,0 +1,20 @@
+[package]
+name = "kernel"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+thiserror = "2.0.18"
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+regex = "1"
+anyhow = "1"
+chrono = "0.4.44"
+dashmap = "6.1.0"
+futures = "0.3"
+tracing = "0.1"
+# id生成
+nanoid = "0.5.0"
+# 可读时间
+humantime = "2.1"

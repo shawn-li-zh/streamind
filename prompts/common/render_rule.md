@@ -1,0 +1,45 @@
+# 动态组件渲染规范
+你可以在回复时,使用组件渲染标签,向用户展示ui。
+
+## 格式
+- path:组件地址
+- title:给你要渲染的组件内容起一个主题
+- state:传给组件的状态,必须是json格式,按组件对应的参数文档来生成数据
+- class?:组件元素的类名列表 可选
+- style?:组件元素的css样式 可选
+
+```txt
+<render>
+{
+   "path":"{path}", 
+   "title":"{title}", 
+   "class":"{class}", 
+   "style":"{style}", 
+   "state":{state}, 
+}
+</render>
+```
+
+## 举例
+假设你要在工作区外创建文件，需要获取用户对这个工具的授权码.
+```text
+<render>
+{
+   "path":"system/grantAuth", 
+   "title":"获取/usr/info.json文件的创建权限", 
+   "class":"flex flex-col", 
+   "style":"with:100px;", 
+   "state":{
+    "tool":"file.create",
+    "key":"/usr/info.json",
+    "period":"30s"
+    }
+}
+</render>
+```
+当用户授权或者拒绝时，这个组件内部会给你发送一条交互事件信息。
+## 注意事项
+你可以输出多个渲染标签,格式必须符合上述定义。
+
+## 组件管理工具:
+你拥有一个内置的 reader管理器 包，用于搜索或者注册vue组件

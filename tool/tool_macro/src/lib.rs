@@ -56,17 +56,17 @@ pub fn package(args: TokenStream, input: TokenStream) -> TokenStream {
 
         // 注入 build_package 函数到模块内部
         let build_fn = quote! {
-            pub fn build_package() -> streamind_core::tool::ToolPackage {
+            pub fn build_package() -> kernel::tool::ToolPackage {
                 use std::collections::HashMap;
                 use tokio::sync::RwLock;
                 use std::sync::Arc;
-                use streamind_core::tool::{
+                use kernel::tool::{
                     ToolCallContext,
                     Tool, ToolHandler, ToolPackage,
                     async_tool_handler,
                     sync_tool_handler,
                 };
-                use streamind_core::tool::value_type::{ToolValueType, TypeInfo, TypeItemInfo};
+                use kernel::tool::value_type::{ToolValueType, TypeInfo, TypeItemInfo};
                 let mut types = HashMap::new();
                 #(#generated_types)*
 

@@ -10,13 +10,13 @@ use std::{
 pub use self::http::build_package;
 use futures::StreamExt;
 use reqwest::{
-    header::{HeaderMap, HeaderName, HeaderValue},
+    header::{self, HeaderMap, HeaderName, HeaderValue},
     multipart,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use streamind_core::simple_id;
+use kernel::simple_id;
 use tool_macro::package;
 
 // pub fn build() -> ToolPackage {
@@ -33,6 +33,10 @@ pub mod http {
         PreparedBody, ResponseEntry, assemble_body, assemble_headers, process_response,
     };
     use anyhow::{Result, anyhow};
+    use kernel::agent::AgentInfo;
+    use kernel::simple_id;
+    use kernel::tool::core::ToolReturn;
+    use kernel::{agent::AgentContext, tool::ToolCallContext};
     use reqwest::{
         Client, Method,
         header::{HeaderMap, HeaderName, HeaderValue},
@@ -41,8 +45,6 @@ pub mod http {
     use serde_json::{Value, json};
     use std::{any::Any, collections::HashMap, time::Duration};
     use std::{path::Path, sync::Arc, time::Instant};
-    use streamind_core::agent::AgentInfo;
-    use streamind_core::{agent::AgentContext, tool::ToolCallContext};
     use tokio::sync::RwLock;
 
     pub struct Context {
@@ -62,7 +64,7 @@ pub mod http {
         let mut default_headers = HashMap::new();
         default_headers.insert(
             "User-Agent".to_string(),
-            "Agent-HTTP-Client/1.0".to_string(),
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36 Edg/147.0.0.0".to_string(),
         );
         let client = Client::builder()
             .pool_idle_timeout(std::time::Duration::from_secs(90))
@@ -85,11 +87,10 @@ pub mod http {
         example = r#"show_config()"#,
         limit = "60s:20"
     )]
-    pub async fn show_config(#[ctx] ctx: ToolCallContext) -> anyhow::Result<String> {
+    pub async fn show_config(#[ctx] ctx: ToolCallContext) -> anyhow::Result<ToolReturn> {
         let ctx = ctx.context_data.read().await;
         let ctx = ctx.downcast_ref::<Context>().unwrap();
-        let json = serde_json::to_string(&ctx.config)?;
-        Ok(json)
+        ToolReturn::json(&ctx.config)
     }
     #[tool(
         anno = "查看和编辑默认请求头组及基础配置（如超时时间）",
@@ -100,7 +101,7 @@ pub mod http {
         #[arg("新的默认请求头，会与现有请求头合并")] headers: Option<HashMap<String, String>>,
         #[arg("超时时间（秒）")] timeout: Option<u64>,
         #[ctx] ctx: ToolCallContext,
-    ) -> Result<()> {
+    ) -> anyhow::Result<()> {
         let mut ctx = ctx.context_data.write().await;
         let ctx = ctx.downcast_mut::<Context>().unwrap();
         if let Some(h) = headers {
@@ -112,7 +113,8 @@ pub mod http {
         Ok(())
     }
     #[tool(
-        anno = "发起网络请求。支持在 body 中嵌入 '<file:相对路径>' 语法自动提取文件进行 multipart/form-data 上传",
+        anno = "发起网络请求。支持在 body 中嵌入 '<file:相对路径>' 语法自动提取文件进行 multipart/form-data 上传。
+        返回请求id,使用detail工具来查看详情。",
         example = r#"request(method="POST", url="http://api.com/upload", body={"name":"avatar", "file":"<file:./test.png>"})"#,
         limit = "30s:15"
         timeout="5m"
@@ -126,7 +128,7 @@ pub mod http {
         )]
         body: Option<Value>,
         #[ctx] ctx: ToolCallContext,
-    ) -> Result<String> {
+    ) -> anyhow::Result<ToolReturn> {
         let start_time = Instant::now();
         // 1. 获取 Context
         let (client, config, cache_ptr) = {
@@ -153,26 +155,37 @@ pub mod http {
         };
         // 3. 执行请求
         let response = rb.send().await?;
+        let (filename, charset) =
+            super::get_file_name_form_headers(&ctx.call_id, response.headers());
         // 4. 处理响应 Body (区分文本和二进制)
-        let (path, file) = ctx.new_temp_result_file("bin");
-        let entry = process_response(response, start_time, path, file).await?;
-        let res = format!("requestId: {},status:{}", &entry.id, entry.status);
+        let (path, file) = ctx.new_file(&format!("tool/http/{}", &filename))?;
+        let entry = process_response(
+            ctx.call_id.clone(),
+            response,
+            start_time,
+            path,
+            file,
+            charset,
+        )
+        .await?;
+        let res = format!(r#"requestId:"{}",status:{}"#, &entry.id, entry.status);
         // 5. 存入缓存
         let mut cache = cache_ptr.write().await;
         cache.insert(entry.id.clone(), entry);
-        Ok(res)
+        Ok(ToolReturn::raw(res))
     }
 
     #[tool(
-        anno = "根据请求ID查看响应详情。codes 可选值: status, headers, body, time, size",
-        example = r#"detail(id="a1b2c3d4", codes=["status", "body"])"#,
-        limit = "60s:50"
+        anno = "根据请求ID查看响应详情。codes 可选值: status, headers, body, elapsed, size。
+        body有时候可能因为内容过长，而存入了临时文件，你需要使用editor.load_file和editor.read来进行阅读",
+        example = r#"detail(id="abc123", codes=["status", "body"])"#,
+        limit = "60s:30"
     )]
     pub async fn detail(
         #[arg("请求ID")] id: String,
         #[arg("需要查看的字段列表")] codes: Vec<String>,
         #[ctx] ctx: ToolCallContext,
-    ) -> Result<Value> {
+    ) -> anyhow::Result<ToolReturn> {
         let cache_ptr = {
             let data = ctx.context_data.read().await;
             let c = data
@@ -207,9 +220,9 @@ pub mod http {
                     };
                     result.insert("body".into(), body.into());
                 }
-                "time" => {
-                    let time = humantime::format_duration(entry.time.clone());
-                    result.insert("time".into(), time.to_string().into());
+                "elapsed" => {
+                    let elapsed = humantime::format_duration(entry.elapsed.clone());
+                    result.insert("elapsed".into(), elapsed.to_string().into());
                 }
                 "size" => {
                     let size = bytesize::ByteSize::b(entry.size);
@@ -221,7 +234,7 @@ pub mod http {
             }
         }
 
-        Ok(Value::Object(result))
+       ToolReturn::json(result)
     }
 }
 
@@ -230,7 +243,7 @@ pub struct ResponseEntry {
     pub id: String,
     pub status: u16,
     pub headers: HashMap<String, String>,
-    pub time: Duration,
+    pub elapsed: Duration,
     pub size: u64,
     pub body: ProcessedBody,
 }
@@ -322,79 +335,131 @@ fn assemble_body(root_path: &PathBuf, body: Option<Value>) -> anyhow::Result<Pre
 }
 
 async fn process_response(
+    request_id: String,
     response: reqwest::Response,
     start: Instant,
     store_path: PathBuf,
     store_file: File,
+    charset: Option<String>,
 ) -> anyhow::Result<ResponseEntry> {
     // 处理响应 Body (区分文本和二进制)
     let status = response.status().as_u16();
-    let mut resp_headers = HashMap::new();
+    let mut resp_headers: HashMap<String, String> = HashMap::new();
     for (k, v) in response.headers() {
         resp_headers.insert(k.to_string(), v.to_str().unwrap_or("").to_string());
     }
-    let content_type = resp_headers
-        .get("content-type")
-        .map(|v| v.as_str())
-        .unwrap_or_default()
-        .to_lowercase();
-
-    let body = process_response_body(response, &content_type, store_path, store_file).await?;
+    let body = process_response_body(response, store_path, store_file, charset).await?;
     let size = match &body {
         ProcessedBody::Text(t) => t.len() as _,
         ProcessedBody::File(_, size) => *size,
     };
     let time = start.elapsed();
-    let request_id = simple_id(16);
+
     let entry = ResponseEntry {
         id: request_id,
         status,
         headers: resp_headers,
-        time,
+        elapsed: time,
         size,
         body,
     };
     Ok(entry)
 }
+
+fn get_file_name_form_headers(
+    request_id: &String,
+    headers: &HeaderMap,
+) -> (String, Option<String>) {
+    let content_type = headers
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("application/octet-stream")
+        .to_lowercase();
+
+    let is_text = content_type.starts_with("text/")
+        || content_type.starts_with("application/json")
+        || content_type.starts_with("application/xml");
+    if is_text {
+        // 根据 MIME 类型猜测扩展名
+        let ext = mime_guess::get_mime_extensions_str(&content_type)
+            .and_then(|exts| exts.first())
+            .unwrap_or(&"txt");
+        let charset = content_type
+            .split(';')
+            .map(|p| p.trim())
+            .find(|p| p.starts_with("charset="))
+            .map(|p| p.replace("charset=", ""))
+            .unwrap_or_else(|| "utf-8".to_string());
+        (format!("{}.{}", request_id, ext), Some(charset))
+    } else {
+        fn extract_filename(disposition: &str) -> Option<String> {
+            disposition
+                .split(';')
+                .find(|part| part.trim().starts_with("filename="))
+                .map(|part| {
+                    part.replace("filename=", "")
+                        .trim()
+                        .trim_matches('"')
+                        .to_string()
+                })
+        }
+        // --- 二进制流处理逻辑 ---
+        // 2. 尝试从 Content-Disposition 提取文件名
+        let filename = headers
+            .get(reqwest::header::CONTENT_DISPOSITION)
+            .and_then(|v| v.to_str().ok())
+            .and_then(extract_filename)
+            .unwrap_or_else(|| format!("{}.bin", request_id));
+
+        (filename, None)
+    }
+}
 /// 核心封装：流式处理响应体，防止大文件 OOM
 async fn process_response_body(
     response: reqwest::Response,
-    content_type: &String,
     store_path: PathBuf,
     ref mut store_file: File,
+    charset: Option<String>,
 ) -> anyhow::Result<ProcessedBody> {
-    // 设定内存阈值：2kb
+    // 设定内存阈值
     let max_memory_size = 2 * 1024;
-    let mut total_size = 0u64;
-
+    let mut total_size: u64 = 0u64;
+    let mut raw_text = String::with_capacity(max_memory_size as _);
     //写入临时文件
-    {
-        let mut stream = response.bytes_stream();
+    let mut stream = response.bytes_stream();
+    if let Some(charset) = &charset {
+        let encoding =
+            encoding_rs::Encoding::for_label(charset.as_bytes()).unwrap_or(encoding_rs::UTF_8);
+        let mut decoder = encoding.new_decoder();
 
         while let Some(chunk_result) = stream.next().await {
             let chunk = chunk_result.map_err(|e| anyhow::anyhow!("网络流读取中断: {}", e))?;
             total_size += chunk.len() as u64;
-            // 写入当前 chunk
+            // 预分配足够空间的缓冲区（UTF-8 最多比原始数据多一点点）
+            let mut utf8_buffer = String::with_capacity(chunk.len() * 2);
+            // 解码核心逻辑：last 参数为 false 表示流未结束
+            // decoder 会自动处理 chunk 末尾被截断的残缺字符，留到下次处理
+            let (_res, _read, _replaced) =
+                decoder.decode_to_string(&chunk, &mut utf8_buffer, false);
+            store_file.write_all(utf8_buffer.as_bytes())?;
+            if raw_text.len() < max_memory_size {
+                raw_text.push_str(&utf8_buffer);
+            }
+        }
+    } else {
+        while let Some(chunk_result) = stream.next().await {
+            let chunk = chunk_result.map_err(|e| anyhow::anyhow!("网络流读取中断: {}", e))?;
+            total_size += chunk.len() as u64;
             store_file.write_all(&chunk)?;
         }
-        // --- 收尾处理 ---
-        store_file.flush()?;
     }
+    // --- 收尾处理 ---
+    store_file.flush()?;
     //
-    if total_size <= max_memory_size
-        && (content_type.contains("text/")
-            || content_type.contains("/json")
-            || content_type.contains("/xml"))
-    {
-        //尝试读取为文本
-        store_file.seek(SeekFrom::Start(0))?;
-        let mut bytes = Vec::with_capacity(max_memory_size as _);
-        store_file.read(&mut bytes)?;
-        if let Ok(text) = String::from_utf8(bytes) {
-            return Ok(ProcessedBody::Text(text));
-        }
+    if total_size <= max_memory_size as u64 && charset.is_some() {
+        //直接返回为文本
+        return Ok(ProcessedBody::Text(raw_text));
     }
-
     Ok(ProcessedBody::File(store_path, total_size))
 }
 #[derive(Clone)]

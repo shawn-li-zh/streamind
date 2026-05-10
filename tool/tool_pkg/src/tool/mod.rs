@@ -2,7 +2,7 @@ pub use self::tool::build_package;
 use tool_macro::package;
 #[package("tool管理器")]
 pub mod tool {
-    use streamind_core::tool::ToolCallContext;
+    use kernel::tool::{ToolCallContext, core::ToolReturn};
 
     use anyhow::Ok;
 
@@ -14,7 +14,7 @@ pub mod tool {
     pub fn find_packages(
         #[arg("关键字")] key: String,
         #[ctx] ctx: ToolCallContext,
-    ) -> anyhow::Result<Vec<String>> {
+    ) -> anyhow::Result<ToolReturn> {
         let agent_context = ctx.agent_context.clone();
         let tool_engine_context = &agent_context.tool_engine_context;
         let tool_packages = &tool_engine_context.tool_packages;
@@ -32,7 +32,7 @@ pub mod tool {
             );
             res.push(info);
         }
-        Ok(res)
+         Ok(ToolReturn::raws(res))
     }
     #[tool(
         anno = "列出指定区间内的工具包的基础信息",
@@ -43,7 +43,7 @@ pub mod tool {
         #[arg("起始位置")] start: usize,
         #[arg("数量")] num: usize,
         #[ctx] ctx: ToolCallContext,
-    ) -> anyhow::Result<Vec<String>> {
+    ) -> anyhow::Result<ToolReturn> {
         let agent_context = ctx.agent_context.clone();
         let tool_engine_context = &agent_context.tool_engine_context;
         let tool_packages = &tool_engine_context.tool_packages;
@@ -67,14 +67,14 @@ pub mod tool {
             );
             res.push(info);
         }
-        Ok(res)
+        Ok(ToolReturn::raws(res))
     }
     #[tool(anno = "列出包内工具的基本信息")]
-    pub fn list_tool(
+    pub fn list_tools(
         #[arg("工具包name")] pkg_name: String,
         #[arg("tool关键词")] tool_key: Option<String>,
         #[ctx] ctx: ToolCallContext,
-    ) -> anyhow::Result<Vec<String>> {
+    ) -> anyhow::Result<ToolReturn> {
         let agent_context = ctx.agent_context.clone();
         let tool_engine_context = &agent_context.tool_engine_context;
         let pkg = match tool_engine_context.get_package(&pkg_name) {
@@ -90,14 +90,14 @@ pub mod tool {
             }
             res.push(format!("//{}\n{}", &tool.annotation, tool.ts_singature()));
         }
-        Ok(res)
+        Ok(ToolReturn::raws(res))
     }
     #[tool(anno = "获取工具的完整文档,ts代码格式")]
     pub fn get_tool_doc(
         #[arg("工具包name")] pkg_name: String,
         #[arg("工具name")] tool_name: String,
         #[ctx] ctx: ToolCallContext,
-    ) -> anyhow::Result<String> {
+    ) -> anyhow::Result<ToolReturn> {
         let agent_context = ctx.agent_context.clone();
         let tool_engine_context = &agent_context.tool_engine_context;
         let pkg = match tool_engine_context.get_package(&pkg_name) {
@@ -110,6 +110,6 @@ pub mod tool {
                 return Err(anyhow::anyhow!("工具不存在:{}", tool_name));
             }
         };
-        Ok(tool.to_doc())
+        Ok(ToolReturn::raw(tool.to_doc()))
     }
 }

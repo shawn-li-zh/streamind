@@ -5,17 +5,19 @@ edition = "2021"
 [workspace]
 members = [
     ".",
-    "streamind_core",
+    "kernel",
     "entity",
     "tool/tool_macro",
     "tool/tool_pkg",
     "runtime",
-    "entity_service", "web",
+    "entity_service",
+    "web",
 ]
 [dependencies]
 entity = { path = "entity" }
 entity_service = { path = "entity_service" }
-streamind_core = { path = "streamind_core" }
+kernel = { path = "kernel" }
+runtime = { path = "runtime" }
 web = { path = "web" }
 # tool_core = { path = "tool/tool_core" }
 tool_pkg = { path = "tool/tool_pkg" }
@@ -40,15 +42,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 anyhow = { version = "1", features = ["std"] }
 thiserror = "2.0.18"
 # 数据库
-rusqlite = { version = "0.32", features = ["bundled"] }
-sea-orm = { version = "2.0.0-rc.37", features = [
-    "sqlx-sqlite",
-    "runtime-tokio-native-tls",
-    "macros",
-    "schema-sync",
-    "entity-registry",
-] }
-
 
 # 语法解析
 pest = "2.8.6"
@@ -56,12 +49,8 @@ pest_derive = "2.8.6"
 
 
 # HTTP 客户端和服务器 web
-reqwest = { version = "0.12", features = ["json"] }
+
 axum = { version = "0.8.9", features = ["default"] }
-tower-http = { version = "0.5", features = ["cors", "fs"] }           # 处理跨域
-jsonwebtoken = { version = "10.3.0", features = ["rust_crypto"] }     # JWT 认证
-tower_governor = "0.8.0"
-tower = { version = "0.5.2", features = ["util", "limit", "buffer"] }
 
 # 工具库
 dashmap = "6.1.0"
@@ -76,6 +65,4 @@ notify = "6"  # 文件系统监视
 [dev-dependencies]
 cargo-nextest = "0.9"
 
-[profile.dev]
-opt-level = 0 # 确保是 0，表示不优化，保留所有变量信息
-debug = true  # 确保生成调试信息
+

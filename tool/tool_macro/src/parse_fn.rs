@@ -40,7 +40,7 @@ pub fn handle_fn(
         .map(|v| quote! {Some(#v)})
         .unwrap_or(quote! {None});
     //权限
-    let  permissions_tokens= {
+    let permissions_tokens = {
         if let Some(perms) = &args.permissions {
             let perms_vec: Vec<String> = perms
                 .split(',')
@@ -80,7 +80,7 @@ fn build_arg_extractors(
                 let arg_name_str = arg_ident.to_string();
                 // 收集传递给原函数的变量名
                 names.push(quote!(#arg_ident));
-                if is_ctx_arg(&mut pat_type.attrs) {
+                if is_ctx_arg(&mut pat_type.attrs, false) {
                     extractors.push(quote! {
                         let #arg_ident = ctx;
                     });
@@ -201,7 +201,9 @@ pub fn parse_fn_signature(item_fn: &mut ItemFn) -> (Vec<TokenStream>, TokenStrea
             } else {
                 continue; // 忽略不规则的参数匹配
             };
-
+            if is_ctx_arg(&mut pat_type.attrs,true) {
+                continue;
+            }
             // 提取 #[arg("...")] 属性并从 AST 中移除它
             let annotation = extract_arg_annotation(&mut pat_type.attrs);
 
@@ -258,9 +260,11 @@ fn extract_arg_annotation(attrs: &mut Vec<Attribute>) -> String {
     }
     annotation
 }
-fn is_ctx_arg(attrs: &mut Vec<Attribute>) -> bool {
+fn is_ctx_arg(attrs: &mut Vec<Attribute>, remove: bool) -> bool {
     if let Some(idx) = attrs.iter().position(|a| a.path().is_ident("ctx")) {
-        let attr = attrs.remove(idx);
+        if remove {
+            let attr = attrs.remove(idx);
+        }
         return true;
     }
     false

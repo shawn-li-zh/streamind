@@ -1,0 +1,36 @@
+[package]
+name = "runtime"
+version = "0.1.0"
+edition = "2024"
+[lib]
+name = "runtime"
+path = "src/lib.rs"
+[dependencies]
+entity = { path = "../entity" }
+entity_service = { path = "../entity_service" }
+kernel = { path = "../kernel" }
+tool_pkg = { path = "../tool/tool_pkg" }
+# ai
+async-openai = "0.25"
+
+# 异步库
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+async_once = "0.2.6"
+async-stream = "0.3.6"
+tokio-stream = "0.1.18"
+futures = "0.3"
+# 序列化
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# 错误处理
+anyhow = { version = "1", features = ["std"] }
+# 日志
+tracing = "0.1"
+# web
+axum = { version = "0.8.9", features = ["default"] }
+# 工具库
+chrono = "0.4.44"
+dashmap = "6.1.0"
+humantime = "2.1" # 可读时间
+base64 = "0.22.1"

@@ -4,12 +4,12 @@ use tool_macro::package;
 pub mod file {
     use std::path::PathBuf;
 
-    use streamind_core::agent::AgentInfo;
+    use kernel::agent::AgentInfo;
 
     use anyhow::Ok;
     use chrono::Local;
 
-    use streamind_core::tool::ToolCallContext;
+    use kernel::tool::ToolCallContext;
 
     pub struct Context {
         pub root_path: PathBuf,
