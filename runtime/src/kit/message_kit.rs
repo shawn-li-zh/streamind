@@ -1,13 +1,9 @@
 use std::{collections::HashMap, fs::File};
 
-use async_openai::types::ChatCompletionRequestMessage;
+use async_openai::types::chat::ChatCompletionRequestMessage;
 use entity::event::EnvEventType;
 
-use kernel::{
-    agent::{AgentContext, AgentEvent, AgentInfo},
-    event::EnvEvent,
-    message::Message,
-};
+use kernel::{agent::AgentContext, event::EnvEvent, message::Message, section::Section};
 
 use crate::{
     context::stack::{MindNode, MindStack},
@@ -20,8 +16,37 @@ pub fn to_sdk_message(value: Message) -> ChatCompletionRequestMessage {
     match role {
         kernel::message::Role::User => prompt_kit::user_message(text, paths),
         kernel::message::Role::System => prompt_kit::system_message(text),
-        kernel::message::Role::ToolCall => prompt_kit::tool_message(text,paths),
+        kernel::message::Role::Tool => prompt_kit::tool_message(text, paths),
         kernel::message::Role::Assistant => prompt_kit::assistant_message(text),
+    }
+}
+
+pub fn to_assistant_ouput(sections: Vec<Section>) -> Option<String> {
+    if sections.is_empty() {
+        return None;
+    }
+    let has_tool_call = sections.iter().any(|s| s.tag_name == "tool_call");
+    fn join(sections: Vec<Section>) -> String {
+        let mut text = String::new();
+        for section in sections {
+            text += &section.to_string();
+            text += "\n";
+        }
+        text
+    }
+    if has_tool_call {
+        Some(join(sections))
+    } else {
+        //去除思考内容
+        let sections: Vec<Section> = sections
+            .into_iter()
+            .filter(|s| s.tag_name != "think")
+            .collect();
+        if sections.is_empty() {
+            None
+        } else {
+            Some(join(sections))
+        }
     }
 }
 
@@ -57,7 +82,7 @@ pub async fn load_stack(agent_ctx: &AgentContext) -> anyhow::Result<MindStack> {
     let file = File::options().append(true).create(true).open(path)?;
     let mut stack = MindStack::new(sp, file);
     for state in states {
-        let mut node = MindNode {
+        let node = MindNode {
             id: state.id,
             pos: state.pos as _,
             title: state.title,
@@ -65,34 +90,14 @@ pub async fn load_stack(agent_ctx: &AgentContext) -> anyhow::Result<MindStack> {
             messages: vec![],
             content_len: 0,
         };
+        stack.push(stack.nodes.len(), node);
         //
         let events = state_id_map_events.remove(&state.id).unwrap_or_default();
         for event in events {
-            // if let EnvEventType::AgentResponse = &event.event_type {
-            //     let sections = event_id_map_sections.remove(&event.id).unwrap_or_default();
-            //     let response = sections
-            //         .into_iter()
-            //         .filter(|v| !v.payload.is_null())
-            //         .map(|v| {
-            //             let map: HashMap<String, serde_json::Value> =
-            //                 serde_json::from_value(v.payload).unwrap();
-            //             let content = map
-            //                 .get("content")
-            //                 .map(|v| v.as_str().unwrap_or_default())
-            //                 .unwrap_or_default();
-            //             format!("<{}>\n{}\n</{}>", v.name, content, v.name)
-            //         })
-            //         .collect::<Vec<String>>()
-            //         .join("\n");
-            //     if !response.is_empty() {
-            //         let len = response.len();
-            //         node.push(prompt_kit::assistant_message(response), len);
-            //     }
-            //     continue;
-            // }
             let agent_event = entity_service::event::convert::from_entity(event);
-            if let EnvEvent::AgentReaction(s) = &agent_event.data {
-                if s.is_empty() {
+            if let EnvEvent::AgentReaction(_) = &agent_event.data {
+                if let EnvEvent::AgentReaction(sections) = agent_event.data {
+                    stack.push_response(sections);
                     continue;
                 }
             }
@@ -102,11 +107,9 @@ pub async fn load_stack(agent_ctx: &AgentContext) -> anyhow::Result<MindStack> {
                 }
             }
             let msg = agent_event.to_message();
-            let len = msg.size;
-            node.push(to_sdk_message(msg), len);
+            stack.push_msg(msg);
         }
         //
-        stack.push(stack.nodes.len(), node);
     }
     //
     Ok(stack)

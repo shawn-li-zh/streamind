@@ -10,7 +10,7 @@ use entity::model::ModelStatus;
 use kernel::{agent::AgentContext, tool::ToolPackagePool};
 use tokio::sync::RwLock;
 
-use crate::{core::Agent, llm_engine::LLMEngine};
+use crate::{core::Agent, llm::{client::ChatClient, deepseek::DeepseekClient}};
 //全局agent池
 pub static AGENT_POOL: LazyLock<RwLock<HashMap<u32, Arc<RwLock<Agent>>>>> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
@@ -18,7 +18,7 @@ pub static AGENT_POOL: LazyLock<RwLock<HashMap<u32, Arc<RwLock<Agent>>>>> =
 pub static AGENT_CTX_POOL: LazyLock<RwLock<HashMap<u32, Arc<AgentContext>>>> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
 
-pub static ENGINE_POOL: LazyLock<RwLock<HashMap<u32, Arc<LLMEngine>>>> =
+pub static ENGINE_POOL: LazyLock<RwLock<HashMap<u32, Arc<dyn ChatClient + Sync + Send>>>> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
 pub static TOOL_PACKAGE_TOOL: LazyLock<ToolPackagePool> = LazyLock::new(|| tool_pkg::tool_pool());
 
@@ -33,7 +33,7 @@ pub async fn init() -> anyhow::Result<()> {
                 .with_api_base(model.api_url.clone())
                 .with_api_key(model.api_key.clone()),
         );
-        let engine = LLMEngine {
+        let engine = DeepseekClient {
             model: model.clone(),
             client,
         };

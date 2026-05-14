@@ -28,6 +28,7 @@ sea-orm = { version = "2.0.0-rc.37", features = [
 ] }
 anyhow = "1"
 
+reqwest = { version = "0.12", features = ["json", "rustls-tls","stream"] }
 
 chrono = "0.4.44"
 dashmap = "6.1.0"

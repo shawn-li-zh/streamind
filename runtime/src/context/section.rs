@@ -1,14 +1,10 @@
-use std::{
-    pin::Pin,
-    time::{Duration, Instant},
-};
+use std::{pin::Pin, time::Instant};
 
 use futures::{Stream, StreamExt};
 use kernel::{
     event::SectionEvent,
     section::{Section, SectionTag, TAGS},
 };
-use tokio::sync::mpsc;
 
 /// 在流式输出中，解析不同的段内容
 
@@ -24,7 +20,7 @@ pub fn section_stream(
     let mut start = Instant::now();
     let mut is_in_reply_stream = false;
     let tags: &'static Vec<SectionTag> = &*TAGS;
-    let reply_tag = &tags[2];
+    let reply_tag = &tags[0];
     async_stream::stream! {
         yield SectionEvent::Start(0, 0);
 
@@ -158,60 +154,72 @@ pub fn section_stream(
         yield SectionEvent::End(0, 0);
     }
 }
+
 #[cfg(test)]
-#[tokio::test]
-async fn test() {
-    println!("=== 开始测试 Section Stream ===");
 
-    // 1. 模拟 LLM 异步流式输出的数据块 (Chunks)
-    // 故意将标签切碎，以测试解析器的 buffer 拼接能力
-    let chunks = vec![
-        "你好！我来",
-        "思考一下。",
-        "<th", // 切碎的开始标签
-        "ink>这",
-        "是一个",
-        "思考过程</", // 切碎的结束标签
-        "think>现在",
-        "我给你最终回复：",
-        "<reply>这是",
-        "正常回复内容</reply>\n",
-        // "后面",
-        // "还有点尾巴",
-    ];
-    let (tx, rx) = mpsc::unbounded_channel();
-    tokio::spawn(async move {
-        for chunk in chunks {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-            tx.send(chunk.to_string()).unwrap();
-        }
-    });
-    let chunk_stream = tokio_stream::wrappers::UnboundedReceiverStream::new(rx).boxed();
-    // 3. 调用你的 section_stream 函数
-    let mut event_stream = Box::pin(section_stream(chunk_stream));
+mod test {
+    use std::time::Duration;
 
-    // 4. 消费解析出来的事件
-    while let Some(event) = event_stream.next().await {
-        match event {
-            SectionEvent::Start(reaction_id, response_id) => {
-                println!("\n[事件] >>> 流开始 <<<");
+    use futures::StreamExt;
+    use kernel::event::SectionEvent;
+    use tokio::sync::mpsc;
+
+    use crate::context::section::section_stream;
+
+    #[tokio::test]
+    async fn test() {
+        println!("=== 开始测试 Section Stream ===");
+
+        // 1. 模拟 LLM 异步流式输出的数据块 (Chunks)
+        // 故意将标签切碎，以测试解析器的 buffer 拼接能力
+        let chunks = vec![
+            "你好！我来",
+            "思考一下。",
+            "<th", // 切碎的开始标签
+            "ink>这",
+            "是一个",
+            "思考过程</", // 切碎的结束标签
+            "think>现在",
+            "我给你最终回复：",
+            "<reply>这是",
+            "正常回复内容</reply>\n",
+            // "后面",
+            // "还有点尾巴",
+        ];
+        let (tx, rx) = mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            for chunk in chunks {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+                tx.send(chunk.to_string()).unwrap();
             }
-            SectionEvent::Open(tag) => {
-                println!("\n[事件] 开启标签: <{}>", tag.name);
-            }
-            SectionEvent::Chunk(tag_name, chunk) => {
-                print!("{}", chunk)
-            }
-            SectionEvent::Close(section) => {
-                let s: String = (&section).to_string();
-                println!("[事件] 关闭标签，完整段落内容为: {:?}", s);
-            }
-            SectionEvent::End(reaction_id, response_id) => {
-                println!("\n[事件] >>> 流结束 <<<");
+        });
+        let chunk_stream = tokio_stream::wrappers::UnboundedReceiverStream::new(rx).boxed();
+        // 3. 调用你的 section_stream 函数
+        let mut event_stream = Box::pin(section_stream(chunk_stream));
+
+        // 4. 消费解析出来的事件
+        while let Some(event) = event_stream.next().await {
+            match event {
+                SectionEvent::Start(reaction_id, response_id) => {
+                    println!("\n[事件] >>> 流开始 <<<");
+                }
+                SectionEvent::Open(tag) => {
+                    println!("\n[事件] 开启标签: <{}>", tag.name);
+                }
+                SectionEvent::Chunk(tag_name, chunk) => {
+                    print!("{}", chunk)
+                }
+                SectionEvent::Close(section) => {
+                    let s: String = (&section).to_string();
+                    println!("[事件] 关闭标签，完整段落内容为: {:?}", s);
+                }
+                SectionEvent::End(reaction_id, response_id) => {
+                    println!("\n[事件] >>> 流结束 <<<");
+                }
             }
         }
+
+        // 给后台异步任务一点时间打印完毕
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
-
-    // 给后台异步任务一点时间打印完毕
-    tokio::time::sleep(Duration::from_millis(50)).await;
 }

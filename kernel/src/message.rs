@@ -1,6 +1,8 @@
-use std::{f32::consts::E, path::PathBuf};
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
+
+use crate::section::Section;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Binary {
     pub path: PathBuf,
@@ -51,48 +53,45 @@ impl Information {
         (b.head(index), Some(b.path))
     }
 }
-#[derive(Debug,Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, Default, PartialEq)]
+#[serde(rename_all = "lowercase")]
 pub enum Role {
+    #[default]
     User,
     System,
     Assistant,
-    ToolCall,
+    Tool,
 }
 impl Role {
-    pub fn user() -> Message {
+    pub fn message(self) -> Message {
         Message {
-            role: Role::User,
+            role: self,
             items: vec![],
             size: 0,
+            prefix: false,
         }
+    }
+    pub fn user() -> Message {
+        Role::User.message()
     }
     pub fn system() -> Message {
-        Message {
-            role: Role::System,
-            items: vec![],
-            size: 0,
-        }
+        Role::System.message()
     }
     pub fn assistant() -> Message {
-        Message {
-            role: Role::Assistant,
-            items: vec![],
-            size: 0,
-        }
+        Role::Assistant.message()
     }
-    pub fn tool_call() -> Message {
-        Message {
-            role: Role::ToolCall,
-            items: vec![],
-            size: 0,
-        }
+    pub fn tool() -> Message {
+        Role::Tool.message()
     }
 }
-#[derive(Debug,Clone)]
+
+
+#[derive(Debug, Clone)]
 pub struct Message {
     role: Role,
     pub items: Vec<Information>,
     pub size: usize,
+    pub prefix: bool,
 }
 impl Message {
     pub fn get_role(&self) -> Role {

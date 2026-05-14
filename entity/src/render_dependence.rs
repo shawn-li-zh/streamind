@@ -13,6 +13,9 @@ pub struct Model {
     pub version: String,
     #[sea_orm(column_type = "Text", not_null)]
     pub path: String,
+    #[sea_orm(column_type = "Text", default_value = "js")]
+    pub ext: String,
+    pub editable: bool,
 }
 
 impl ActiveModelBehavior for ActiveModel {}

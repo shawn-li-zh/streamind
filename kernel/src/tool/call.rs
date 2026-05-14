@@ -31,7 +31,7 @@ impl ToolCall {
         let (pkg_name, expr) = match code.split_once(".") {
             Some(p) => p,
             None => {
-                return Err(anyhow::anyhow!("Invalid code format: '{}'", code));
+                return Err(anyhow::anyhow!("Invalid tool_call format: '{}'", code));
             }
         };
         let package: &'static ToolPackage = match engine_ctx.get_package(pkg_name) {
@@ -42,7 +42,7 @@ impl ToolCall {
         let (tool_name, args) = match expr.find("(") {
             Some(i) => (&expr[..i], &expr[i..]),
             None => {
-                return Err(anyhow::anyhow!("Invalid code format: '{}'", code));
+                return Err(anyhow::anyhow!("Invalid tool_call format: '{}'", code));
             }
         };
         let tool: &'static Tool = match package.get_tool(tool_name) {

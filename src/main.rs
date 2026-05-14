@@ -27,9 +27,10 @@ async fn main() -> anyhow::Result<()> {
     runtime::global::init().await?;
     info!("智能体运行时初始化成功!");
     //
+    let port = &std::env::var("PORT").unwrap();
     let web_service = web::Service {
         router: web_api::inject_router(Router::new()),
-        addr: "0.0.0.0:3000".parse().unwrap(),
+        addr: format!("0.0.0.0:{port}").parse().unwrap(),
     };
     info!("Starting StreamInd AI Client");
     info!("Generated login code:\n 【 {} 】", LOGIN_CODE.as_str());

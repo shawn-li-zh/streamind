@@ -48,10 +48,10 @@ impl WebEvent {
                 | EnvEvent::AgentResponse(_)
                 | EnvEvent::UserRequest(_)
                 | EnvEvent::Interaction(_)
+                | EnvEvent::Heartbeat
                 | EnvEvent::ToolCallResult(_) => {
                     unreachable!("调用出错")
                 }
-
                 EnvEvent::Timer(timer_data) => {
                     SsePayload::new("env", "timer", timer_data, bind_event_id).to_sse_event()
                 }

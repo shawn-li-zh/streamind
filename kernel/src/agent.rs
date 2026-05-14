@@ -70,6 +70,7 @@ pub struct AgentInfo {
     pub model: String,
     pub workspace: PathBuf,
     pub avatar: String,
+    pub sleep_until: Option<chrono::DateTime<Local>>,
     pub status: AgentStatus,
 }
 impl AgentInfo {
@@ -122,7 +123,12 @@ pub struct AgentEvent {
 impl AgentEvent {
     pub fn to_infos(&self) -> Vec<crate::message::Information> {
         let time = self.time.format("%Y-%m-%d %H:%M:%S").to_string();
-        let head = format!("id={},type={},time={}", self.id, self.data.name(), time);
+        let head = format!(
+            "# 事件\nid={},type={},time={}",
+            self.id,
+            self.data.name(),
+            time
+        );
         let mut infos = self.data.clone().to_infos();
         infos.insert(0, head.into());
         return infos;
@@ -133,7 +139,7 @@ impl AgentEvent {
                 Role::assistant()
             }
             EnvEvent::UserRequest(user_message) => Role::user(),
-            EnvEvent::ToolCallResult(tool_call_detail_items) => Role::tool_call(),
+            EnvEvent::ToolCallResult(tool_call_detail_items) => Role::system(),
             _ => Role::system(),
         };
         let infos = self.to_infos();

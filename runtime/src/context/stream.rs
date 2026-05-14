@@ -1,19 +1,23 @@
 use anyhow::Context;
+
 use entity_service::DB;
 use kernel::{
     agent::AgentEvent,
     event::{EnvEvent, SectionEvent},
-    section::Section,
+    message::Role,
+    section::{Section, SectionTag, TAGS},
 };
-use std::sync::Arc;
+use std::{sync::Arc, time::Instant};
 use tracing::{error, info};
 
 use crate::{
-    context::section::section_stream,
-    context::stack::{self, MindNode, MindStack},
+    context::{
+        section::section_stream,
+        stack::{self, MindNode, MindStack},
+    },
     core::{Agent, AgentChannel},
     kit::{message_kit, prompt_kit},
-    llm_engine::LLMEngine,
+    llm::client::ChatClient,
 };
 use futures::stream;
 use tokio::sync::{RwLock, mpsc, oneshot, watch};
@@ -28,6 +32,7 @@ pub enum MindFlag {
 pub struct StreamMind {
     pub agent_id: u32,
     pub stack: MindStack,
+    client: Arc<dyn ChatClient>,
     event_buffer: Vec<AgentEvent>,
     last_section_head: RwLock<String>,
     inject_receiver: mpsc::UnboundedReceiver<(String, bool)>,
@@ -40,6 +45,7 @@ pub struct StreamMind {
 impl StreamMind {
     pub fn new(
         agent_id: u32,
+        client: Arc<dyn ChatClient>,
         stack: MindStack,
         inject_receiver: mpsc::UnboundedReceiver<(String, bool)>,
         event_receiver: mpsc::Receiver<AgentEvent>,
@@ -49,6 +55,7 @@ impl StreamMind {
     ) -> Self {
         StreamMind {
             agent_id,
+            client,
             stack,
             event_buffer: vec![],
             last_section_head: RwLock::new(String::new()),
@@ -91,14 +98,24 @@ impl StreamMind {
             }
         }
     }
-    pub async fn event_loop(&mut self, engine: Arc<LLMEngine>) -> anyhow::Result<MindFlag> {
+    pub async fn event_loop(&mut self) -> anyhow::Result<MindFlag> {
         let len = std::env::var("CTX_LEN_PER_ROUND")
             .map(|v| usize::from_str_radix(&v, 10).unwrap())
             .unwrap_or(50000);
 
         loop {
-            let is_close = self.event_listening(engine.clone()).await.unwrap();
+            let mut worker = ListeningWorker {
+                section_sender: self.section_sender.clone(),
+                last_tag: None,
+                start_time: Instant::now(),
+                sections: vec![],
+                chunk_buffer: String::new(),
+            };
+
+            let res = self.event_listening(&mut worker).await;
+            worker.end(&mut self.stack).await;
             self.run_watcher.send(false)?;
+            let is_close = res?;
             if is_close {
                 return Ok(MindFlag::Closed);
             }
@@ -108,7 +125,9 @@ impl StreamMind {
             }
         }
     }
-    async fn event_listening(&mut self, engine: Arc<LLMEngine>) -> anyhow::Result<bool> {
+    async fn event_listening(&mut self, worker: &mut ListeningWorker) -> anyhow::Result<bool> {
+        //抽干事件
+        self.drain_events();
         // 1. 如果没有待处理任务，阻塞等待下一个事件到达
         if self.event_buffer.is_empty() {
             if let Some(agent_event) = self.event_receiver.recv().await {
@@ -125,7 +144,7 @@ impl StreamMind {
         // 提取出当前所有的任务，清空 pending 准备接收新的
         self.stack.push_events(&mut self.event_buffer);
         // 4. 创建生成流（模拟大模型输出或耗时任务）
-        let mut chunk_stream = self.stack.chunk_stream(engine).await;
+        let mut chunk_stream = self.stack.chunk_stream(self.client.clone()).await;
         // 3. 将 Rx 转换为 Stream 并与 LLM 流合并
         let mut inject_stream =
             tokio_stream::wrappers::UnboundedReceiverStream::new(proxy.1).boxed();
@@ -137,7 +156,7 @@ impl StreamMind {
                     chunk_opt = chunk_stream.next() => {
                         match chunk_opt {
                             Some(val) => {
-                                // print!("{}",&val);
+                                print!("{}",&val);
                                 yield val
                             },
                             None => {
@@ -158,7 +177,7 @@ impl StreamMind {
         .boxed();
 
         let mut section_stream = Box::pin(section_stream(merged_stream));
-        let mut response = String::new();
+
         // 5. 边生成边监听队列
         loop {
             tokio::select! {
@@ -168,49 +187,80 @@ impl StreamMind {
                 }
                 // 分支 A：段落生成流
                 Some(section_event) = section_stream.next() =>  {
-                    let is_end= matches!(&section_event,SectionEvent::End(_, _));
-                    if let SectionEvent::Close(section)=&section_event{
-                        watch_section(self,&section).await?;
-                        let s:String=section.to_string();
-                        response.push_str(&s);
-                        response.push_str("\n");
-                    }
-                    self.section_sender.send(section_event).await.unwrap();
-                    if is_end{
-                        break ;
-                    }
-                }
+                    let mut is_end=false;
+                    match &section_event {
+                        SectionEvent::End(_, _) => {
+                            is_end=true;
+                        }
+                        SectionEvent::Open(tag)=>{
+                            worker.start_time = Instant::now();
+                            worker.last_tag=Some(*tag)
+                        }
+                        SectionEvent::Chunk(tag,chunk)=>{
+                            worker.chunk_buffer.push_str(chunk);
+                        }
+                        SectionEvent::Close(section) => {
+                            worker.last_tag=None;
+                            worker.sections.push(section.clone());
+                            watch_section(self,section).await?;
+                        }
 
+                        _=>{ }
+                    }
+                    if is_end{
+                    //必须由外部确认是否真的结束,所以不发送事件
+                       break;
+                    }
+                    self.section_sender.send(section_event).await?;
+                }
                 // 分支 B：在生成过程中，收到了新事件
                 Some(event) = self.event_receiver.recv() => {
-                    if event.force{
-                        self.event_buffer.push(event);
-                        self.section_sender.send(SectionEvent::End(0, 0)).await.unwrap();
+                    let force= event.force;
+                    self.event_buffer.push(event);
+                    if force{
                         break; // 跳出内部 loop,强制处理
                     }
-                    // 如果是普通任务，先默默存起来，不打断当前生成
-                    self.event_buffer.push(event)
                 }
                 else=>{
                     break ;
                 }
             };
         }
-        //放入agent的回复
-        let res = response.trim().to_string();
-        let len = res.len();
-        println!("Agent回复:{}", &res);
-        let res = prompt_kit::assistant_message(res);
-        self.stack.push_msg(res, len);
-        // 2. 瞬间抽干队列中同时到达的其他任务（Batching）
-        self.drain_events();
         Ok(false)
     }
 }
-
+struct ListeningWorker {
+    section_sender: mpsc::Sender<SectionEvent>,
+    last_tag: Option<&'static SectionTag>,
+    start_time: Instant,
+    chunk_buffer: String,
+    sections: Vec<Section>,
+}
+impl ListeningWorker {
+    async fn end(mut self, stack: &mut MindStack) {
+        if let Some(last_tag) = self.last_tag {
+            let last = Section::new(
+                last_tag,
+                self.chunk_buffer,
+                Instant::now() - self.start_time,
+            );
+            self.sections.push(last.clone());
+            self.section_sender
+                .send(SectionEvent::Close(last))
+                .await
+                .expect("section_sender");
+        }
+        self.section_sender
+            .send(SectionEvent::End(0, 0))
+            .await
+            .expect("section_sender"); //输出结束
+        //放入agent的回复
+        stack.push_response(self.sections);
+    }
+}
 pub async fn run_mind(
     agent: Arc<RwLock<Agent>>,
-    engine: Arc<LLMEngine>,
+    client: Arc<dyn ChatClient>,
     inject_receiver: mpsc::UnboundedReceiver<(String, bool)>,
     event_receiver: mpsc::Receiver<AgentEvent>,
     section_sender: mpsc::Sender<SectionEvent>,
@@ -226,6 +276,7 @@ pub async fn run_mind(
     };
     let mut mind_stream = StreamMind::new(
         agent_id,
+        client,
         stack,
         inject_receiver,
         event_receiver,
@@ -234,7 +285,7 @@ pub async fn run_mind(
         run_watcher,
     );
     loop {
-        match mind_stream.event_loop(engine.clone()).await.unwrap() {
+        match mind_stream.event_loop().await.unwrap() {
             MindFlag::Closed => return,
             MindFlag::Overflow => {
                 //让agent退栈

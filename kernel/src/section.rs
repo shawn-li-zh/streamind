@@ -40,13 +40,10 @@ impl SectionTag {
 }
 pub static TAGS: LazyLock<Vec<SectionTag>> = LazyLock::new(|| {
     vec![
+        SectionTag::new("reply", "<reply>", "</reply>"),
         SectionTag::new("think", "<think>", "</think>"),
         SectionTag::new("tool_call", "<tool_call>", "</tool_call>"),
-        SectionTag::new("reply", "<reply>", "</reply>"),
         SectionTag::new("render", "<render>", "</render>"),
-        SectionTag::new("error", "<error>", "</error>"),
         SectionTag::new("push", "<push>", "</push>"),
-        SectionTag::new("pop", "<pop>", "</pop>"),
-        SectionTag::new("interrupt", "<interrupt>", "</interrupt>"),
     ]
 });

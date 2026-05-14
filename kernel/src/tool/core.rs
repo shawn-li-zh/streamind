@@ -1,5 +1,5 @@
 use std::{
-    any::Any,
+    any::{self, Any},
     collections::{HashMap, HashSet},
     path::PathBuf,
     sync::Arc,
@@ -12,10 +12,12 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
 use crate::{
-    agent::AgentInfo, message::Binary, tool::{
+    agent::AgentInfo,
+    message::Binary,
+    tool::{
         context::ToolCallContext,
         value_type::{ToolValueType, TypeInfo, TypeItemInfo},
-    }
+    },
 };
 
 pub type ToolHandler = Box<
@@ -57,12 +59,14 @@ where
 
 pub type ToolPackagePool = HashMap<&'static str, ToolPackage>;
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(tag = "type", content = "payload")]
+#[serde(rename_all = "camelCase")]
 pub enum ToolReturnValue {
     Raw(String),
     Json(serde_json::Value),
     Image(Binary),
 }
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone)]
 pub struct ToolReturn {
     pub values: Vec<ToolReturnValue>,
 }
@@ -84,22 +88,16 @@ impl ToolReturn {
         Ok(ToolReturnValue::Json(serde_json::to_value(v)?).into())
     }
 }
-impl From<ToolReturnValue> for ToolReturn {
-    fn from(value: ToolReturnValue) -> Self {
-        return ToolReturn {
-            values: vec![value],
-        };
-    }
-}
 
-impl From<Vec<ToolReturnValue>> for ToolReturn {
-    fn from(values: Vec<ToolReturnValue>) -> Self {
-        return ToolReturn { values };
-    }
-}
-impl From<()> for ToolReturn {
-    fn from(value: ()) -> Self {
-        Self::new()
+impl<T: Serialize + 'static> From<T> for ToolReturn {
+    fn from(value: T) -> Self {
+        let id = any::TypeId::of::<T>();
+        if id == any::TypeId::of::<ToolReturnValue>() {
+            let v: Box<dyn Any> = Box::new(value);
+            let v = v.downcast::<ToolReturnValue>().unwrap();
+            return ToolReturn { values: vec![*v] };
+        }
+        ToolReturn::json(value).unwrap()
     }
 }
 
@@ -152,10 +150,10 @@ impl Tool {
             .collect();
     }
     //
-
     pub fn to_doc(&self) -> String {
         //注释
-        let mut annos = vec![self.annotation.to_string()];
+        let mut annos = vec![];
+        annos.extend(self.annotation.split("\n").map(|s| s.trim().to_string()));
         for arg in &self.type_signature.0 {
             annos.push(format!("@param {} {}", arg.name, arg.annotation));
         }

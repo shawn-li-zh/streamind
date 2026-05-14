@@ -2,9 +2,9 @@ use std::collections::HashMap;
 
 use kernel::tool::ToolPackagePool;
 
+pub mod editor;
 pub mod file;
 pub mod http;
-pub mod editor;
 pub mod tool;
 
 pub fn tool_pool() -> ToolPackagePool {
@@ -21,5 +21,13 @@ pub fn tool_pool() -> ToolPackagePool {
     //http
     let pkg = http::build_package();
     pool.insert(pkg.name, pkg);
+    //
+    for (key, pkg) in &pool {
+        println!("{}:{}", pkg.name, pkg.annotation);
+        for (key, tool) in pkg.tools() {
+            println!("{}\n\n", tool.to_doc());
+        }
+        println!("---")
+    }
     pool
 }

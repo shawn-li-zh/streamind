@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fmt::Display, path::PathBuf, time::Duration};
+use std::{collections::HashMap, f32::consts::E, fmt::Display, path::PathBuf, time::Duration};
 
 use serde::{Deserialize, Serialize};
 
@@ -31,7 +31,7 @@ pub struct ToolCallDetailItem {
     pub id: i64,
     pub package: String,
     pub tool: String,
-    pub result: ToolReturn,
+    pub values: Vec<ToolReturnValue>,
     pub status: ToolCallStatus,
     pub args: HashMap<String, serde_json::Value>,
     pub elapsed: String,
@@ -62,6 +62,7 @@ pub enum EnvEvent {
     //agent响应
     AgentReaction(Vec<Section>),
     AgentResponse(Vec<Section>),
+    Heartbeat,
     //用户消息
     UserRequest(UserMessage),
     //定时器
@@ -94,6 +95,10 @@ impl EnvEvent {
                 list.insert(0, content.content.into());
                 list
             }
+            EnvEvent::Heartbeat => {
+                let one = "Heartbeat".into();
+                vec![one]
+            }
             EnvEvent::Timer(data) => {
                 let one = format!(
                     "附加信息：{},源事件id：{}",
@@ -109,7 +114,7 @@ impl EnvEvent {
                         let mut list: Vec<Information> = vec![];
                         let head = format!("status={},elapsed={}", item.status, item.elapsed);
                         list.push(Information::Text(head));
-                        for value in item.result.values {
+                        for value in item.values {
                             match value {
                                 ToolReturnValue::Raw(text) => {
                                     list.push(Information::Text(text));
@@ -151,6 +156,7 @@ impl EnvEvent {
         let name = match self {
             EnvEvent::AgentReaction(_) => "agent反应",
             EnvEvent::AgentResponse(_) => "agent响应",
+            EnvEvent::Heartbeat=> "agent心跳",
             EnvEvent::UserRequest(_) => "用户消息",
             EnvEvent::Timer { .. } => "定时器",
             EnvEvent::ToolCallResult(_) => "工具调用结果",
@@ -166,7 +172,7 @@ impl EnvEvent {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCallResultItem {
     pub id: i64,
-    pub result: ToolReturn,
+    pub values: Vec<ToolReturnValue>,
     pub status: ToolCallStatus,
     pub time: Duration,
 }

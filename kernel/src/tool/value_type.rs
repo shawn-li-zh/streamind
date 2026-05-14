@@ -7,6 +7,7 @@ pub enum ToolValueType {
     Object(&'static str),
     Map(Box<ToolValueType>),
     Array(Box<ToolValueType>),
+    Any,
 }
 impl ToolValueType {
     pub fn to_doc(&self) -> String {
@@ -21,6 +22,7 @@ impl ToolValueType {
             ToolValueType::Object(ty) => ty.to_string(),
             ToolValueType::Map(ty) => format!("Record<string,{}>", ty.to_doc()),
             ToolValueType::Array(ty) => format!("{}[]", ty.to_doc()),
+            ToolValueType::Any => "any".to_string(),
         }
     }
 }

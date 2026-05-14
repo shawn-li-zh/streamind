@@ -1,12 +1,10 @@
 use std::path::PathBuf;
 
-use async_openai::types::{
+use async_openai::types::chat::{
     ChatCompletionRequestAssistantMessageArgs, ChatCompletionRequestMessage,
     ChatCompletionRequestMessageContentPartImage, ChatCompletionRequestMessageContentPartImageArgs,
     ChatCompletionRequestMessageContentPartText, ChatCompletionRequestMessageContentPartTextArgs,
-    ChatCompletionRequestSystemMessageArgs, ChatCompletionRequestSystemMessageContent,
-    ChatCompletionRequestSystemMessageContentPart, ChatCompletionRequestToolMessageArgs,
-    ChatCompletionRequestUserMessageArgs, ChatCompletionRequestUserMessageContent, ImageUrl,
+    ChatCompletionRequestSystemMessageArgs, ChatCompletionRequestUserMessageArgs, ImageUrl,
     ImageUrlArgs,
 };
 
@@ -15,6 +13,7 @@ use kernel::agent::{AgentContext, AgentInfo};
 
 pub static GENERATE_RULE: &str = include_str!("../../../prompts/common/generate_rule.md");
 pub static TOOL_CALL_RULE: &str = include_str!("../../../prompts/common/tool_call_rule.md");
+pub static RENDER_RULE: &str = include_str!("../../../prompts/common/render_rule.md");
 
 pub fn build_system_prompt(ctx: &AgentContext) -> String {
     let info = &ctx.info;
@@ -33,13 +32,10 @@ pub fn build_system_prompt(ctx: &AgentContext) -> String {
     # 基础信息:
     - 编号:{}
     - 名称:{}
-
-    # 生成格式
+    
     {}
-
-    # 工具调用规则
     {}
-
+    {}
     # 工具包列表(全部)
     {}
     "#,
@@ -47,6 +43,7 @@ pub fn build_system_prompt(ctx: &AgentContext) -> String {
         info.name,
         GENERATE_RULE,
         TOOL_CALL_RULE,
+        RENDER_RULE,
         items.join("\n")
     )
 }

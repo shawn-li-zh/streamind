@@ -10,8 +10,9 @@ use crate::common;
 pub struct ToolArgs {
     #[darling(rename = "anno")]
     pub anno: Option<String>,
+    #[darling(rename = "example")]
     pub example: Option<String>,
-    // pub active: Option<syn::Expr>,
+    #[darling(rename = "timeout")]
     pub timeout: Option<String>,
     #[darling(rename = "limit")]
     pub rate_limit: Option<String>,
@@ -146,8 +147,8 @@ fn build_tool_registration(
     let fn_ident = &item_fn.sig.ident;
     // 如果没有配置 name，默认使用函数名
     let tool_name = fn_ident.to_string();
-    let annotation = args.anno.unwrap_or_default();
-    let example = args.example.unwrap_or_default();
+    let annotation = args.anno.unwrap_or_default().trim().to_string();
+    let example = args.example.unwrap_or_default().trim().to_string();
 
     let is_async = item_fn.sig.asyncness.is_some();
 
@@ -201,7 +202,7 @@ pub fn parse_fn_signature(item_fn: &mut ItemFn) -> (Vec<TokenStream>, TokenStrea
             } else {
                 continue; // 忽略不规则的参数匹配
             };
-            if is_ctx_arg(&mut pat_type.attrs,true) {
+            if is_ctx_arg(&mut pat_type.attrs, true) {
                 continue;
             }
             // 提取 #[arg("...")] 属性并从 AST 中移除它

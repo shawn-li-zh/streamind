@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -37,15 +39,21 @@ impl ActiveModelBehavior for ActiveModel {}
     db_type = "String(StringLen::None)",
     rename_all = "camelCase"
 )]
+
 pub enum EnvEventType {
     #[default]
     AgentReaction,
     AgentResponse,
     UserRequest,
-
+    Heartbeat,
     ToolCallResult,
     Error,
     Timer,
     Interrupt,
     Interaction,
+}
+impl Display for EnvEventType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&serde_json::to_string(&self).unwrap())
+    }
 }

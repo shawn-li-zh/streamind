@@ -23,7 +23,7 @@ web = { path = "web" }
 tool_pkg = { path = "tool/tool_pkg" }
 
 # ai
-async-openai = "0.25"
+async-openai = "0.38.1"
 
 # 异步库
 tokio = { version = "1", features = ["full"] }
@@ -62,6 +62,7 @@ dotenvy = "0.15"
 
 rayon = "1.8" # 用于并行计算
 notify = "6"  # 文件系统监视
+scopeguard = "1.2.0"
 [dev-dependencies]
 cargo-nextest = "0.9"
 

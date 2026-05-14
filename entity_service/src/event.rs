@@ -34,6 +34,7 @@ pub mod convert {
         match event {
             EnvEvent::AgentReaction(sections) => json!(sections),
             EnvEvent::AgentResponse(sections) => json!(sections),
+            EnvEvent::Heartbeat => json!(()),
             EnvEvent::UserRequest(msg) => {
                 json!(msg)
             }
@@ -71,7 +72,7 @@ pub mod convert {
                 let msg: UserMessage = serde_json::from_value(payload).unwrap();
                 EnvEvent::UserRequest(msg)
             }
-
+            EnvEventType::Heartbeat => EnvEvent::Heartbeat,
             EnvEventType::ToolCallResult => {
                 EnvEvent::ToolCallResult(serde_json::from_value(payload).unwrap())
             }
@@ -96,6 +97,7 @@ pub mod convert {
         match event {
             EnvEvent::AgentReaction(_) => EnvEventType::AgentReaction,
             EnvEvent::AgentResponse(_) => EnvEventType::AgentResponse,
+            EnvEvent::Heartbeat=> EnvEventType::Heartbeat,
             EnvEvent::UserRequest(_) => EnvEventType::UserRequest,
             EnvEvent::Timer { .. } => EnvEventType::Timer,
             EnvEvent::ToolCallResult(_) => EnvEventType::ToolCallResult,
@@ -174,13 +176,13 @@ pub async fn update_agent_response(
         //删除
         let result = entity::event::Entity::delete_many()
             .filter(entity::event::Column::Id.eq(event_id))
-            .filter(entity::event::Column::EventType.eq(event_type))
+            .filter(entity::event::Column::EventType.eq(event_type.clone()))
             .exec(db)
             .await?;
         return if result.rows_affected == 1 {
             Ok(())
         } else {
-            Err(anyhow::anyhow!("删除失败"))
+            Err(anyhow::anyhow!("删除失败:{},{}", event_type, event_id))
         };
     }
     let data = serde_json::to_value(sections)?;

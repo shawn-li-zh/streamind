@@ -88,18 +88,18 @@ impl ToolEngine {
         ) {
             let mut item: ToolCallResultItem = ToolCallResultItem {
                 id,
-                result: ToolReturn::new(),
+                values: vec![],
                 time,
                 status: ToolCallStatus::Undo,
             };
             let event = match res {
                 Ok(res) => {
-                    item.result = res;
+                    item.values = res.values;
                     item.status = ToolCallStatus::Success;
                     ToolCallEvent::Success(item)
                 }
                 Err(e) => {
-                    item.result = ToolReturn::raw(e);
+                    item.values.push(ToolReturnValue::Raw(e.to_string()));
                     item.status = ToolCallStatus::Failure;
                     ToolCallEvent::Failure(item)
                 }

@@ -16,7 +16,6 @@ use reqwest::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use kernel::simple_id;
 use tool_macro::package;
 
 // pub fn build() -> ToolPackage {
@@ -34,14 +33,10 @@ pub mod http {
     };
     use anyhow::{Result, anyhow};
     use kernel::agent::AgentInfo;
-    use kernel::simple_id;
     use kernel::tool::core::ToolReturn;
     use kernel::{agent::AgentContext, tool::ToolCallContext};
-    use reqwest::{
-        Client, Method,
-        header::{HeaderMap, HeaderName, HeaderValue},
-    };
-    use serde::Serialize;
+    use reqwest::{Client, Method};
+    use serde::{Deserialize, Serialize};
     use serde_json::{Value, json};
     use std::{any::Any, collections::HashMap, time::Duration};
     use std::{path::Path, sync::Arc, time::Instant};
@@ -55,6 +50,7 @@ pub mod http {
     }
 
     #[derive(Serialize, Clone)]
+    #[class]
     pub struct HTTPConfig {
         pub default_headers: HashMap<String, String>,
         pub timeout_secs: u64,
@@ -85,17 +81,18 @@ pub mod http {
     #[tool(
         anno = "查看默认请求头组及基础配置（如超时时间）",
         example = r#"show_config()"#,
-        limit = "60s:20"
+        limit = "60s:30"
     )]
-    pub async fn show_config(#[ctx] ctx: ToolCallContext) -> anyhow::Result<ToolReturn> {
+    pub async fn show_config(#[ctx] ctx: ToolCallContext) -> anyhow::Result<HTTPConfig> {
         let ctx = ctx.context_data.read().await;
         let ctx = ctx.downcast_ref::<Context>().unwrap();
-        ToolReturn::json(&ctx.config)
+        Ok(ctx.config.clone())
     }
     #[tool(
         anno = "查看和编辑默认请求头组及基础配置（如超时时间）",
         example = r#"update_config(timeout=60, headers={"Authorization": "Bearer token123"})"#,
-        limit = "60s:20"
+        limit = "60s:30",
+        timeout = "5m"
     )]
     pub async fn update_config(
         #[arg("新的默认请求头，会与现有请求头合并")] headers: Option<HashMap<String, String>>,
@@ -112,12 +109,13 @@ pub mod http {
         }
         Ok(())
     }
+
     #[tool(
-        anno = "发起网络请求。支持在 body 中嵌入 '<file:相对路径>' 语法自动提取文件进行 multipart/form-data 上传。
-        返回请求id,使用detail工具来查看详情。",
+        anno = r#"发起网络请求。支持在 body 中嵌入 '<file:相对路径>' 语法自动提取文件进行 multipart/form-data 上传。
+        返回请求id,使用detail工具来查看详情。"#,
         example = r#"request(method="POST", url="http://api.com/upload", body={"name":"avatar", "file":"<file:./test.png>"})"#,
-        limit = "30s:15"
-        timeout="5m"
+        limit = "30s:15",
+        timeout = "5m"
     )]
     pub async fn request(
         #[arg("请求方法，如 GET, POST, PUT, DELETE")] method: String,
@@ -126,7 +124,7 @@ pub mod http {
         #[arg(
             "请求体。如果是表单上传，请传入JSON Object。值如果为 '<file:路径>'，则自动提取该文件上传"
         )]
-        body: Option<Value>,
+        body: Option<HashMap<String, Value>>,
         #[ctx] ctx: ToolCallContext,
     ) -> anyhow::Result<ToolReturn> {
         let start_time = Instant::now();
@@ -176,8 +174,8 @@ pub mod http {
     }
 
     #[tool(
-        anno = "根据请求ID查看响应详情。codes 可选值: status, headers, body, elapsed, size。
-        body有时候可能因为内容过长，而存入了临时文件，你需要使用editor.load_file和editor.read来进行阅读",
+        anno = r#"根据请求ID查看响应详情。codes 可选值: [status, headers, body, elapsed, size],返回结果就是这些字段组合的对象。
+        body有时候可能因为内容过长，而存入了临时文件，你需要额外使用editor.load_file和editor.read来进行阅读"#,
         example = r#"detail(id="abc123", codes=["status", "body"])"#,
         limit = "60s:30"
     )]
@@ -234,7 +232,7 @@ pub mod http {
             }
         }
 
-       ToolReturn::json(result)
+        ToolReturn::json(result)
     }
 }
 
@@ -285,53 +283,53 @@ fn assemble_headers(
 }
 
 /// 2. 组装 Body：处理 <file:path> 逻辑并决定请求格式
-fn assemble_body(root_path: &PathBuf, body: Option<Value>) -> anyhow::Result<PreparedBody> {
-    let val = match body {
+fn assemble_body(
+    root_path: &PathBuf,
+    body: Option<HashMap<String, Value>>,
+) -> anyhow::Result<PreparedBody> {
+    let map = match body {
         Some(v) => v,
         None => return Ok(PreparedBody::Empty),
     };
 
-    if let Value::Object(ref map) = val {
-        // 扫描是否包含文件标记
-        let has_file = map.values().any(|v| {
-            v.as_str()
-                .map_or(false, |s| s.starts_with("<file:") && s.ends_with(">"))
-        });
+    let has_file = map.values().any(|v| {
+        v.as_str()
+            .map_or(false, |s| s.starts_with("<file:") && s.ends_with(">"))
+    });
 
-        if has_file {
-            let mut form = multipart::Form::new();
-            for (k, v) in map {
-                if let Some(s) = v.as_str() {
-                    if s.starts_with("<file:") && s.ends_with(">") {
-                        // 提取并读取文件
-                        let rel_path = &s[6..s.len() - 1];
-                        let full_path = Path::new(root_path).join(rel_path);
+    if has_file {
+        let mut form = multipart::Form::new();
+        for (k, v) in map {
+            if let Some(s) = v.as_str() {
+                if s.starts_with("<file:") && s.ends_with(">") {
+                    // 提取并读取文件
+                    let rel_path = &s[6..s.len() - 1];
+                    let full_path = Path::new(root_path).join(rel_path);
 
-                        let file_name = full_path
-                            .file_name()
-                            .and_then(|n| n.to_str())
-                            .unwrap_or("file")
-                            .to_string();
+                    let file_name = full_path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("file")
+                        .to_string();
 
-                        let bytes = std::fs::read(&full_path)
-                            .map_err(|e| anyhow::anyhow!("读取文件失败 {:?}: {}", full_path, e))?;
+                    let bytes = std::fs::read(&full_path)
+                        .map_err(|e| anyhow::anyhow!("读取文件失败 {:?}: {}", full_path, e))?;
 
-                        form = form.part(
-                            k.clone(),
-                            multipart::Part::bytes(bytes).file_name(file_name),
-                        );
-                        continue;
-                    }
+                    form = form.part(
+                        k.clone(),
+                        multipart::Part::bytes(bytes).file_name(file_name),
+                    );
+                    continue;
                 }
-                // 普通文本字段
-                form = form.text(k.clone(), v.to_string());
             }
-            return Ok(PreparedBody::Multipart(form));
+            // 普通文本字段
+            form = form.text(k.clone(), v.to_string());
         }
+        return Ok(PreparedBody::Multipart(form));
     }
 
     // 如果不是对象或不含文件，走普通 JSON
-    Ok(PreparedBody::Json(val))
+    Ok(PreparedBody::Json(serde_json::to_value(map).unwrap()))
 }
 
 async fn process_response(

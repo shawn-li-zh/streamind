@@ -29,7 +29,9 @@ pub struct Model {
     #[sea_orm(column_type = "Timestamp")]
     #[serde(with = "date_time_option")]
     pub startup_time: Option<chrono::DateTime<chrono::Local>>,
-
+    #[sea_orm(column_type = "Timestamp")]
+    #[serde(with = "date_time_option")]
+    pub sleep_until: Option<chrono::DateTime<chrono::Local>>,
     #[sea_orm(column_type = "Timestamp", not_null)]
     #[serde(with = "date_time")]
     pub create_time: chrono::DateTime<chrono::Local>,

@@ -7,6 +7,7 @@ use sea_orm::{
 pub mod agent;
 pub mod agent_permission;
 pub mod component;
+pub mod dependence;
 pub mod event;
 pub mod model;
 pub mod section;
@@ -26,6 +27,8 @@ pub async fn init() -> anyhow::Result<()> {
     let db = Database::connect(opt).await.expect("数据库连接失败");
     db.get_schema_registry("entity::*").sync(&db).await?;
     DB.set(db).unwrap();
+    //重写前端导入映射
+    dependence::rewrite_manifest().await?;
     Ok(())
 }
 

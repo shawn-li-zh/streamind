@@ -2,9 +2,9 @@ use async_openai::{
     Client,
     config::OpenAIConfig,
     error::OpenAIError,
-    types::{
+    types::chat::{
         ChatCompletionRequestMessage, ChatCompletionResponseStream,
-        CreateChatCompletionRequestArgs, CreateChatCompletionResponse,
+        CreateChatCompletionRequestArgs, CreateChatCompletionResponse, ReasoningEffort,
     },
 };
 #[derive(Debug, Clone)]
@@ -19,6 +19,7 @@ impl LLMEngine {
     ) -> Result<ChatCompletionResponseStream, OpenAIError> {
         let request = CreateChatCompletionRequestArgs::default()
             .model(self.model.name.clone())
+            .reasoning_effort(ReasoningEffort::High)
             .messages(messages)
             .build()?;
         let stream = self.client.chat().create_stream(request).await;
@@ -31,6 +32,7 @@ impl LLMEngine {
     ) -> Result<CreateChatCompletionResponse, OpenAIError> {
         let request = CreateChatCompletionRequestArgs::default()
             .model(self.model.name.clone())
+            .reasoning_effort(ReasoningEffort::Medium)
             .messages(messages)
             .build()?;
         let res = self.client.chat().create(request).await;
@@ -38,3 +40,4 @@ impl LLMEngine {
         return res;
     }
 }
+

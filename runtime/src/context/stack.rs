@@ -1,24 +1,24 @@
 use std::{
+    backtrace::Backtrace,
     collections::HashMap,
     fs::File,
     io::Write,
     sync::{Arc, LazyLock},
 };
 
-use async_openai::types::ChatCompletionRequestMessage;
 use entity::event::EnvEventType;
-use entity_service::event::convert::to_type_enum;
 use futures::{Stream, StreamExt, stream};
 
 use kernel::{
     agent::AgentEvent,
     message::{Message, Role},
+    section::{self, Section},
 };
 use tracing::{error, info};
 
 use crate::{
     kit::{message_kit, prompt_kit},
-    llm_engine::LLMEngine,
+    llm::client::{ChatClient, LLMClient},
 };
 
 /// test
@@ -71,14 +71,20 @@ impl MindStack {
         }
     }
     pub fn push_events(&mut self, event_buffer: &mut Vec<AgentEvent>) {
+        info!("received events [{}]",event_buffer.len());
         let buffer = std::mem::take(event_buffer);
         // if let Some(last) = buffer.last() {
         //     self.last = to_type_enum(&last.data);
         // }
         for event in buffer {
             let msg = event.to_message();
-            let len = msg.size;
-            self.push_msg(message_kit::to_sdk_message(msg), len);
+            self.push_msg(msg);
+        }
+    }
+    pub fn push_response(&mut self, sections: Vec<Section>) {
+        if let Some(output) = message_kit::to_assistant_ouput(sections) {
+            let msg = Role::assistant().text(output);
+            self.push_msg(msg);
         }
     }
     pub fn push(&mut self, pos: usize, node: MindNode) {
@@ -94,13 +100,13 @@ impl MindStack {
         }
         return removed;
     }
-    pub fn push_msg(&mut self, msg: ChatCompletionRequestMessage, len: usize) {
-        self.content_len += len;
-        let s = format!("{:?}\n\n", &msg);
-        self.log_file.write(s.as_bytes()).unwrap();
-        self.log_file.flush().unwrap();
+    pub fn push_msg(&mut self, msg: Message) {
+        self.content_len += msg.size;
+        // let s = format!("{:?}\n\n", &msg);
+        // self.log_file.write(s.as_bytes()).unwrap();
+        // self.log_file.flush().unwrap();
         let node: &mut MindNode = self.last_mut().unwrap();
-        node.push(msg, len);
+        node.push(msg);
     }
     fn last_ref(&self) -> Option<&MindNode> {
         self.nodes.last()
@@ -108,9 +114,8 @@ impl MindStack {
     fn last_mut(&mut self) -> Option<&mut MindNode> {
         self.nodes.last_mut()
     }
-    fn messages(&self) -> Vec<ChatCompletionRequestMessage> {
-        let msg = message_kit::to_sdk_message(self.system_prompt.clone());
-        let mut msgs = vec![msg];
+    fn messages(&self) -> Vec<Message> {
+        let mut msgs = vec![self.system_prompt.clone()];
         for node in &self.nodes {
             msgs.extend(node.to_messages());
         }
@@ -118,25 +123,22 @@ impl MindStack {
     }
     pub async fn chunk_stream(
         &self,
-        llm_engine: Arc<LLMEngine>,
+        llm_engine: Arc<dyn ChatClient>,
     ) -> std::pin::Pin<Box<dyn Stream<Item = String> + Send>> {
         let messages = self.messages();
         // println!("{:#?}", &messages);
-        let llm_stream = llm_engine.stream(messages).await.unwrap();
+        let llm_stream = llm_engine
+            .stream(messages)
+            .await
+            .expect("Failed to llm stream");
+
         llm_stream
-            .map(|c| match c {
-                // 优化：使用 first_mut 和 and_then 扁平化取值，避免繁杂的 if/else
-                Ok(mut r) => r
-                    .choices
-                    .first_mut()
-                    .and_then(|choice| choice.delta.content.take())
-                    .unwrap_or_default(),
+            .map(|r| match r {
+                Ok(v) => v,
                 Err(e) => {
-                    let section = format!("<error>Stream error: {:?}</error>", &e);
-                    error!("{}", e);
-                    // &self.inject_section(&section);
-                    // String::new()
-                    section
+                    let a = Backtrace::capture();
+                    eprintln!("{:#?}", a);
+                    format!("<error>{e}</error>")
                 }
             })
             .boxed()
@@ -159,12 +161,12 @@ pub struct MindNode {
     pub pos: usize,
     pub title: String,
     pub content: String,
-    pub messages: Vec<ChatCompletionRequestMessage>,
+    pub messages: Vec<Message>,
     //上下文长度
     pub content_len: usize,
 }
 impl MindNode {
-    pub fn to_messages(&self) -> Vec<ChatCompletionRequestMessage> {
+    pub fn to_messages(&self) -> Vec<Message> {
         let mut msgs = Vec::with_capacity(self.messages.len() + 1);
         //里面的内容都是第一人称
         let state = Role::system().text(format!(
@@ -174,13 +176,13 @@ impl MindNode {
             </栈节点>"#,
             self.pos, self.title, self.content
         ));
-        msgs.push(message_kit::to_sdk_message(state));
+        msgs.push(state);
         msgs.extend(self.messages.clone());
         msgs
     }
 
-    pub fn push(&mut self, msg: ChatCompletionRequestMessage, len: usize) {
+    pub fn push(&mut self, msg: Message) {
+        self.content_len += msg.size;
         self.messages.push(msg);
-        self.content_len += len;
     }
 }

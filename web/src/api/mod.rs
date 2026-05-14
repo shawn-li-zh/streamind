@@ -1,12 +1,13 @@
 use axum::{
     Router,
-    routing::{get, post, put},
+    routing::{delete, get, post, put},
 };
 
 mod agent;
 mod event;
 mod model;
 mod render_component;
+mod render_dependence;
 // mod render_state;
 mod section;
 mod state;
@@ -44,6 +45,19 @@ pub fn inject_router(mut router: Router) -> Router {
         "/api/render_component/{id}",
         get(render_component::get_by_id),
     );
+    //依赖
+    router = router
+        .route("/api/render_dependence/list", get(render_dependence::list))
+        .route("/api/render_dependence", post(render_dependence::create))
+        .route("/api/render_dependence", put(render_dependence::update))
+        .route(
+            "/api/render_dependence/{id}",
+            delete(render_dependence::remove),
+        )
+        .route(
+            "/api/render_dependence/download_to_local/{id}",
+            get(render_dependence::download_to_local),
+        );
     //渲染
     // router = router
     //     .route("/api/render_state/{id}", get(render_state::get_by_id))
