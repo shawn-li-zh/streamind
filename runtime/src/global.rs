@@ -10,9 +10,12 @@ use entity::model::ModelStatus;
 use kernel::{agent::AgentContext, tool::ToolPackagePool};
 use tokio::sync::RwLock;
 
-use crate::{core::Agent, llm::{client::ChatClient, deepseek::DeepseekClient}};
+use crate::{
+    agent::instance::AgentInstance,
+    llm::{client::ChatClient, deepseek::DeepseekClient},
+};
 //全局agent池
-pub static AGENT_POOL: LazyLock<RwLock<HashMap<u32, Arc<RwLock<Agent>>>>> =
+pub static AGENT_POOL: LazyLock<RwLock<HashMap<u32, Arc<AgentInstance>>>> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
 
 pub static AGENT_CTX_POOL: LazyLock<RwLock<HashMap<u32, Arc<AgentContext>>>> =
@@ -46,8 +49,9 @@ pub async fn init() -> anyhow::Result<()> {
         let mut p = AGENT_POOL.write().await;
         for agent_info in agents {
             let id = agent_info.id;
-            let agent = Agent::new(agent_info).await;
+            let (agent, runtime, mind) = AgentInstance::new(agent_info).await;
             p.insert(id, agent);
+            runtime.start(mind);
         }
     }
 

@@ -14,7 +14,7 @@ pub struct Model {
     #[sea_orm(column_type = "Text")]
     pub life: serde_json::Value,
     pub use_times: u32,
-    pub is_valid: bool,
+    pub disused: bool,
     pub purpose: String,
     #[sea_orm(column_type = "Timestamp", not_null)]
     #[serde(with = "date_time")]
@@ -22,4 +22,3 @@ pub struct Model {
 }
 
 impl ActiveModelBehavior for ActiveModel {}
-

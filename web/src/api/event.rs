@@ -1,21 +1,10 @@
 use axum::extract::{Path, Query};
 
-use entity::event::EnvEventType;
+use entity::event::{EnvEventStatus, EnvEventType};
 
 use serde::Deserialize;
 
 use crate::wrapper::ApiResponse;
-#[derive(Debug, Deserialize)]
-pub struct QueryReq {
-    pub agent_id: u32,
-    pub state_id: i64,
-}
-pub async fn list(Query(req): Query<QueryReq>) -> ApiResponse<Vec<entity::event::Model>> {
-    match entity_service::event::list(req.agent_id, req.state_id).await {
-        Ok(v) => ApiResponse::success(v),
-        Err(e) => ApiResponse::error(e),
-    }
-}
 
 #[derive(Debug, Deserialize)]
 pub struct LoadReq {
@@ -26,6 +15,58 @@ pub struct LoadReq {
 }
 pub async fn load(Query(req): Query<LoadReq>) -> ApiResponse<Vec<entity::event::Model>> {
     match entity_service::event::load(req.agent_id, req.event_id, req.size, req.types).await {
+        Ok(v) => ApiResponse::success(v),
+        Err(e) => ApiResponse::error(e),
+    }
+}
+
+pub async fn count_by_status(
+    Path(agent_id): Path<u32>,
+) -> ApiResponse<Vec<entity_service::event::StatusCount>> {
+    let types = vec![
+        EnvEventType::UserRequest,
+        EnvEventType::Heartbeat,
+        EnvEventType::ToolCallResult,
+        EnvEventType::Error,
+        EnvEventType::Timer,
+        EnvEventType::Interrupt,
+        EnvEventType::Interaction,
+    ];
+    match entity_service::event::count_by_status(agent_id, Some(types)).await {
+        Ok(v) => ApiResponse::success(v),
+        Err(e) => ApiResponse::error(e),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ListReq {
+    pub agent_id: u32,
+    pub status: Option<EnvEventStatus>,
+    pub page: Option<u64>,
+    pub size: Option<u64>,
+}
+
+pub async fn list(
+    Query(req): Query<ListReq>,
+) -> ApiResponse<Vec<entity_service::event::EventItem>> {
+    let types = vec![
+        EnvEventType::UserRequest,
+        EnvEventType::Heartbeat,
+        EnvEventType::ToolCallResult,
+        EnvEventType::Error,
+        EnvEventType::Timer,
+        EnvEventType::Interrupt,
+        EnvEventType::Interaction,
+    ];
+    match entity_service::event::list_env_events(
+        req.agent_id,
+        Some(types),
+        req.status,
+        req.page,
+        req.size,
+    )
+    .await
+    {
         Ok(v) => ApiResponse::success(v),
         Err(e) => ApiResponse::error(e),
     }

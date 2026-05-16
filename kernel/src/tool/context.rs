@@ -10,9 +10,9 @@ use chrono::Local;
 use tokio::sync::RwLock;
 
 use crate::{
-    agent::{AgentContext, AgentInfo},
+    agent::AgentContext,
     tool::{
-        SafeAny, Tool, ToolPackage, call,
+        ContextData, SafeAny, Tool, ToolPackage,
         plugin::{
             interceptor::{ContentSizeLimiter, PermissonChecker, RateLimiter, ToolCallnterceptor},
             wrapper::TimeoutWrapper,
@@ -31,53 +31,62 @@ pub struct ToolContext {
     pub interceptors: Vec<Box<dyn ToolCallnterceptor + 'static + Send + Sync>>,
 }
 impl ToolContext {
-    pub fn from(agent_info: &AgentInfo, pkg: &'static ToolPackage, tool: &'static Tool) -> Self {
+    pub fn from(agent_info: AgentContext, pkg: &'static ToolPackage, tool: &'static Tool) -> Self {
         let mut ctx = ToolContext {
             wrapper: TimeoutWrapper {
                 time: Duration::from_secs(*TIME_OUT),
             },
             interceptors: vec![],
         };
-        if let Some(build) = RateLimiter::build(agent_info, pkg, tool) {
+        if let Some(build) = RateLimiter::build(agent_info.clone(), pkg, tool) {
             ctx.interceptors.push(Box::new(build));
         }
-        if let Some(build) = ContentSizeLimiter::build(agent_info, pkg, tool) {
+        if let Some(build) = ContentSizeLimiter::build(agent_info.clone(), pkg, tool) {
             ctx.interceptors.push(Box::new(build));
         }
-        if let Some(build) = PermissonChecker::build(agent_info, pkg, tool) {
+        if let Some(build) = PermissonChecker::build(agent_info.clone(), pkg, tool) {
             ctx.interceptors.push(Box::new(build));
         }
         ctx
     }
 }
 pub struct ToolPackageContext {
-    pub data: Arc<RwLock<SafeAny>>,
+    pkg: &'static ToolPackage,
+    agent_info: AgentContext,
+    pub data: ContextData,
     pub tool_contexts: HashMap<&'static str, Arc<ToolContext>>,
 }
 
 impl ToolPackageContext {
-    pub fn form(agent_info: &AgentInfo, pkg: &'static ToolPackage) -> Self {
-        let data = (pkg.context_builder)(agent_info);
+    pub fn form(agent_info: AgentContext, pkg: &'static ToolPackage) -> Self {
+        let data = (pkg.context_builder)(agent_info.clone());
 
         let mut map: HashMap<&str, Arc<ToolContext>> = HashMap::new();
         for (name, tool) in pkg.tools() {
-            let ctx = ToolContext::from(agent_info, pkg, tool);
+            let ctx = ToolContext::from(agent_info.clone(), pkg, tool);
             map.insert(*name, Arc::new(ctx));
         }
         Self {
+            pkg,
+            agent_info,
             data: data,
             tool_contexts: map,
         }
     }
 
-    pub fn data(&self) -> Arc<RwLock<SafeAny>> {
+    pub fn data(&self) -> ContextData {
         self.data.clone()
+    }
+
+    pub async fn shutdown(&self) -> anyhow::Result<()> {
+        (self.pkg.recycler)(self.agent_info.clone(), self.data()).await?;
+        Ok(())
     }
 }
 
 pub struct ToolCallContext {
     pub agent_context: Arc<AgentContext>,
-    pub context_data: Arc<RwLock<SafeAny>>,
+    pub context_data: ContextData,
     pub workspace: PathBuf,
     pkg: &'static ToolPackage,
     tool: &'static Tool,
@@ -87,12 +96,16 @@ pub struct ToolCallContext {
 impl ToolCallContext {
     pub async fn new(
         agent_context: Arc<AgentContext>,
-        context_data: Arc<RwLock<SafeAny>>,
+        context_data: ContextData,
         pkg: &'static ToolPackage,
         tool: &'static Tool,
         call_id: String,
     ) -> Self {
-        let workspace = { PathBuf::from(&agent_context.info.workspace) };
+        let workspace = {
+            let cur = std::env::current_dir().unwrap();
+            let info = agent_context.info.read().await;
+            cur.join(&info.workspace)
+        };
         Self {
             agent_context,
             context_data,

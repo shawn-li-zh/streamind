@@ -20,6 +20,7 @@ pub struct Model {
     pub state_id: i64,
     #[sea_orm(column_type = "Text", not_null)]
     pub event_type: EnvEventType,
+    pub status: EnvEventStatus,
     #[sea_orm(not_null)]
     pub force: bool,
     #[sea_orm(column_type = "Text", not_null)]
@@ -39,7 +40,7 @@ impl ActiveModelBehavior for ActiveModel {}
     db_type = "String(StringLen::None)",
     rename_all = "camelCase"
 )]
-
+#[serde(rename_all = "camelCase")]
 pub enum EnvEventType {
     #[default]
     AgentReaction,
@@ -56,4 +57,18 @@ impl Display for EnvEventType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&serde_json::to_string(&self).unwrap())
     }
+}
+
+#[derive(EnumIter, DeriveActiveEnum, Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[sea_orm(
+    rs_type = "String",
+    db_type = "String(StringLen::None)",
+    rename_all = "camelCase"
+)]
+#[serde(rename_all = "camelCase")]
+pub enum EnvEventStatus {
+    #[default]
+    Pending,
+    Processing,
+    Done,
 }

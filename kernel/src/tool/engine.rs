@@ -6,6 +6,7 @@ use std::{
 
 use anyhow::{Error, Result, anyhow};
 
+use dashmap::DashMap;
 use tokio::{
     sync::{RwLock, mpsc},
     task::JoinHandle,
@@ -13,7 +14,7 @@ use tokio::{
 use tracing::debug;
 
 use crate::{
-    agent::{AgentContext, AgentInfo},
+    agent::AgentContext,
     event::{ToolCallEvent, ToolCallResultItem, ToolCallStatus},
     tool::{
         ToolPackagePool,
@@ -26,9 +27,19 @@ use crate::{
 pub struct ToolEngineContext {
     pub tool_packages: HashSet<&'static str>,
     pub package_pool: &'static ToolPackagePool,
-    package_contexts: HashMap<&'static str, Arc<ToolPackageContext>>,
+    package_contexts: DashMap<&'static str, Arc<ToolPackageContext>>,
 }
 impl ToolEngineContext {
+    pub fn new(
+        tool_packages: HashSet<&'static str>,
+        package_pool: &'static ToolPackagePool,
+    ) -> Self {
+        Self {
+            tool_packages: tool_packages,
+            package_pool: package_pool,
+            package_contexts: DashMap::new(),
+        }
+    }
     pub fn get_package(&self, pkg_name: &str) -> Option<&'static ToolPackage> {
         if !self.tool_packages.contains(pkg_name) && !self.tool_packages.contains("*") {
             return None;
@@ -38,26 +49,22 @@ impl ToolEngineContext {
     pub fn get_package_context(&self, pkg_name: &str) -> Option<Arc<ToolPackageContext>> {
         self.package_contexts.get(pkg_name).map(|v| v.clone())
     }
+
     //初始化
-    pub fn build(
-        agent_info: &AgentInfo,
-        tool_packages: HashSet<&'static str>,
-        package_pool: &'static ToolPackagePool,
-    ) -> Self {
-        let mut ctx = Self {
-            tool_packages,
-            package_pool,
-            package_contexts: HashMap::new(),
-        };
-        ctx.init(agent_info);
-        ctx
-    }
-    fn init(&mut self, agent_info: &AgentInfo) {
+    pub fn init(&self, agent_context: AgentContext) {
         for pkg_name in &self.tool_packages {
             let pkg = self.package_pool.get(pkg_name).expect("工具包不存在");
-            let pkg_ctx = ToolPackageContext::form(agent_info, pkg);
+            let pkg_ctx = ToolPackageContext::form(agent_context.clone(), pkg);
             self.package_contexts.insert(pkg.name, Arc::new(pkg_ctx));
         }
+    }
+    pub async fn shutdown(&self) -> anyhow::Result<()> {
+        for pkg_name in &self.tool_packages {
+            let pkg = self.package_pool.get(pkg_name).expect("工具包不存在");
+            let pkg_ctx = self.package_contexts.get(pkg.name).expect("工具包不存在");
+            pkg_ctx.shutdown().await?;
+        }
+        Ok(())
     }
 }
 
@@ -84,12 +91,12 @@ impl ToolEngine {
             sender: mpsc::Sender<ToolCallEvent>,
             id: i64,
             res: anyhow::Result<ToolReturn>,
-            time: Duration,
+            elapsed: Duration,
         ) {
             let mut item: ToolCallResultItem = ToolCallResultItem {
                 id,
                 values: vec![],
-                time,
+                elapsed: humantime::format_duration(elapsed).to_string(),
                 status: ToolCallStatus::Undo,
             };
             let event = match res {

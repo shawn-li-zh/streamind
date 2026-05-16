@@ -29,6 +29,8 @@ anyhow = { version = "1", features = ["std"] }
 tracing = "0.1"
 # web
 axum = { version = "0.8.9", features = ["default"] }
+# 定时任务
+tokio-cron-scheduler = "0.15.1"
 # 工具库
 chrono = "0.4.44"
 dashmap = "6.1.0"

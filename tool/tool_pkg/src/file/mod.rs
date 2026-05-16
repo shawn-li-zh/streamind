@@ -4,22 +4,18 @@ use tool_macro::package;
 pub mod file {
     use std::path::{self, PathBuf};
 
-    use kernel::agent::AgentInfo;
+    use kernel::agent::{AgentContext, AgentInfo};
 
     use anyhow::Ok;
     use chrono::Local;
 
     use kernel::tool::ToolCallContext;
 
-    pub struct Context {
-        pub root_path: PathBuf,
-    }
+    pub struct Context {}
 
     #[context]
-    pub fn new_context(agent: &AgentInfo) -> Context {
-        Context {
-            root_path: agent.workspace.clone(),
-        }
+    pub fn new_context(agent: AgentContext) -> Context {
+        Context {}
     }
     #[class("文件对象")]
     pub struct File {

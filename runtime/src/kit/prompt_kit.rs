@@ -15,15 +15,15 @@ pub static GENERATE_RULE: &str = include_str!("../../../prompts/common/generate_
 pub static TOOL_CALL_RULE: &str = include_str!("../../../prompts/common/tool_call_rule.md");
 pub static RENDER_RULE: &str = include_str!("../../../prompts/common/render_rule.md");
 
-pub fn build_system_prompt(ctx: &AgentContext) -> String {
-    let info = &ctx.info;
+pub fn build_system_prompt(ctx: &AgentContext, agent_code: &str, agent_name: &str) -> String {
     let items: Vec<String> = ctx
         .tool_engine_context
         .tool_packages
         .iter()
         .map(|pkg_name| {
             let pkg = ctx.tool_engine_context.package_pool.get(pkg_name).unwrap();
-            format!("{}:{}", pkg_name, pkg.annotation)
+            let tool_size = pkg.tools().len();
+            format!("{}(tools:{tool_size}):{}", pkg_name, pkg.annotation)
         })
         .collect();
 
@@ -39,8 +39,8 @@ pub fn build_system_prompt(ctx: &AgentContext) -> String {
     # 工具包列表(全部)
     {}
     "#,
-        &info.code,
-        info.name,
+        agent_code,
+        agent_name,
         GENERATE_RULE,
         TOOL_CALL_RULE,
         RENDER_RULE,

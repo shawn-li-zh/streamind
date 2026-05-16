@@ -1,8 +1,10 @@
+use std::collections::HashMap;
+
+use kernel::section::Section;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter,
 };
 use serde::Serialize;
-use kernel::section::Section;
 
 use crate::DB;
 
@@ -53,8 +55,7 @@ pub async fn list(agent_id: u32, event_id: i64) -> anyhow::Result<Vec<entity::se
         .filter(entity::section::Column::AgentId.eq(agent_id))
         .filter(entity::section::Column::EventId.eq(event_id))
         .all(db)
-        .await
-        .unwrap();
+        .await?;
 
     Ok(sections)
 }
@@ -68,8 +69,7 @@ pub async fn list_by_event_ids(
         .filter(entity::section::Column::AgentId.eq(agent_id))
         .filter(entity::section::Column::EventId.is_in(event_ids))
         .all(db)
-        .await
-        .unwrap();
+        .await?;
 
     Ok(sections)
 }
@@ -79,8 +79,41 @@ pub async fn get_by_id(id: i64) -> anyhow::Result<Option<entity::section::Model>
     let section = entity::section::Entity::find()
         .filter(entity::section::Column::Id.eq(id))
         .one(db)
-        .await
-        .unwrap();
+        .await?;
 
     Ok(section)
+}
+#[derive(Debug, Serialize)]
+pub struct ListInRangeResp {
+    pub event: entity::event::Model,
+    pub sections: Vec<entity::section::Model>,
+}
+pub async fn list_in_range(
+    agent_id: u32,
+    start: i64,
+    end: i64,
+) -> anyhow::Result<Vec<ListInRangeResp>> {
+    let db = DB.get().unwrap();
+    let section = entity::section::Entity::find()
+        .filter(entity::section::Column::AgentId.eq(agent_id))
+        .filter(entity::section::Column::EventId.between(start, end))
+        .all(db)
+        .await?;
+    let mut map: HashMap<i64, Vec<entity::section::Model>> = HashMap::new();
+    for ele in section {
+        map.entry(ele.event_id).or_default().push(ele);
+    }
+    let events = entity::event::Entity::find()
+        .filter(entity::event::Column::AgentId.eq(agent_id))
+        .filter(entity::event::Column::Id.between(start, end))
+        .all(db)
+        .await?;
+    let resp = events
+        .into_iter()
+        .map(|event| {
+            let sections = map.remove(&event.id).unwrap_or_default();
+            ListInRangeResp { event, sections }
+        })
+        .collect();
+    Ok(resp)
 }

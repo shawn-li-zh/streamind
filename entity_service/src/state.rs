@@ -20,7 +20,7 @@ pub async fn push(
             ..Default::default()
         })
         .filter(entity::state::Column::Pos.gte(pos))
-        .filter(entity::state::Column::Id.eq(agent_id))
+        .filter(entity::state::Column::AgentId.eq(agent_id))
         .exec(db)
         .await?;
     //创建历史状态
@@ -52,7 +52,7 @@ pub async fn dumps(
     state_ids: Vec<i64>,
 ) -> anyhow::Result<()> {
     entity::state::Entity::update_many()
-       .set(entity::state::ActiveModel {
+        .set(entity::state::ActiveModel {
             dumped: Set(true),
             ..Default::default()
         })

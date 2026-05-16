@@ -6,7 +6,8 @@ use std::{
     sync::{Arc, LazyLock},
 };
 
-use entity::event::EnvEventType;
+use entity::event::{EnvEventStatus, EnvEventType};
+use entity_service::DB;
 use futures::{Stream, StreamExt, stream};
 
 use kernel::{
@@ -22,12 +23,14 @@ use crate::{
 };
 
 /// test
-static TEST: &str = include_str!("../../../test.xml");
-static OUTPUTS: LazyLock<(Vec<String>, Vec<String>)> = LazyLock::new(|| {
-    let (d1, d2) = TEST.split_once("<end/>").unwrap();
-    let d1 = split_into_random_chunks(d1, 2, 5);
-    let d2 = split_into_random_chunks(d2, 2, 5);
-    (d1, d2)
+static OUTPUTS: LazyLock<Vec<Vec<String>>> = LazyLock::new(|| {
+    if let Ok(test) = std::fs::read_to_string("./test.xml") {
+        return test
+            .split("<end/>")
+            .map(|item| split_into_random_chunks(item, 2, 5))
+            .collect();
+    }
+    vec![]
 });
 
 fn split_into_random_chunks(input: &str, min_size: usize, max_size: usize) -> Vec<String> {
@@ -57,7 +60,8 @@ pub struct MindStack {
     id_map_pos: HashMap<i64, usize>,
     //上下文长度
     pub content_len: usize,
-    last: EnvEventType,
+    last_batch_ids: Vec<i64>,
+    step: usize,
 }
 impl MindStack {
     pub fn new(system_prompt: String, log_file: File) -> Self {
@@ -67,25 +71,40 @@ impl MindStack {
             nodes: vec![],
             id_map_pos: HashMap::new(),
             content_len: 0,
-            last: EnvEventType::AgentResponse,
+            step: 0,
+            last_batch_ids: vec![],
         }
     }
     pub fn push_events(&mut self, event_buffer: &mut Vec<AgentEvent>) {
-        info!("received events [{}]",event_buffer.len());
+        info!("received events [{}]", event_buffer.len());
         let buffer = std::mem::take(event_buffer);
-        // if let Some(last) = buffer.last() {
-        //     self.last = to_type_enum(&last.data);
-        // }
+        self.last_batch_ids.clear();
         for event in buffer {
+            self.last_batch_ids.push(event.id);
             let msg = event.to_message();
             self.push_msg(msg);
         }
+        let ids = self.last_batch_ids.clone();
+        tokio::spawn(async move {
+            let db = DB.get().unwrap();
+            entity_service::event::update_event_status(db, ids, EnvEventStatus::Processing)
+                .await
+                .unwrap();
+        });
     }
     pub fn push_response(&mut self, sections: Vec<Section>) {
         if let Some(output) = message_kit::to_assistant_ouput(sections) {
             let msg = Role::assistant().text(output);
             self.push_msg(msg);
         }
+        self.step += 1;
+        let ids = self.last_batch_ids.clone();
+        tokio::spawn(async move {
+            let db = DB.get().unwrap();
+            entity_service::event::update_event_status(db, ids, EnvEventStatus::Done)
+                .await
+                .unwrap();
+        });
     }
     pub fn push(&mut self, pos: usize, node: MindNode) {
         self.id_map_pos.insert(node.id, self.nodes.len());
@@ -121,40 +140,37 @@ impl MindStack {
         }
         msgs
     }
+    // pub async fn chunk_stream(
+    //     &self,
+    //     llm_engine: Arc<dyn ChatClient>,
+    // ) -> std::pin::Pin<Box<dyn Stream<Item = String> + Send>> {
+    //     let messages = self.messages();
+    //     // println!("{:#?}", &messages);
+    //     let llm_stream = llm_engine
+    //         .stream(messages)
+    //         .await
+    //         .expect("Failed to llm stream");
+
+    //     llm_stream
+    //         .map(|r| match r {
+    //             Ok(v) => v,
+    //             Err(e) => {
+    //                 let a = Backtrace::capture();
+    //                 eprintln!("{:#?}", a);
+    //                 format!("<error>{e}</error>")
+    //             }
+    //         })
+    //         .boxed()
+    // }
+
     pub async fn chunk_stream(
         &self,
         llm_engine: Arc<dyn ChatClient>,
     ) -> std::pin::Pin<Box<dyn Stream<Item = String> + Send>> {
-        let messages = self.messages();
-        // println!("{:#?}", &messages);
-        let llm_stream = llm_engine
-            .stream(messages)
-            .await
-            .expect("Failed to llm stream");
-
-        llm_stream
-            .map(|r| match r {
-                Ok(v) => v,
-                Err(e) => {
-                    let a = Backtrace::capture();
-                    eprintln!("{:#?}", a);
-                    format!("<error>{e}</error>")
-                }
-            })
-            .boxed()
+        let o = &*OUTPUTS;
+        let i = self.step % o.len();
+        stream::iter(o[i].clone()).boxed()
     }
-
-    // pub async fn chunk_stream(
-    //     &self,
-    //     llm_engine: Arc<LLMEngine>,
-    // ) -> std::pin::Pin<Box<dyn Stream<Item = String> + Send>> {
-    //     let o = &*OUTPUTS;
-    //     match &self.last {
-    //         EnvEventType::UserRequest => stream::iter(o.0.clone()).boxed(),
-    //         EnvEventType::ToolCallResult => stream::iter(o.1.clone()).boxed(),
-    //         _ => stream::empty().boxed(),
-    //     }
-    // }
 }
 pub struct MindNode {
     pub id: i64,

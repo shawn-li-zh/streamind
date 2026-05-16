@@ -38,8 +38,11 @@ pub struct ToolCallDetailItem {
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TimerData {
-    pub attach: String,
-    pub source_event_id: u64,
+    pub id: i64,
+    pub corn: String,
+    pub payload: String,
+    pub times: u32,
+    pub trigger_times: u32,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InteractionData {
@@ -100,11 +103,16 @@ impl EnvEvent {
                 vec![one]
             }
             EnvEvent::Timer(data) => {
-                let one = format!(
-                    "附加信息：{},源事件id：{}",
-                    data.attach, data.source_event_id
-                )
-                .into();
+                let times = if data.times == 0 {
+                    "无限".to_string()
+                } else {
+                    data.times.to_string()
+                };
+                let head = format!(
+                    "定时器id:{} 周期:{} 触发次数:{}/{}",
+                    data.id, data.corn, data.trigger_times, times
+                );
+                let one = format!("{}\n附加信息:\n{}", head, data.payload).into();
                 vec![one]
             }
             EnvEvent::ToolCallResult(results) => {
@@ -156,7 +164,7 @@ impl EnvEvent {
         let name = match self {
             EnvEvent::AgentReaction(_) => "agent反应",
             EnvEvent::AgentResponse(_) => "agent响应",
-            EnvEvent::Heartbeat=> "agent心跳",
+            EnvEvent::Heartbeat => "agent心跳",
             EnvEvent::UserRequest(_) => "用户消息",
             EnvEvent::Timer { .. } => "定时器",
             EnvEvent::ToolCallResult(_) => "工具调用结果",
@@ -174,7 +182,7 @@ pub struct ToolCallResultItem {
     pub id: i64,
     pub values: Vec<ToolReturnValue>,
     pub status: ToolCallStatus,
-    pub time: Duration,
+    pub elapsed: String,
 }
 #[derive(Debug, Clone, Serialize)]
 pub struct CallItem {

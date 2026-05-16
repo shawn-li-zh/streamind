@@ -25,7 +25,7 @@ pub struct Model {
     pub avatar: String,
     #[sea_orm(column_type = "Text", default_value = "[]")]
     pub tool_packages: StringArray,
-
+    pub status: AgentStatus,
     #[sea_orm(column_type = "Timestamp")]
     #[serde(with = "date_time_option")]
     pub startup_time: Option<chrono::DateTime<chrono::Local>>,
@@ -40,3 +40,18 @@ pub struct Model {
 }
 
 impl ActiveModelBehavior for ActiveModel {}
+
+#[derive(EnumIter, DeriveActiveEnum, Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[sea_orm(
+    rs_type = "String",
+    db_type = "String(StringLen::None)",
+    rename_all = "camelCase"
+)]
+#[serde(rename_all = "camelCase")]
+pub enum AgentStatus {
+    #[default]
+    Idle, //空闲
+    Sleep,      //睡眠
+    Processing, //处理任务中
+    Paused,     //暂停 需要用户手动恢复到空闲
+}

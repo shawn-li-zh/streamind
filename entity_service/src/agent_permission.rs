@@ -12,7 +12,7 @@ pub async fn list(agent_id: u32) -> anyhow::Result<Vec<entity::agent_permission:
     //获取权限
     let res = entity::agent_permission::Entity::find()
         .filter(entity::agent_permission::Column::AgentId.eq(agent_id))
-        .filter(entity::agent_permission::Column::IsValid.eq(true))
+        .filter(entity::agent_permission::Column::Disused.eq(false))
         .all(db)
         .await?;
     Ok(res)
@@ -21,12 +21,12 @@ pub async fn list(agent_id: u32) -> anyhow::Result<Vec<entity::agent_permission:
 pub async fn revoke(db: &impl ConnectionTrait, agent_id: u32, id: i64) -> anyhow::Result<()> {
     entity::agent_permission::Entity::update_many()
         .set(entity::agent_permission::ActiveModel {
-            is_valid: Set(false),
+            disused: Set(true),
             ..Default::default()
         })
         .filter(entity::agent_permission::Column::AgentId.eq(agent_id))
         .filter(entity::agent_permission::Column::Id.eq(id))
-        .filter(entity::agent_permission::Column::IsValid.eq(true))
+        .filter(entity::agent_permission::Column::Disused.eq(false))
         .exec(db)
         .await?;
     Ok(())
@@ -43,13 +43,13 @@ pub async fn apply(
     let mut query = entity::agent_permission::Entity::find()
         .filter(entity::agent_permission::Column::AgentId.eq(agent_id))
         .filter(entity::agent_permission::Column::Code.eq(&code))
-        .filter(entity::agent_permission::Column::IsValid.eq(true));
+        .filter(entity::agent_permission::Column::Disused.eq(false));
     if let Some(sub_code) = &sub_code {
         query = query.filter(entity::agent_permission::Column::SubCode.eq(sub_code))
     }
     let one = query.one(db).await.unwrap();
     if let Some(one) = one {
-        if one.is_valid {
+        if !one.disused {
             return Err(anyhow::anyhow!("权限已存在"));
         }
     }

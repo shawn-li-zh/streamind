@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 
+use futures::FutureExt;
 use kernel::tool::ToolPackagePool;
 
+pub mod browser;
 pub mod editor;
 pub mod file;
 pub mod http;
@@ -21,6 +23,14 @@ pub fn tool_pool() -> ToolPackagePool {
     //http
     let pkg = http::build_package();
     pool.insert(pkg.name, pkg);
+    //浏览器
+    let mut pkg = browser::build_package();
+    pkg.recycler = Box::new(|_, _| {
+        println!("回收浏览器");
+        async { Ok(()) }.boxed()
+    });
+    pool.insert(pkg.name, pkg);
+
     //
     for (key, pkg) in &pool {
         println!("{}:{}", pkg.name, pkg.annotation);

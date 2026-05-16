@@ -18,7 +18,8 @@ pub fn package(args: TokenStream, input: TokenStream) -> TokenStream {
 
     let mut generated_types: Vec<proc_macro2::TokenStream> = Vec::new();
     let mut generated_tools = Vec::new();
-    let mut ctx_t = quote! {Box::new(|_|Arc::new(RwLock::new(())))};
+    let mut ctx_builder = quote! {Box::new(|_|Arc::new(RwLock::new(())))};
+    let mut shutdown = quote! {Box::new( |_,_|async {Ok(())}.boxed())};
     // 遍历模块中的所有的项 (struct, fn 等)
     if let Some((_, ref mut items)) = module.content {
         for item in items.iter_mut() {
@@ -31,7 +32,7 @@ pub fn package(args: TokenStream, input: TokenStream) -> TokenStream {
                         .position(|a| a.path().is_ident("class"))
                     {
                         let attr = item_struct.attrs.remove(idx);
-                        parse_type::handle_struct(item_struct,attr, &mut generated_types);
+                        parse_type::handle_struct(item_struct, attr, &mut generated_types);
                     }
                 }
 
@@ -46,7 +47,13 @@ pub fn package(args: TokenStream, input: TokenStream) -> TokenStream {
                         }
                         if a.path().is_ident("context") {
                             let attr = item_fn.attrs.remove(attr_idx);
-                            ctx_t = parse_ctx::handle_ctx(item_fn, attr);
+                            ctx_builder = parse_ctx::handle_ctx(item_fn, attr);
+                            continue;
+                        }
+                        if a.path().is_ident("shutdown") {
+                            let attr = item_fn.attrs.remove(attr_idx);
+                            shutdown = parse_ctx::handle_shutdown(item_fn, attr);
+                            continue;
                         }
                     }
                 }
@@ -66,6 +73,7 @@ pub fn package(args: TokenStream, input: TokenStream) -> TokenStream {
                     async_tool_handler,
                     sync_tool_handler,
                 };
+                use futures::FutureExt as _;
                 use kernel::tool::value_type::{ToolValueType, TypeInfo, TypeItemInfo};
                 let mut types = HashMap::new();
                 #(#generated_types)*
@@ -77,7 +85,8 @@ pub fn package(args: TokenStream, input: TokenStream) -> TokenStream {
                     #pkg_desc,
                     types,
                     tools,
-                    #ctx_t
+                    #ctx_builder,
+                    #shutdown
                  )
             }
         };

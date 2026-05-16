@@ -28,8 +28,12 @@
     }
 }
 </render>
-<pop>
+<push>
 1:测试
 
 重置
-</pop>
+</push>
+<end/>
+<tool_call>browser.lunch()</tool_call>
+<end/>
+<tool_call>browser.new_tab(url="https://element.eleme.cn/#/zh-CN/component/card")</tool_call>

@@ -8,12 +8,12 @@ use std::{
 };
 
 use crate::{
-    agent::{AgentContext, AgentInfo},
+    agent::AgentContext,
     tool::{Tool, ToolCallContext, ToolPackage, call::ToolCall},
 };
 
 pub trait ToolCallnterceptor {
-    fn build(agent: &AgentInfo, pkg: &'static ToolPackage, tool: &'static Tool) -> Option<Self>
+    fn build(agent: AgentContext, pkg: &'static ToolPackage, tool: &'static Tool) -> Option<Self>
     where
         Self: Sized;
     fn on_call(&self, ctx: &ToolCallContext, call: &ToolCall) -> anyhow::Result<()> {
@@ -66,7 +66,7 @@ impl RateLimiter {
 }
 
 impl ToolCallnterceptor for RateLimiter {
-    fn build(agent: &AgentInfo, pkg: &'static ToolPackage, tool: &'static Tool) -> Option<Self>
+    fn build(agent: AgentContext, pkg: &'static ToolPackage, tool: &'static Tool) -> Option<Self>
     where
         Self: Sized,
     {
@@ -89,7 +89,7 @@ pub struct ContentSizeLimiter {
     max_size: usize,
 }
 impl ToolCallnterceptor for ContentSizeLimiter {
-    fn build(agent: &AgentInfo, pkg: &'static ToolPackage, tool: &'static Tool) -> Option<Self>
+    fn build(agent: AgentContext, pkg: &'static ToolPackage, tool: &'static Tool) -> Option<Self>
     where
         Self: Sized,
     {
@@ -124,7 +124,7 @@ fn split_after_folder(path: &Path, marker: &str) -> Option<PathBuf> {
 //权限校验==========
 pub struct PermissonChecker {}
 impl ToolCallnterceptor for PermissonChecker {
-    fn build(agent: &AgentInfo, pkg: &'static ToolPackage, tool: &'static Tool) -> Option<Self>
+    fn build(agent: AgentContext, pkg: &'static ToolPackage, tool: &'static Tool) -> Option<Self>
     where
         Self: Sized,
     {

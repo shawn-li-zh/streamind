@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
 use crate::{
-    agent::AgentInfo,
+    agent::AgentContext,
     message::Binary,
     tool::{
         context::ToolCallContext,
@@ -35,8 +35,17 @@ pub type ActiveFn = Box<
         + Sync,
 >;
 pub type SafeAny = dyn Any + Send + Sync + 'static;
-pub type ContextBuilder = Box<dyn Fn(&AgentInfo) -> Arc<RwLock<SafeAny>> + Send + Sync>;
-
+pub type ContextData = Arc<RwLock<SafeAny>>;
+pub type ContextBuilder = Box<dyn Fn(AgentContext) -> ContextData + Send + Sync>;
+pub type PackageRecycler =
+    Box<dyn Fn(AgentContext, ContextData) -> BoxFuture<'static, anyhow::Result<()>> + Send + Sync>;
+pub fn async_package_recycler<F, Fut>(f: F) -> PackageRecycler
+where
+    F: Fn(AgentContext, ContextData) -> Fut + Send + Sync + 'static,
+    Fut: std::future::Future<Output = anyhow::Result<()>> + Send + 'static,
+{
+    Box::new(move |agent_info, context_data| f(agent_info, context_data).boxed())
+}
 pub fn async_tool_handler<F, Fut>(f: F) -> ToolHandler
 where
     F: Fn(HashMap<String, serde_json::Value>, ToolCallContext) -> Fut + Send + Sync + 'static,
@@ -209,6 +218,7 @@ pub struct ToolPackage {
     types: HashMap<&'static str, TypeInfo>,
     tools: HashMap<&'static str, Tool>,
     pub context_builder: ContextBuilder,
+    pub recycler: PackageRecycler,
 }
 impl ToolPackage {
     pub fn new(
@@ -217,6 +227,7 @@ impl ToolPackage {
         types: HashMap<&'static str, TypeInfo>,
         tools: HashMap<&'static str, Tool>,
         context_builder: ContextBuilder,
+        recycler: PackageRecycler,
     ) -> Self {
         Self {
             name,
@@ -224,6 +235,7 @@ impl ToolPackage {
             types,
             tools,
             context_builder,
+            recycler,
         }
     }
     pub fn get_tool(&self, tool_name: &str) -> Option<&Tool> {

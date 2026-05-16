@@ -56,7 +56,7 @@ pub mod http {
         pub timeout_secs: u64,
     }
     #[context]
-    pub fn new_context(ctx: &AgentInfo) -> Context {
+    pub fn new_context(ctx: AgentContext) -> Context {
         let mut default_headers = HashMap::new();
         default_headers.insert(
             "User-Agent".to_string(),

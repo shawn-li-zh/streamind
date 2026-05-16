@@ -51,7 +51,15 @@ pub fn to_assistant_ouput(sections: Vec<Section>) -> Option<String> {
 }
 
 pub async fn load_stack(agent_ctx: &AgentContext) -> anyhow::Result<MindStack> {
-    let agent_id = agent_ctx.info.id;
+    let (agent_id, agent_code, agent_name, workspace) = {
+        let info = agent_ctx.info.read().await;
+        (
+            info.id,
+            info.code.clone(),
+            info.name.clone(),
+            info.workspace.clone(),
+        )
+    };
     //查状态栈
     let states = entity_service::state::list(agent_id).await?;
     //查事件
@@ -77,8 +85,8 @@ pub async fn load_stack(agent_ctx: &AgentContext) -> anyhow::Result<MindStack> {
         arr.push(s);
     }
     //
-    let sp = prompt_kit::build_system_prompt(agent_ctx);
-    let path = agent_ctx.info.workspace.join("log.txt");
+    let sp = prompt_kit::build_system_prompt(agent_ctx, &agent_code, &agent_name);
+    let path = workspace.join("log.txt");
     let file = File::options().append(true).create(true).open(path)?;
     let mut stack = MindStack::new(sp, file);
     for state in states {

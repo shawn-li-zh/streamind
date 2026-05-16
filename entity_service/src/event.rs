@@ -1,14 +1,18 @@
 use chrono::Local;
-use entity::event::EnvEventType;
+use entity::{
+    agent,
+    event::{EnvEventStatus, EnvEventType}, format::date_time,
+};
 use kernel::{
     agent::{AgentEvent, AgentInfo},
     event::{EnvEvent, ToolCallDetailItem},
     section::Section,
 };
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter,
-    QueryOrder, QuerySelect,
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, EntityOrSelect, EntityTrait,
+    FromJsonQueryResult, FromQueryResult, QueryFilter, QueryOrder, QuerySelect,
 };
+use serde::Serialize;
 
 use crate::DB;
 
@@ -97,7 +101,7 @@ pub mod convert {
         match event {
             EnvEvent::AgentReaction(_) => EnvEventType::AgentReaction,
             EnvEvent::AgentResponse(_) => EnvEventType::AgentResponse,
-            EnvEvent::Heartbeat=> EnvEventType::Heartbeat,
+            EnvEvent::Heartbeat => EnvEventType::Heartbeat,
             EnvEvent::UserRequest(_) => EnvEventType::UserRequest,
             EnvEvent::Timer { .. } => EnvEventType::Timer,
             EnvEvent::ToolCallResult(_) => EnvEventType::ToolCallResult,
@@ -110,7 +114,8 @@ pub mod convert {
 
 pub async fn save(
     db: &impl ConnectionTrait,
-    agent_info: &AgentInfo,
+    agent_id: u32,
+    state_id: i64,
     event_data: EnvEvent,
     force: bool,
 ) -> anyhow::Result<(AgentEvent, entity::event::Model)> {
@@ -124,13 +129,14 @@ pub async fn save(
     let event_type = convert::to_type_enum(&event_data);
     let json = convert::to_json(event_data);
     let event_model = entity::event::ActiveModel {
-        agent_id: Set(agent_info.id),
-        state_id: Set(agent_info.state_id),
+        agent_id: Set(agent_id),
+        state_id: Set(state_id),
         step: Set(0),
         event_type: Set(event_type),
         force: Set(event.force),
         time: Set(event.time),
         data: Set(json),
+        status: Set(EnvEventStatus::Pending),
         ..Default::default()
     };
     let model: entity::event::Model = event_model.insert(db).await?;
@@ -151,6 +157,7 @@ pub async fn update_tool_call_result(
     let data = serde_json::to_value(details)?;
     let model = entity::event::ActiveModel {
         data: Set(data),
+        status: Set(EnvEventStatus::Pending),
         ..Default::default()
     };
 
@@ -188,6 +195,7 @@ pub async fn update_agent_response(
     let data = serde_json::to_value(sections)?;
     let model = entity::event::ActiveModel {
         data: Set(data),
+        status: Set(EnvEventStatus::Done),
         ..Default::default()
     };
     let result = entity::event::Entity::update_many()
@@ -201,7 +209,22 @@ pub async fn update_agent_response(
     }
     Ok(())
 }
-
+pub async fn update_event_status(
+    db: &impl ConnectionTrait,
+    event_ids: Vec<i64>,
+    status: EnvEventStatus,
+) -> anyhow::Result<()> {
+    let model = entity::event::ActiveModel {
+        status: Set(status),
+        ..Default::default()
+    };
+    entity::event::Entity::update_many()
+        .filter(entity::event::Column::Id.is_in(event_ids))
+        .set(model)
+        .exec(db)
+        .await?;
+    Ok(())
+}
 pub async fn list(agent_id: u32, state_id: i64) -> anyhow::Result<Vec<entity::event::Model>> {
     let db = DB.get().unwrap();
     let events = entity::event::Entity::find()
@@ -242,11 +265,81 @@ pub async fn load(
         select = select.filter(entity::event::Column::EventType.is_in(types));
     }
     let size = size.unwrap_or(30);
-    let mut events = select
+    let events = select
         .order_by_desc(entity::event::Column::Id)
         .limit(size)
         .all(db)
         .await?;
-    events.sort_by(|a, b| a.id.cmp(&b.id));
     Ok(events)
+}
+#[derive(Debug, Serialize, FromQueryResult)]
+pub struct EventItem {
+    pub id: i64,
+    pub event_type: EnvEventType,
+
+    pub status: EnvEventStatus,
+    pub force: bool,
+    #[serde(with = "date_time")]
+    pub time: chrono::DateTime<chrono::Local>,
+}
+pub async fn list_env_events(
+    agent_id: u32,
+    types: Option<Vec<EnvEventType>>,
+    status: Option<EnvEventStatus>,
+    page: Option<u64>,
+    size: Option<u64>,
+) -> anyhow::Result<Vec<EventItem>> {
+    
+    let db = DB.get().unwrap();
+    let mut select = entity::event::Entity::find()
+        .select_only()
+        .column(entity::event::Column::Id)
+        .column(entity::event::Column::EventType)
+        .column(entity::event::Column::Time)
+        .column(entity::event::Column::Status)
+        .column(entity::event::Column::Force)
+        .filter(entity::event::Column::AgentId.eq(agent_id));
+    if let Some(types) = types {
+        select = select.filter(entity::event::Column::EventType.is_in(types));
+    }
+    if let Some(status) = status {
+        select = select.filter(entity::event::Column::Status.eq(status));
+    }
+    let page = page.unwrap_or(1);
+    let size = size.unwrap_or(30);
+    let events = select
+        .order_by_desc(entity::event::Column::Id)
+        .offset((page - 1) * size)
+        .limit(size)
+        .into_model::<EventItem>()
+        .all(db)
+        .await?;
+    Ok(events)
+}
+
+#[derive(FromQueryResult, Serialize)]
+pub struct StatusCount {
+    pub status: EnvEventStatus,
+    pub count: i64, // 注意：COUNT(*) 在大多数数据库返回 i64/BigInt
+}
+//统计各个状态的事件数量
+pub async fn count_by_status(
+    agent_id: u32,
+    types: Option<Vec<EnvEventType>>,
+) -> anyhow::Result<Vec<StatusCount>> {
+    let db = DB.get().unwrap();
+    let mut select = entity::event::Entity::find()
+        .select_only() // 重点：不选所有字段，只选我们需要的
+        .column(entity::event::Column::Status) // 分组字段
+        .column_as(entity::event::Column::Id.count(), "count") // 统计字段 + 别名
+        .filter(entity::event::Column::AgentId.eq(agent_id));
+    if let Some(types) = types {
+        select = select.filter(entity::event::Column::EventType.is_in(types));
+    }
+    let counts = select
+        .group_by(entity::event::Column::Status)
+        .into_model::<StatusCount>()
+        .all(db)
+        .await?;
+    Ok(counts)
 }

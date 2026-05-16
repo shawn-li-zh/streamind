@@ -65,8 +65,8 @@ mod editor {
     };
 
     use kernel::{
-        agent::AgentInfo,
-        tool::{SafeAny, ToolCallContext, core::ToolReturn},
+        agent::AgentContext,
+        tool::{ToolCallContext, core::ToolReturn},
     };
     use ropey::Rope;
 
@@ -78,7 +78,7 @@ mod editor {
         pub is_safe: bool,
     }
     #[context]
-    pub fn new_context(ctx: &AgentInfo) -> Context {
+    pub fn new_context(ctx: AgentContext) -> Context {
         Context {
             path: None,
             content: None,
@@ -164,7 +164,7 @@ mod editor {
                     return Err(anyhow::anyhow!("不支持的阅读模式"));
                 }
             };
-        let text=read::skim_read(
+        let text = read::skim_read(
             content,
             100,
             focus_level,

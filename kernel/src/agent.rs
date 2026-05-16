@@ -6,59 +6,25 @@ use std::{
 use chrono::Local;
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
+use tokio::sync::RwLock;
 
 use crate::{
     event::EnvEvent,
     message::{Message, Role},
     tool::engine::ToolEngineContext,
 };
-
+#[derive(Clone)]
 pub struct AgentContext {
-    pub info: AgentInfo,
+    pub agent_id: u32,
+    pub agent_code: String,
+    pub worksapce: PathBuf,
+    pub info: Arc<RwLock<AgentInfo>>,
     // pub item_groups: Vec<ItemGroup>,
     pub tool_engine_context: Arc<ToolEngineContext>,
-    pub permissions: DashMap<String, AgentPermission>,
+    pub permissions: Arc<DashMap<String, AgentPermission>>,
 }
+impl AgentContext {}
 
-pub struct AgentPermission {
-    pub code: String,
-    pub sub_code: Option<String>,
-    pub life: PermissionLife,
-    pub use_times: u32,
-    pub create_time: chrono::DateTime<chrono::Local>,
-}
-impl AgentPermission {
-    pub fn is_valid(&self) -> bool {
-        match self.life {
-            PermissionLife::None => false,
-            PermissionLife::Once => self.use_times == 0,
-            PermissionLife::Times(times) => self.use_times < times,
-            PermissionLife::Duration(duration) => {
-                let expire_time = self.create_time + chrono::Duration::from_std(duration).unwrap();
-                chrono::Local::now() < expire_time
-            }
-            PermissionLife::Forever => true,
-        }
-    }
-}
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
-pub enum PermissionLife {
-    #[default]
-    None,
-    Once,
-    Times(u32),
-    Duration(std::time::Duration),
-    Forever,
-}
-
-impl AgentContext {
-    pub fn get_real_path(&self, path: &str) -> anyhow::Result<(PathBuf, bool)> {
-        self.info.get_real_path(path)
-    }
-    pub fn to_short_path(&self, path: &str) -> anyhow::Result<PathBuf> {
-        self.info.to_short_path(path)
-    }
-}
 pub struct AgentInfo {
     pub id: u32,
     pub code: String,
@@ -99,16 +65,62 @@ impl AgentInfo {
     }
 }
 
-#[derive(Debug)]
+pub struct AgentPermission {
+    pub id: i64,
+    pub code: String,
+    pub sub_code: Option<String>,
+    pub life: PermissionLife,
+    pub use_times: u32,
+    pub create_time: chrono::DateTime<chrono::Local>,
+}
+impl AgentPermission {
+    pub fn is_valid(&self) -> bool {
+        match self.life {
+            PermissionLife::None => false,
+            PermissionLife::Once => self.use_times == 0,
+            PermissionLife::Times(times) => self.use_times < times,
+            PermissionLife::Duration(duration) => {
+                let expire_time = self.create_time + chrono::Duration::from_std(duration).unwrap();
+                chrono::Local::now() < expire_time
+            }
+            PermissionLife::Forever => true,
+        }
+    }
+}
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub enum PermissionLife {
+    #[default]
+    None,
+    Once,
+    Times(u32),
+    Duration(std::time::Duration),
+    Forever,
+}
+#[derive(Clone, Debug)]
+pub struct AgentTimer {
+    pub id: i64,
+    pub corn: String,
+    pub times: u32,
+    pub trigger_times: u32,
+    pub payload: String,
+}
+impl AgentTimer {
+    pub fn is_disused(&self) -> bool {
+        if self.times == 0 {
+            return false;
+        }
+        self.trigger_times >= self.times
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum AgentStatus {
-    //输出中
-    Running,
-    //空闲
-    Idle,
-    //整理记忆
-    Organizing,
-    //离线
-    Offline,
+    #[default]
+    Idle, //空闲
+    Sleep,      //睡眠
+    Processing, //处理任务中
+    Paused,     //暂停 需要用户手动恢复到空闲
 }
 
 //事件

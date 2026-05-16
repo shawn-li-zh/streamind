@@ -35,10 +35,12 @@ pub fn inject_router(mut router: Router) -> Router {
     //事件
     router = router
         .route("/api/event/list", get(event::list))
+        .route("/api/event/count_by_status/{id}", get(event::count_by_status))
         .route("/api/event/load", get(event::load));
     //响应
     router = router
         .route("/api/section/list", get(section::list))
+        .route("/api/section/list_in_range", get(section::list_in_range))
         .route("/api/section/{id}", get(section::get_by_id));
     //组件
     router = router.route(

@@ -2,7 +2,7 @@ use anyhow::Context;
 
 use entity_service::DB;
 use kernel::{
-    agent::AgentEvent,
+    agent::{AgentContext, AgentEvent},
     event::{EnvEvent, SectionEvent},
     message::Role,
     section::{Section, SectionTag, TAGS},
@@ -11,11 +11,11 @@ use std::{sync::Arc, time::Instant};
 use tracing::{error, info};
 
 use crate::{
+    agent::{channel::AgentChannel, instance::AgentInstance},
     context::{
         section::section_stream,
         stack::{self, MindNode, MindStack},
     },
-    core::{Agent, AgentChannel},
     kit::{message_kit, prompt_kit},
     llm::client::ChatClient,
 };
@@ -258,39 +258,13 @@ impl ListeningWorker {
         stack.push_response(self.sections);
     }
 }
-pub async fn run_mind(
-    agent: Arc<RwLock<Agent>>,
-    client: Arc<dyn ChatClient>,
-    inject_receiver: mpsc::UnboundedReceiver<(String, bool)>,
-    event_receiver: mpsc::Receiver<AgentEvent>,
-    section_sender: mpsc::Sender<SectionEvent>,
-    reorganize_watcher: watch::Sender<bool>,
-    run_watcher: watch::Sender<bool>,
-) {
-    // 加载系统提示词和历史消息
-
-    let (agent_id, stack) = {
-        let agent = agent.read().await;
-        let agent_id = agent.ctx.info.id;
-        (agent_id, message_kit::load_stack(&agent.ctx).await.unwrap())
-    };
-    let mut mind_stream = StreamMind::new(
-        agent_id,
-        client,
-        stack,
-        inject_receiver,
-        event_receiver,
-        section_sender,
-        reorganize_watcher,
-        run_watcher,
-    );
+pub async fn run_mind(mut mind: StreamMind, channel: Arc<AgentChannel>) {
     loop {
-        match mind_stream.event_loop().await.unwrap() {
+        match mind.event_loop().await.unwrap() {
             MindFlag::Closed => return,
             MindFlag::Overflow => {
                 //让agent退栈
-                let mut agent = agent.write().await;
-                agent
+                channel
                     .send_event(
                         EnvEvent::Error("上下文溢出告警,请执行出栈操作".to_string()),
                         true,
