@@ -1,7 +1,8 @@
 use chrono::Local;
 use entity::{
     agent,
-    event::{EnvEventStatus, EnvEventType}, format::date_time,
+    event::{EnvEventStatus, EnvEventType},
+    format::date_time,
 };
 use kernel::{
     agent::{AgentEvent, AgentInfo},
@@ -36,7 +37,7 @@ pub mod convert {
     }
     pub fn to_json(event: EnvEvent) -> serde_json::Value {
         match event {
-            EnvEvent::AgentReaction(sections) => json!(sections),
+
             EnvEvent::AgentResponse(sections) => json!(sections),
             EnvEvent::Heartbeat => json!(()),
             EnvEvent::UserRequest(msg) => {
@@ -69,9 +70,7 @@ pub mod convert {
             EnvEventType::AgentResponse => {
                 EnvEvent::AgentResponse(serde_json::from_value(payload).unwrap())
             }
-            EnvEventType::AgentReaction => {
-                EnvEvent::AgentReaction(serde_json::from_value(payload).unwrap())
-            }
+
             EnvEventType::UserRequest => {
                 let msg: UserMessage = serde_json::from_value(payload).unwrap();
                 EnvEvent::UserRequest(msg)
@@ -99,7 +98,7 @@ pub mod convert {
 
     pub fn to_type_enum(event: &EnvEvent) -> EnvEventType {
         match event {
-            EnvEvent::AgentReaction(_) => EnvEventType::AgentReaction,
+
             EnvEvent::AgentResponse(_) => EnvEventType::AgentResponse,
             EnvEvent::Heartbeat => EnvEventType::Heartbeat,
             EnvEvent::UserRequest(_) => EnvEventType::UserRequest,
@@ -144,34 +143,34 @@ pub async fn save(
     Ok((event, model))
 }
 
-pub async fn update_tool_call_result(
-    db: &impl ConnectionTrait,
-    event_id: i64,
-    details: Vec<ToolCallDetailItem>,
-) -> anyhow::Result<()> {
-    //更新section
-    for ele in &details {
-        crate::section::update_payload(db, ele.id, ele.clone()).await?;
-    }
-    //
-    let data = serde_json::to_value(details)?;
-    let model = entity::event::ActiveModel {
-        data: Set(data),
-        status: Set(EnvEventStatus::Pending),
-        ..Default::default()
-    };
+// pub async fn update_tool_call_result(
+//     db: &impl ConnectionTrait,
+//     event_id: i64,
+//     details: Vec<ToolCallDetailItem>,
+// ) -> anyhow::Result<()> {
+//     //更新section
+//     for ele in &details {
+//         crate::section::update_value(db, ele.id, ele.clone()).await?;
+//     }
+//     //
+//     let data = serde_json::to_value(details)?;
+//     let model = entity::event::ActiveModel {
+//         data: Set(data),
+//         status: Set(EnvEventStatus::Pending),
+//         ..Default::default()
+//     };
 
-    let result = entity::event::Entity::update_many()
-        .set(model)
-        .filter(entity::event::Column::Id.eq(event_id))
-        .filter(entity::event::Column::EventType.eq(EnvEventType::ToolCallResult))
-        .exec(db)
-        .await?;
-    if result.rows_affected != 1 {
-        return Err(anyhow::anyhow!("更新失败"));
-    }
-    Ok(())
-}
+//     let result = entity::event::Entity::update_many()
+//         .set(model)
+//         .filter(entity::event::Column::Id.eq(event_id))
+//         .filter(entity::event::Column::EventType.eq(EnvEventType::ToolCallResult))
+//         .exec(db)
+//         .await?;
+//     if result.rows_affected != 1 {
+//         return Err(anyhow::anyhow!("更新失败"));
+//     }
+//     Ok(())
+// }
 
 pub async fn update_agent_response(
     db: &impl ConnectionTrait,
@@ -264,12 +263,15 @@ pub async fn load(
     if let Some(types) = types {
         select = select.filter(entity::event::Column::EventType.is_in(types));
     }
+    //往前加载30条数据
     let size = size.unwrap_or(30);
-    let events = select
+    let mut events = select
         .order_by_desc(entity::event::Column::Id)
         .limit(size)
         .all(db)
         .await?;
+    // 变成正序
+    events.reverse();
     Ok(events)
 }
 #[derive(Debug, Serialize, FromQueryResult)]
@@ -289,7 +291,6 @@ pub async fn list_env_events(
     page: Option<u64>,
     size: Option<u64>,
 ) -> anyhow::Result<Vec<EventItem>> {
-    
     let db = DB.get().unwrap();
     let mut select = entity::event::Entity::find()
         .select_only()

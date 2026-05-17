@@ -16,7 +16,7 @@ use crate::sse_event::WebEvent;
 // #[derive()]
 pub struct AgentChannel {
     agent_info: Arc<RwLock<AgentInfo>>,
-    pub(crate) event_sender: mpsc::Sender<AgentEvent>,
+    event_sender: mpsc::Sender<AgentEvent>,
     //函数调用
     call_watcher: RwLock<watch::Receiver<bool>>,
     run_watcher: RwLock<watch::Receiver<bool>>,
@@ -73,6 +73,9 @@ impl AgentChannel {
             match &event.data {
                 EnvEvent::AgentResponse(_)
                 | EnvEvent::UserRequest(_)
+                | EnvEvent::Interaction(_)
+                | EnvEvent::Interrupt(_)
+                | EnvEvent::Heartbeat
                 | EnvEvent::ToolCallResult(_) => {
                     //忽略
                 }

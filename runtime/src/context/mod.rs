@@ -1,4 +1,4 @@
 // pub mod content;
 pub mod stack;
-pub mod stream;
+pub mod mind;
 pub mod section;

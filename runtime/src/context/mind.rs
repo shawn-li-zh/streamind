@@ -1,26 +1,23 @@
 use anyhow::Context;
 
-use entity_service::DB;
 use kernel::{
-    agent::{AgentContext, AgentEvent},
-    event::{EnvEvent, SectionEvent},
-    message::Role,
-    section::{Section, SectionTag, TAGS},
+    agent::AgentEvent,
+    event::EnvEvent,
+    section::{Section, SectionTag},
 };
-use std::{sync::Arc, time::Instant};
+use std::sync::Arc;
 use tracing::{error, info};
 
 use crate::{
-    agent::{channel::AgentChannel, instance::AgentInstance},
+    agent::channel::AgentChannel,
     context::{
-        section::section_stream,
+        section::{self, section_stream},
         stack::{self, MindNode, MindStack},
     },
-    kit::{message_kit, prompt_kit},
     llm::client::ChatClient,
 };
 use futures::stream;
-use tokio::sync::{RwLock, mpsc, oneshot, watch};
+use tokio::sync::{RwLock, mpsc, watch};
 
 use futures::{Stream, StreamExt};
 
@@ -28,16 +25,22 @@ pub enum MindFlag {
     Closed,
     Overflow,
 }
-
+pub enum Event {
+    Start(Vec<i64>),
+    Open(&'static SectionTag),
+    Chunk(&'static SectionTag, String),
+    Close(&'static SectionTag, String),
+    End(Vec<i64>),
+}
 pub struct StreamMind {
     pub agent_id: u32,
-    pub stack: MindStack,
+    pub stack: Arc<RwLock<MindStack>>,
     client: Arc<dyn ChatClient>,
     event_buffer: Vec<AgentEvent>,
     last_section_head: RwLock<String>,
     inject_receiver: mpsc::UnboundedReceiver<(String, bool)>,
     event_receiver: mpsc::Receiver<AgentEvent>,
-    section_sender: mpsc::Sender<SectionEvent>,
+    section_sender: mpsc::Sender<Event>,
     reorganize_watcher: watch::Sender<bool>,
     run_watcher: watch::Sender<bool>,
 }
@@ -46,10 +49,10 @@ impl StreamMind {
     pub fn new(
         agent_id: u32,
         client: Arc<dyn ChatClient>,
-        stack: MindStack,
+        stack: Arc<RwLock<MindStack>>,
         inject_receiver: mpsc::UnboundedReceiver<(String, bool)>,
         event_receiver: mpsc::Receiver<AgentEvent>,
-        section_sender: mpsc::Sender<SectionEvent>,
+        section_sender: mpsc::Sender<Event>,
         reorganize_watcher: watch::Sender<bool>,
         run_watcher: watch::Sender<bool>,
     ) -> Self {
@@ -107,20 +110,20 @@ impl StreamMind {
             let mut worker = ListeningWorker {
                 section_sender: self.section_sender.clone(),
                 last_tag: None,
-                start_time: Instant::now(),
-                sections: vec![],
                 chunk_buffer: String::new(),
+                event_ids:vec![]
             };
 
             let res = self.event_listening(&mut worker).await;
-            worker.end(&mut self.stack).await;
+            worker.end().await;
             self.run_watcher.send(false)?;
             let is_close = res?;
             if is_close {
                 return Ok(MindFlag::Closed);
             }
             //检查上下文长度是否超过配置
-            if self.stack.content_len >= len {
+            let stack = self.stack.read().await;
+            if stack.content_len >= len {
                 return Ok(MindFlag::Overflow);
             }
         }
@@ -138,13 +141,16 @@ impl StreamMind {
             }
         }
         self.run_watcher.send(true)?;
-
+        worker.event_ids = self.event_buffer.iter().map(|e| e.id).collect();
         let proxy = mpsc::unbounded_channel();
         // 3. 准备当前要处理的上下文
         // 提取出当前所有的任务，清空 pending 准备接收新的
-        self.stack.push_events(&mut self.event_buffer);
-        // 4. 创建生成流（模拟大模型输出或耗时任务）
-        let mut chunk_stream = self.stack.chunk_stream(self.client.clone()).await;
+        let mut chunk_stream = {
+            let mut stack = self.stack.write().await;
+            stack.push_events(&mut self.event_buffer);
+            // 4. 创建生成流（模拟大模型输出或耗时任务）
+            stack.chunk_stream(self.client.clone()).await
+        };
         // 3. 将 Rx 转换为 Stream 并与 LLM 流合并
         let mut inject_stream =
             tokio_stream::wrappers::UnboundedReceiverStream::new(proxy.1).boxed();
@@ -188,30 +194,32 @@ impl StreamMind {
                 // 分支 A：段落生成流
                 Some(section_event) = section_stream.next() =>  {
                     let mut is_end=false;
-                    match &section_event {
-                        SectionEvent::End(_, _) => {
-                            is_end=true;
+                   let event= match section_event {
+                        section::Event::Start => {
+                            Event::Start(worker.event_ids.clone())
                         }
-                        SectionEvent::Open(tag)=>{
-                            worker.start_time = Instant::now();
-                            worker.last_tag=Some(*tag)
+                        section::Event::End => {
+                            //必须由外部确认是否真的结束,所以不发送事件
+                            break;
                         }
-                        SectionEvent::Chunk(tag,chunk)=>{
-                            worker.chunk_buffer.push_str(chunk);
-                        }
-                        SectionEvent::Close(section) => {
-                            worker.last_tag=None;
-                            worker.sections.push(section.clone());
-                            watch_section(self,section).await?;
-                        }
+                        
+                        section::Event::Open(tag)=>{
+                            worker.last_tag=Some(tag);
+                            Event::Open(tag)
 
-                        _=>{ }
-                    }
-                    if is_end{
-                    //必须由外部确认是否真的结束,所以不发送事件
-                       break;
-                    }
-                    self.section_sender.send(section_event).await?;
+                        }
+                        section::Event::Chunk(tag,chunk)=>{
+                            worker.chunk_buffer.push_str(&chunk);
+                            Event::Chunk(tag,chunk)
+
+                        }
+                        section::Event::Close(tag,content) => {
+                            worker.last_tag=None;
+                             Event::Close(tag,content)
+                        }
+                    };
+
+                    self.section_sender.send(event).await?;
                 }
                 // 分支 B：在生成过程中，收到了新事件
                 Some(event) = self.event_receiver.recv() => {
@@ -230,32 +238,24 @@ impl StreamMind {
     }
 }
 struct ListeningWorker {
-    section_sender: mpsc::Sender<SectionEvent>,
+    section_sender: mpsc::Sender<Event>,
     last_tag: Option<&'static SectionTag>,
-    start_time: Instant,
     chunk_buffer: String,
-    sections: Vec<Section>,
+    event_ids: Vec<i64>,
 }
 impl ListeningWorker {
-    async fn end(mut self, stack: &mut MindStack) {
+    async fn end(self) {
         if let Some(last_tag) = self.last_tag {
-            let last = Section::new(
-                last_tag,
-                self.chunk_buffer,
-                Instant::now() - self.start_time,
-            );
-            self.sections.push(last.clone());
+            let last = (last_tag, self.chunk_buffer);
             self.section_sender
-                .send(SectionEvent::Close(last))
+                .send(Event::Close(last.0, last.1))
                 .await
                 .expect("section_sender");
         }
         self.section_sender
-            .send(SectionEvent::End(0, 0))
+            .send(Event::End(self.event_ids))
             .await
             .expect("section_sender"); //输出结束
-        //放入agent的回复
-        stack.push_response(self.sections);
     }
 }
 pub async fn run_mind(mut mind: StreamMind, channel: Arc<AgentChannel>) {
@@ -275,71 +275,3 @@ pub async fn run_mind(mut mind: StreamMind, channel: Arc<AgentChannel>) {
         }
     }
 }
-
-async fn watch_section(mind: &mut StreamMind, section: &Section) -> anyhow::Result<()> {
-    match section.tag_name.as_str() {
-        "push" => push_state(mind.agent_id, &mut mind.stack, section).await?,
-        // "pop" => pop_state(mind.agent_id, &mut mind.stack, section).await?,
-        _ => {}
-    }
-    Ok(())
-}
-
-fn parse_state(content: &str) -> anyhow::Result<(usize, String, String)> {
-    let (head, content) = content
-        .split_once("\n")
-        .with_context(|| anyhow::anyhow!("栈格式异常:{content}"))?;
-    let (pos, title) = head
-        .split_once(":")
-        .with_context(|| anyhow::anyhow!("栈头格式异常:{head}"))?;
-    let pos =
-        usize::from_str_radix(pos.trim(), 10).map_err(|e| anyhow::anyhow!("栈指针格式异常"))?;
-    Ok((pos, title.trim().to_string(), content.trim().to_string()))
-}
-
-async fn push_state(agent_id: u32, stack: &mut MindStack, section: &Section) -> anyhow::Result<()> {
-    let (pos, title, content) = parse_state(&section.content.trim())?;
-    let model = entity_service::transaction::<_, _>(move |txn| {
-        Box::pin(async move {
-            let model =
-                entity_service::state::push(txn, agent_id, pos as _, title, content).await?;
-            Ok(model)
-        })
-    })
-    .await?;
-    let node = MindNode {
-        id: model.id,
-        pos: model.pos as _,
-        title: model.title,
-        content: model.content,
-        messages: vec![],
-        content_len: 0,
-    };
-    stack.push(pos, node);
-    Ok(())
-}
-
-//格式
-//<back>
-//pos:title
-//content
-//</back>
-// async fn pop_state(agent_id: u32, stack: &mut MindStack, section: &Section) -> anyhow::Result<()> {
-//     let (pos, title, content) = parse_state(&section.content.trim())?;
-//     //更新节点内容
-//     {
-//         let node = match stack.nodes.get_mut(pos) {
-//             Some(n) => n,
-//             None => {
-//                 return Err(anyhow::anyhow!("指向的栈中状态不存在,pos:{}", pos));
-//             }
-//         };
-//         node.title = title;
-//         node.content = content;
-//     }
-//     let nodes = stack.back_to(pos);
-//     let state_ids = nodes.iter().map(|n| n.id).collect();
-//     let db = DB.get().unwrap();
-//     entity_service::state::dumps(db, agent_id, state_ids).await?;
-//     Ok(())
-// }

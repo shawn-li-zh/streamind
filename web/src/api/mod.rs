@@ -41,6 +41,7 @@ pub fn inject_router(mut router: Router) -> Router {
     router = router
         .route("/api/section/list", get(section::list))
         .route("/api/section/list_in_range", get(section::list_in_range))
+        .route("/api/section/update_value/{id}", post(section::update_value))
         .route("/api/section/{id}", get(section::get_by_id));
     //组件
     router = router.route(

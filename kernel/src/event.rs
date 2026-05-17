@@ -46,7 +46,7 @@ pub struct TimerData {
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InteractionData {
-    pub render_state_id: i64,
+    pub section_id: i64,
     pub message: String,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -63,7 +63,6 @@ pub enum Reaction {
 #[derive(Debug, Clone)]
 pub enum EnvEvent {
     //agent响应
-    AgentReaction(Vec<Section>),
     AgentResponse(Vec<Section>),
     Heartbeat,
     //用户消息
@@ -83,9 +82,6 @@ impl EnvEvent {
     pub fn to_infos(self) -> Vec<Information> {
         match self {
             EnvEvent::AgentResponse(sections) => {
-                sections.into_iter().map(|s| s.to_string().into()).collect()
-            }
-            EnvEvent::AgentReaction(sections) => {
                 sections.into_iter().map(|s| s.to_string().into()).collect()
             }
             EnvEvent::UserRequest(content) => {
@@ -151,8 +147,8 @@ impl EnvEvent {
             }
             EnvEvent::Interaction(data) => {
                 let one = format!(
-                    "渲染状态ID:{}, 负载消息:{}",
-                    data.render_state_id, data.message
+                    "渲染ID:{}, 负载消息:{}",
+                    data.section_id, data.message
                 )
                 .into();
                 vec![one]
@@ -162,7 +158,6 @@ impl EnvEvent {
 
     pub fn name(&self) -> String {
         let name = match self {
-            EnvEvent::AgentReaction(_) => "agent反应",
             EnvEvent::AgentResponse(_) => "agent响应",
             EnvEvent::Heartbeat => "agent心跳",
             EnvEvent::UserRequest(_) => "用户消息",
@@ -209,9 +204,9 @@ pub enum ToolCallEvent {
 }
 #[derive(Debug, Clone)]
 pub enum SectionEvent {
-    Start(i64, i64),
+    Start,
     Open(&'static SectionTag),
     Chunk(&'static SectionTag, String),
     Close(Section),
-    End(i64, i64),
+    End,
 }

@@ -25,7 +25,7 @@ pub fn to_assistant_ouput(sections: Vec<Section>) -> Option<String> {
     if sections.is_empty() {
         return None;
     }
-    let has_tool_call = sections.iter().any(|s| s.tag_name == "tool_call");
+    let has_tool_call = sections.iter().any(|s| s.name == "tool_call");
     fn join(sections: Vec<Section>) -> String {
         let mut text = String::new();
         for section in sections {
@@ -38,10 +38,7 @@ pub fn to_assistant_ouput(sections: Vec<Section>) -> Option<String> {
         Some(join(sections))
     } else {
         //去除思考内容
-        let sections: Vec<Section> = sections
-            .into_iter()
-            .filter(|s| s.tag_name != "think")
-            .collect();
+        let sections: Vec<Section> = sections.into_iter().filter(|s| s.name != "think").collect();
         if sections.is_empty() {
             None
         } else {
@@ -98,19 +95,15 @@ pub async fn load_stack(agent_ctx: &AgentContext) -> anyhow::Result<MindStack> {
             messages: vec![],
             content_len: 0,
         };
-        stack.push(stack.nodes.len(), node);
+        stack.push_node(node);
         //
         let events = state_id_map_events.remove(&state.id).unwrap_or_default();
         for event in events {
             let agent_event = entity_service::event::convert::from_entity(event);
-            if let EnvEvent::AgentReaction(_) = &agent_event.data {
-                if let EnvEvent::AgentReaction(sections) = agent_event.data {
-                    stack.push_response(sections);
-                    continue;
-                }
-            }
+      
             if let EnvEvent::AgentResponse(s) = &agent_event.data {
-                if s.is_empty() {
+                if let EnvEvent::AgentResponse(sections) = agent_event.data {
+                    stack.push_response(sections);
                     continue;
                 }
             }

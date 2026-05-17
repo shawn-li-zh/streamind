@@ -21,19 +21,9 @@
    "title":"获取/usr/info.json文件的创建权限", 
    "class":"flex flex-col", 
    "style":"with:100px;", 
-   "state":{
-    "appName":"Agent",
-    "reason":"需要保存您的个人基本信息以提供个性化服务。",
-    "duration":"30s"
+   "attrs":{
+    "code":"0",
+    "purpose":"需要保存您的个人基本信息以提供个性化服务。"
     }
 }
 </render>
-<push>
-1:测试
-
-重置
-</push>
-<end/>
-<tool_call>browser.lunch()</tool_call>
-<end/>
-<tool_call>browser.new_tab(url="https://element.eleme.cn/#/zh-CN/component/card")</tool_call>

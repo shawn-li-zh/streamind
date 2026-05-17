@@ -15,6 +15,7 @@ use kernel::{
     message::{Message, Role},
     section::{self, Section},
 };
+use serde::{Deserialize, Serialize};
 use tracing::{error, info};
 
 use crate::{
@@ -27,6 +28,7 @@ static OUTPUTS: LazyLock<Vec<Vec<String>>> = LazyLock::new(|| {
     if let Ok(test) = std::fs::read_to_string("./test.xml") {
         return test
             .split("<end/>")
+            .filter(|v| !v.is_empty())
             .map(|item| split_into_random_chunks(item, 2, 5))
             .collect();
     }
@@ -60,7 +62,6 @@ pub struct MindStack {
     id_map_pos: HashMap<i64, usize>,
     //上下文长度
     pub content_len: usize,
-    last_batch_ids: Vec<i64>,
     step: usize,
 }
 impl MindStack {
@@ -72,25 +73,15 @@ impl MindStack {
             id_map_pos: HashMap::new(),
             content_len: 0,
             step: 0,
-            last_batch_ids: vec![],
         }
     }
     pub fn push_events(&mut self, event_buffer: &mut Vec<AgentEvent>) {
         info!("received events [{}]", event_buffer.len());
         let buffer = std::mem::take(event_buffer);
-        self.last_batch_ids.clear();
         for event in buffer {
-            self.last_batch_ids.push(event.id);
             let msg = event.to_message();
             self.push_msg(msg);
         }
-        let ids = self.last_batch_ids.clone();
-        tokio::spawn(async move {
-            let db = DB.get().unwrap();
-            entity_service::event::update_event_status(db, ids, EnvEventStatus::Processing)
-                .await
-                .unwrap();
-        });
     }
     pub fn push_response(&mut self, sections: Vec<Section>) {
         if let Some(output) = message_kit::to_assistant_ouput(sections) {
@@ -98,17 +89,25 @@ impl MindStack {
             self.push_msg(msg);
         }
         self.step += 1;
-        let ids = self.last_batch_ids.clone();
-        tokio::spawn(async move {
-            let db = DB.get().unwrap();
-            entity_service::event::update_event_status(db, ids, EnvEventStatus::Done)
-                .await
-                .unwrap();
-        });
     }
-    pub fn push(&mut self, pos: usize, node: MindNode) {
+
+    pub fn push(&mut self, push: Push) {
+        let node = MindNode {
+            id: push.id,
+            pos: push.pos,
+            title: push.title,
+            content: push.content,
+            messages: vec![],
+            content_len: 0,
+        };
         self.id_map_pos.insert(node.id, self.nodes.len());
-        self.back_to(pos);
+        self.back_to(push.pos);
+        self.nodes.push(node);
+    }
+
+    pub fn push_node(&mut self, node: MindNode) {
+        self.id_map_pos.insert(node.id, node.pos);
+        self.back_to(node.pos);
         self.nodes.push(node);
     }
     //回到指定位置，并丢弃后面的节点
@@ -171,6 +170,13 @@ impl MindStack {
         let i = self.step % o.len();
         stream::iter(o[i].clone()).boxed()
     }
+}
+#[derive(Debug, Clone, Serialize)]
+pub struct Push {
+    pub id: i64,
+    pub pos: usize,
+    pub title: String,
+    pub content: String,
 }
 pub struct MindNode {
     pub id: i64,

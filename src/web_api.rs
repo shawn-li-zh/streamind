@@ -9,7 +9,7 @@ use axum::{
 
 use futures::Stream;
 use kernel::event::{EnvEvent, InteractionData};
-use runtime::{agent::instance::AgentInstance, global::AGENT_POOL};
+use runtime::{agent::instance::AgentInstance, global::AGENT_POOL, sse_event::WebEvent};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tokio_stream::{wrappers::UnboundedReceiverStream, StreamExt};
@@ -46,7 +46,8 @@ pub async fn connect(
 
     // 3. 将写入器注入 Agent
     {
-        tx.send(Event::default()).unwrap();
+        let e= WebEvent::Connected;
+        tx.send(e.to_sse_event()).unwrap();
         agent_arc.channel.set_web_sender(tx).await;
     }
 
@@ -57,7 +58,7 @@ pub async fn connect(
 }
 #[derive(Debug, Deserialize)]
 pub struct InteractionEvent {
-    pub render_state_id: i64,
+    pub section_id: i64,
     pub message: String,
 }
 pub async fn ui_interaction(
@@ -65,7 +66,7 @@ pub async fn ui_interaction(
     Json(req): Json<InteractionEvent>,
 ) -> ApiResponse<entity::event::Model> {
     let event = EnvEvent::Interaction(InteractionData {
-        render_state_id: req.render_state_id,
+        section_id: req.section_id,
         message: req.message,
     });
     let p = AGENT_POOL.read().await;

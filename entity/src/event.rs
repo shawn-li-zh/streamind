@@ -43,7 +43,6 @@ impl ActiveModelBehavior for ActiveModel {}
 #[serde(rename_all = "camelCase")]
 pub enum EnvEventType {
     #[default]
-    AgentReaction,
     AgentResponse,
     UserRequest,
     Heartbeat,

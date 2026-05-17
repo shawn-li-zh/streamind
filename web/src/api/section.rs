@@ -1,8 +1,12 @@
 use std::collections::HashMap;
 
-use axum::extract::{Path, Query};
+use axum::{
+    Json,
+    extract::{Path, Query},
+};
 
 use entity::format::date_time;
+use entity_service::DB;
 use serde::{Deserialize, Serialize};
 
 use crate::wrapper::ApiResponse;
@@ -24,17 +28,32 @@ pub async fn get_by_id(Path(id): Path<i64>) -> ApiResponse<Option<entity::sectio
         Err(e) => ApiResponse::error(e),
     }
 }
+
+pub async fn update_value(
+    Path(id): Path<i64>,
+    Json(value): Json<serde_json::Value>,
+) -> ApiResponse<()> {
+    let db = DB.get().unwrap();
+    match entity_service::section::update_value(db, id, value).await {
+        Ok(v) => ApiResponse::success(v),
+        Err(e) => ApiResponse::error(e),
+    }
+}
 #[derive(Debug, Deserialize)]
 pub struct ListInRangeReq {
     pub agent_id: u32,
     pub start: i64,
     pub end: i64,
+    pub names: Option<String>,
 }
 
 pub async fn list_in_range(
     Query(req): Query<ListInRangeReq>,
 ) -> ApiResponse<Vec<entity_service::section::ListInRangeResp>> {
-    match entity_service::section::list_in_range(req.agent_id, req.start, req.end).await {
+    let names = req
+        .names
+        .map(|names| names.split(",").map(|v| v.to_string()).collect());
+    match entity_service::section::list_in_range(req.agent_id, req.start, req.end, names).await {
         Ok(v) => ApiResponse::success(v),
         Err(e) => ApiResponse::error(e),
     }

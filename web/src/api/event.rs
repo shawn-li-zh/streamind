@@ -1,3 +1,4 @@
+use anyhow::Context;
 use axum::extract::{Path, Query};
 
 use entity::event::{EnvEventStatus, EnvEventType};
@@ -11,10 +12,19 @@ pub struct LoadReq {
     pub agent_id: u32,
     pub event_id: Option<i64>,
     pub size: Option<u64>,
-    pub types: Option<Vec<EnvEventType>>,
+    pub types: Option<String>,
 }
 pub async fn load(Query(req): Query<LoadReq>) -> ApiResponse<Vec<entity::event::Model>> {
-    match entity_service::event::load(req.agent_id, req.event_id, req.size, req.types).await {
+    let types = req.types.map(|ty| {
+        ty.split(",")
+            .map(|v| {
+                serde_json::from_str(&format!("\"{v}\""))
+                    .with_context(|| anyhow::anyhow!("parse event type {}", v))
+                    .unwrap()
+            })
+            .collect()
+    });
+    match entity_service::event::load(req.agent_id, req.event_id, req.size, types).await {
         Ok(v) => ApiResponse::success(v),
         Err(e) => ApiResponse::error(e),
     }

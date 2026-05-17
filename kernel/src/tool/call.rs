@@ -1,12 +1,4 @@
-use std::{
-    collections::HashMap,
-    fs::{File, OpenOptions},
-    path::PathBuf,
-    sync::Arc,
-};
-
-use anyhow::Context;
-use chrono::Local;
+use std::{collections::HashMap, sync::Arc};
 
 use crate::{
     agent::AgentContext,
@@ -28,7 +20,7 @@ pub struct ToolCall {
     pub args: HashMap<String, serde_json::Value>,
 }
 impl ToolCall {
-    pub fn from(id: i64, code: &str, engine_ctx: &ToolEngineContext) -> anyhow::Result<Self> {
+    pub fn from(code: &str, engine_ctx: &ToolEngineContext) -> anyhow::Result<Self> {
         let (pkg_name, expr) = match code.split_once(".") {
             Some(p) => p,
             None => {
@@ -69,7 +61,7 @@ impl ToolCall {
             .map(|v| v.clone())
             .ok_or_else(|| anyhow::anyhow!("上下文不存在"))?;
         Ok(ToolCall {
-            id,
+            id: 0,
             package,
             tool,
             args,

@@ -1,31 +1,31 @@
 use axum::response::sse;
+use kernel::event::{EnvEvent, SectionEvent, ToolCallEvent};
 use serde::Serialize;
 use serde_json::json;
-use kernel::event::{EnvEvent, SectionEvent, ToolCallEvent};
 
 pub enum WebEvent {
     Env(EnvEvent, i64),
     Section(SectionEvent, i64),
     ToolCall(ToolCallEvent, i64),
+    Connected,
 }
 impl WebEvent {
     pub fn to_sse_event(self) -> sse::Event {
         match self {
             WebEvent::Section(section_event, bind_event_id) => match section_event {
-                SectionEvent::Start(reaction_id, response_id) => SsePayload::new(
-                    "section",
-                    "start",
-                    json!({ "reaction_id": reaction_id, "response_id": response_id }),
-                    bind_event_id,
-                )
-                .to_sse_event(),
+                SectionEvent::Start => {
+                    SsePayload::new("section", "start", json!(()), bind_event_id).to_sse_event()
+                }
 
                 SectionEvent::Open(section_tag) => {
                     SsePayload::new("section", "open", section_tag.name, bind_event_id)
                         .to_sse_event()
                 }
-                SectionEvent::Chunk(_, chunk) => {
-                    SsePayload::new("section", "chunk", chunk, bind_event_id).to_sse_event()
+                SectionEvent::Chunk(tag, chunk) => {
+                    SsePayload::new("section", "chunk", json!({
+                        "tag": tag.name,
+                        "chunk": chunk
+                    }), bind_event_id).to_sse_event()
                 }
                 SectionEvent::Close(section) => {
                     // let content = match section.tag_name.as_str() {
@@ -35,17 +35,12 @@ impl WebEvent {
                     let data = json!(section);
                     SsePayload::new("section", "close", data, bind_event_id).to_sse_event()
                 }
-                SectionEvent::End(reaction_id, response_id) => SsePayload::new(
-                    "section",
-                    "end",
-                    json!({ "reaction_id": reaction_id, "response_id": response_id }),
-                    bind_event_id,
-                )
-                .to_sse_event(),
+                SectionEvent::End => {
+                    SsePayload::new("section", "end", json!(()), bind_event_id).to_sse_event()
+                }
             },
             WebEvent::Env(event, bind_event_id) => match event {
-                EnvEvent::AgentReaction(_)
-                | EnvEvent::AgentResponse(_)
+                EnvEvent::AgentResponse(_)
                 | EnvEvent::UserRequest(_)
                 | EnvEvent::Interaction(_)
                 | EnvEvent::Heartbeat
@@ -83,6 +78,9 @@ impl WebEvent {
                     SsePayload::new("tool_call", "end", (), bind_event_id).to_sse_event()
                 }
             },
+            WebEvent::Connected => {
+                SsePayload::new("server", "connected", (), 0).to_sse_event()
+            }
         }
     }
 }

@@ -147,9 +147,7 @@ impl AgentEvent {
     }
     pub fn to_message(&self) -> Message {
         let msg = match &self.data {
-            EnvEvent::AgentReaction(sections) | EnvEvent::AgentResponse(sections) => {
-                Role::assistant()
-            }
+            EnvEvent::AgentResponse(sections) => Role::assistant(),
             EnvEvent::UserRequest(user_message) => Role::user(),
             EnvEvent::ToolCallResult(tool_call_detail_items) => Role::system(),
             _ => Role::system(),

@@ -1,28 +1,30 @@
 use std::{pin::Pin, time::Instant};
 
 use futures::{Stream, StreamExt};
-use kernel::{
-    event::SectionEvent,
-    section::{Section, SectionTag, TAGS},
-};
+use kernel::section::{SectionTag, TAGS};
 
 /// 在流式输出中，解析不同的段内容
-
+pub enum Event {
+    Start,
+    Open(&'static SectionTag),
+    Chunk(&'static SectionTag, String),
+    Close(&'static SectionTag, String),
+    End,
+}
 pub fn section_stream(
     mut chunk_stream: Pin<Box<dyn Stream<Item = String> + Send>>,
-) -> impl Stream<Item = SectionEvent> {
+) -> impl Stream<Item = Event> {
     // safe_size 必须大于等于最长闭合标签的长度 (</tool_call> 是 16)
     let safe_size = 20;
     let mut buffer = String::new();
     let mut current_tag: Option<&'static SectionTag> = None;
     let mut tag_seek: usize = 0;
 
-    let mut start = Instant::now();
     let mut is_in_reply_stream = false;
     let tags: &'static Vec<SectionTag> = &*TAGS;
     let reply_tag = &tags[0];
     async_stream::stream! {
-        yield SectionEvent::Start(0, 0);
+        yield Event::Start;
 
         while let Some( chunk) = chunk_stream.next().await {
             let mut chunk:&str=chunk.as_str();
@@ -50,15 +52,14 @@ pub fn section_stream(
 
                     if let Some(tag) = &current_tag {
                         // 处于标签内
-                        yield SectionEvent::Chunk(tag, chunk_text);
+                        yield Event::Chunk(tag, chunk_text);
                     } else {
                         // 处于正常文本内，也需要流式输出！
                         if !is_in_reply_stream {
-                            start = Instant::now();
-                            yield SectionEvent::Open(reply_tag); // tags[2] 是 reply
+                            yield Event::Open(reply_tag); // tags[0] 是 reply
                             is_in_reply_stream = true;
                         }
-                        yield SectionEvent::Chunk(reply_tag, chunk_text);
+                        yield Event::Chunk(reply_tag, chunk_text);
                     }
                     tag_seek = offset;
                 }
@@ -73,11 +74,11 @@ pub fn section_stream(
                     if let Some(pos) = buffer.find(tag.end) {
                         // 把没输出完的部分补齐输出
                         if tag_seek < pos {
-                            yield SectionEvent::Chunk(tag, buffer[tag_seek..pos].to_string());
+                            yield Event::Chunk(tag, buffer[tag_seek..pos].to_string());
                         }
                         let content = buffer[..pos].to_string();
-                        let time=start.elapsed();
-                        yield SectionEvent::Close(Section::new(&tag, content,time));
+
+                        yield Event::Close(&tag, content);
 
                         // 截断 buffer，关键修复：重置状态！
                         buffer = buffer[pos + tag.end.len()..].to_string();
@@ -106,21 +107,21 @@ pub fn section_stream(
                         // 起始标签前面的内容处理
                         if pos > 0 && !&buffer[..pos].trim_start().is_empty() {
                            if !is_in_reply_stream {
-                           start = Instant::now();
-                           yield SectionEvent::Open(reply_tag);
+
+                                yield Event::Open(reply_tag);
                            }
                            if tag_seek < pos {
-                           yield SectionEvent::Chunk(reply_tag, buffer[tag_seek..pos].to_string());
+                           yield Event::Chunk(reply_tag, buffer[tag_seek..pos].to_string());
                            }
                            let content = buffer[..pos].to_string();
-                           let time=start.elapsed();
-                           yield SectionEvent::Close(Section::new(reply_tag,content,time));
+
+                           yield Event::Close(reply_tag,content,);
                            is_in_reply_stream = false;
                         }
 
                         // 截断 buffer 进入新标签，关键修复：不盲目直接 yield buffer！
                         buffer = buffer[pos + tag.start.len()..].to_string();
-                        yield SectionEvent::Open(tag);
+                        yield Event::Open(tag);
                         tag_seek = 0;
                         current_tag = Some(&tag);
                     } else {
@@ -137,31 +138,31 @@ pub fn section_stream(
             let remain = buffer[tag_seek..].to_string();
 
             if let Some(tag) = current_tag {
-                yield SectionEvent::Chunk(tag, remain);
-                let time=start.elapsed();
-                yield SectionEvent::Close(Section::new(&tag, buffer.clone(),time));
+                yield Event::Chunk(tag, remain);
+
+                yield Event::Close(&tag, buffer.clone());
             } else if !&buffer.trim_start().is_empty(){
                 if !is_in_reply_stream {
-                    start = Instant::now();
-                    yield SectionEvent::Open(reply_tag);
+
+                    yield Event::Open(reply_tag);
                 }
-                yield SectionEvent::Chunk(reply_tag, remain);
-                let time=start.elapsed();
-                yield SectionEvent::Close(Section::new(reply_tag,buffer.clone(),time));
+                yield Event::Chunk(reply_tag, remain);
+
+                yield Event::Close(reply_tag,buffer.clone());
             }
         }
 
-        yield SectionEvent::End(0, 0);
+        yield Event::End;
     }
 }
 
 #[cfg(test)]
 
 mod test {
+    use super::Event;
+    use futures::StreamExt;
     use std::time::Duration;
 
-    use futures::StreamExt;
-    use kernel::event::SectionEvent;
     use tokio::sync::mpsc;
 
     use crate::context::section::section_stream;
@@ -200,20 +201,20 @@ mod test {
         // 4. 消费解析出来的事件
         while let Some(event) = event_stream.next().await {
             match event {
-                SectionEvent::Start(reaction_id, response_id) => {
+                Event::Start => {
                     println!("\n[事件] >>> 流开始 <<<");
                 }
-                SectionEvent::Open(tag) => {
+                Event::Open(tag) => {
                     println!("\n[事件] 开启标签: <{}>", tag.name);
                 }
-                SectionEvent::Chunk(tag_name, chunk) => {
+                Event::Chunk(tag, chunk) => {
                     print!("{}", chunk)
                 }
-                SectionEvent::Close(section) => {
-                    let s: String = (&section).to_string();
-                    println!("[事件] 关闭标签，完整段落内容为: {:?}", s);
+                Event::Close(tag,content) => {
+                 
+                    println!("[事件] 关闭标签，完整段落内容为: {:?}", content);
                 }
-                SectionEvent::End(reaction_id, response_id) => {
+                Event::End => {
                     println!("\n[事件] >>> 流结束 <<<");
                 }
             }

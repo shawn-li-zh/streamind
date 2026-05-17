@@ -15,7 +15,7 @@ use tracing::info;
 
 use crate::{
     agent::{channel::AgentChannel, runtime::AgentRuntime},
-    context::stream::{self, StreamMind},
+    context::mind::{self, StreamMind},
     global::{AGENT_CTX_POOL, ENGINE_POOL, TOOL_PACKAGE_TOOL},
     kit::message_kit,
 };
@@ -64,10 +64,11 @@ impl AgentInstance {
             client
         };
         let stack = message_kit::load_stack(&context).await.unwrap();
+        let stack = Arc::new(RwLock::new(stack));
         let stream_mind = StreamMind::new(
             agent_id,
             client,
-            stack,
+            stack.clone(),
             inject.1,
             event.1,
             section.0,
@@ -78,6 +79,7 @@ impl AgentInstance {
         let runtime = AgentRuntime::new(
             context.clone(),
             channel.clone(),
+            stack.clone(),
             tool_engine,
             section.1,
             call_watcher.0,

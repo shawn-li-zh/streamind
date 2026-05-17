@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 pub struct RenderComponent {
@@ -12,5 +14,5 @@ pub struct RenderContext {
     pub title: String,
     pub style: Option<String>,
     pub class: Option<String>,
-    pub state: serde_json::Value,
+    pub attrs: HashMap<String, serde_json::Value>,
 }

@@ -18,8 +18,10 @@ pub struct Model {
     pub content: String,
     #[sea_orm(column_type = "Text", not_null)]
     pub payload: serde_json::Value,
+    #[sea_orm(column_type = "Text", not_null)]
+    pub value: serde_json::Value,
     #[sea_orm(not_null)]
-    pub time: String,
+    pub elapsed: String,
 }
 
 impl ActiveModelBehavior for ActiveModel {}
