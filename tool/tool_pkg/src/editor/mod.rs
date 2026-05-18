@@ -65,7 +65,7 @@ mod editor {
     };
 
     use kernel::{
-        agent::AgentContext,
+        agent::context::AgentContext,
         tool::{ToolCallContext, core::ToolReturn},
     };
     use ropey::Rope;

@@ -33,5 +33,7 @@ encoding_rs = "0.8.35"
 
 tool_macro = { path = "../tool_macro" }
 kernel = { path = "../../kernel" }
+entity = { path = "../../entity" }
+entity_service = { path = "../../entity_service" }
 # 浏览器控制
 chromiumoxide = "0.9.1"

@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use crate::{
-    agent::AgentContext,
+    agent::context::AgentContext,
     tool::{Tool, ToolPackage, call::ToolCall},
 };
 

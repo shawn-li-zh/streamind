@@ -7,11 +7,15 @@ use async_openai::{Client, config::OpenAIConfig};
 
 use entity::model::ModelStatus;
 
-use kernel::{agent::AgentContext, tool::ToolPackagePool};
+use kernel::{agent::context::AgentContext, tool::ToolPackagePool};
 use tokio::sync::RwLock;
+use tokio_cron_scheduler::{Job, JobScheduler};
 
 use crate::{
-    agent::instance::AgentInstance,
+    agent::{
+        instance::AgentInstance,
+        scheduler::{self, SCHEDULER},
+    },
     llm::{client::ChatClient, deepseek::DeepseekClient},
 };
 //全局agent池
@@ -42,6 +46,13 @@ pub async fn init() -> anyhow::Result<()> {
         };
         p.insert(model.id, Arc::new(engine));
     }
+    //初始化定时调度器
+    {
+        let scheduler: JobScheduler = JobScheduler::new().await?;
+        if let Err(_) = SCHEDULER.set(scheduler) {
+            anyhow::bail!("初始化定时调度器失败");
+        }
+    }
     //初始化agent
     let agents = entity_service::agent::list_by_model_ids(model_ids).await?;
 
@@ -49,9 +60,11 @@ pub async fn init() -> anyhow::Result<()> {
         let mut p = AGENT_POOL.write().await;
         for agent_info in agents {
             let id = agent_info.id;
-            let (agent, runtime, mind) = AgentInstance::new(agent_info).await;
-            p.insert(id, agent);
+            let (agent, runtime, mind) = AgentInstance::build(agent_info).await;
+            agent.scheduler.clone().start()?;
             runtime.start(mind);
+            // let agent= Arc::new(agent);
+            p.insert(id, agent);
         }
     }
 

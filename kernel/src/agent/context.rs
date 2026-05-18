@@ -1,6 +1,6 @@
 use std::{
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, atomic::AtomicU32},
 };
 
 use chrono::Local;
@@ -19,9 +19,9 @@ pub struct AgentContext {
     pub agent_code: String,
     pub worksapce: PathBuf,
     pub info: Arc<RwLock<AgentInfo>>,
-    // pub item_groups: Vec<ItemGroup>,
     pub tool_engine_context: Arc<ToolEngineContext>,
     pub permissions: Arc<DashMap<String, AgentPermission>>,
+    pub timers: Arc<DashMap<i64, Arc<AgentTimer>>>,
 }
 impl AgentContext {}
 
@@ -31,7 +31,6 @@ pub struct AgentInfo {
     pub model_id: u32,
     pub parent_id: u32,
     pub state_id: i64,
-    // pub state_pos: u32,
     pub name: String,
     pub model: String,
     pub workspace: PathBuf,
@@ -71,9 +70,33 @@ pub struct AgentPermission {
     pub sub_code: Option<String>,
     pub life: PermissionLife,
     pub use_times: u32,
+    pub purpose: String,
     pub create_time: chrono::DateTime<chrono::Local>,
 }
 impl AgentPermission {
+    pub fn new(
+        code: String,
+        sub_code: Option<String>,
+        purpose: String,
+        life: PermissionLife,
+    ) -> Self {
+        Self {
+            id: 0,
+            code,
+            sub_code,
+            purpose,
+            life,
+            use_times: 0,
+            create_time: chrono::Local::now(),
+        }
+    }
+    pub fn auth_code(&self) -> String {
+        if let Some(sub_code) = &self.sub_code {
+            format!("{}[{}]", self.code, sub_code)
+        } else {
+            self.code.clone()
+        }
+    }
     pub fn is_valid(&self) -> bool {
         match self.life {
             PermissionLife::None => false,
@@ -96,24 +119,36 @@ pub enum PermissionLife {
     Duration(std::time::Duration),
     Forever,
 }
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct AgentTimer {
     pub id: i64,
     pub corn: String,
     pub times: u32,
-    pub trigger_times: u32,
     pub payload: String,
+    pub trigger_times: AtomicU32,
 }
 impl AgentTimer {
+    pub fn new(corn: String, times: u32, payload: String) -> Self {
+        Self {
+            id: 0,
+            corn,
+            times,
+            payload,
+            trigger_times: AtomicU32::new(0),
+        }
+    }
+
     pub fn is_disused(&self) -> bool {
         if self.times == 0 {
             return false;
         }
-        self.trigger_times >= self.times
+        self.trigger_times
+            .load(std::sync::atomic::Ordering::Relaxed)
+            >= self.times
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum AgentStatus {
     #[default]

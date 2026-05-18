@@ -37,3 +37,5 @@ dashmap = "6.1.0"
 humantime = "2.1" # 可读时间
 base64 = "0.22.1"
 scopeguard = "1.2.0"
+
+uuid ={version = "1",features = ["v4"]}

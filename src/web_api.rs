@@ -1,4 +1,4 @@
-use std::convert::Infallible;
+use std::{convert::Infallible, sync::Arc};
 
 use axum::{
     extract::Path,
@@ -34,8 +34,10 @@ pub async fn connect(
                 .expect("agent不存在！");
             drop(p);
             let mut p = AGENT_POOL.write().await;
-            let (agent, runime, mind) = AgentInstance::new(agent).await;
+            let (agent, runime, mind) = AgentInstance::build(agent).await;
             runime.start(mind);
+            agent.scheduler.clone().start().unwrap();
+            // let agent = Arc::new(agent);
             p.insert(agent_id, agent);
             p.get(&agent_id).unwrap().clone()
         }

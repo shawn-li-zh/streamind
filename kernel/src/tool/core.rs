@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
 use crate::{
-    agent::AgentContext,
+    agent::context::AgentContext,
     message::Binary,
     tool::{
         context::ToolCallContext,
@@ -71,6 +71,7 @@ pub type ToolPackagePool = HashMap<&'static str, ToolPackage>;
 #[serde(tag = "type", content = "payload")]
 #[serde(rename_all = "camelCase")]
 pub enum ToolReturnValue {
+    Ignore,
     Raw(String),
     Json(serde_json::Value),
     Image(Binary),
@@ -95,6 +96,9 @@ impl ToolReturn {
     }
     pub fn json<T: Serialize>(v: T) -> anyhow::Result<Self> {
         Ok(ToolReturnValue::Json(serde_json::to_value(v)?).into())
+    }
+    pub fn ignore() -> Self {
+        ToolReturnValue::Ignore.into()
     }
 }
 

@@ -14,7 +14,7 @@ use tokio::{
 use tracing::debug;
 
 use crate::{
-    agent::AgentContext,
+    agent::{AgentHandler, context::AgentContext},
     event::{ToolCallEvent, ToolCallResultItem, ToolCallStatus},
     tool::{
         ToolPackagePool,
@@ -69,13 +69,16 @@ impl ToolEngineContext {
 }
 
 pub struct ToolEngine {
+    agent_handler: Arc<dyn AgentHandler>,
     agent_context: Arc<AgentContext>,
     context: Arc<ToolEngineContext>,
 }
 impl ToolEngine {
-    pub fn new(agent_context: Arc<AgentContext>, context: Arc<ToolEngineContext>) -> Self {
+    pub fn new(agent_handler: Arc<dyn AgentHandler>, context: Arc<ToolEngineContext>) -> Self {
+        let agent_context = agent_handler.context();
         Self {
             agent_context,
+            agent_handler,
             context,
         }
     }
@@ -121,9 +124,9 @@ impl ToolEngine {
             sender.send(ToolCallEvent::Active(call.id)).await.unwrap();
             //
             let sender: mpsc::Sender<ToolCallEvent> = sender.clone();
-            let agent_ctx = self.agent_context.clone();
+            let agent_handler = self.agent_handler.clone();
             let handle = tokio::spawn(async move {
-                let res = call.exec(agent_ctx).await;
+                let res = call.exec(agent_handler).await;
                 send(sender, id, res, start.elapsed()).await
             });
             concurrent_tasks.push(handle);

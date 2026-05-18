@@ -2,7 +2,7 @@ use axum::{Json, extract::Path};
 
 use entity_service::DB;
 
-use kernel::agent::PermissionLife;
+use kernel::agent::context::PermissionLife;
 use serde::Deserialize;
 
 use crate::wrapper::ApiResponse;
@@ -67,7 +67,7 @@ pub async fn permission_apply(
     Json(req): Json<PermissionApply>,
 ) -> ApiResponse<()> {
     let db = DB.get().unwrap();
-    if let Err(err) = entity_service::agent_permission::apply(
+    if let Err(err) = entity_service::agent_permission::create(
         db,
         agent_id,
         req.code,

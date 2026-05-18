@@ -5,7 +5,7 @@ use axum::response::sse;
 use entity_service::DB;
 // use sea_orm::{DbErr, TransactionTrait};
 use kernel::{
-    agent::{AgentEvent, AgentInfo},
+    agent::context::{AgentEvent, AgentInfo, AgentStatus},
     event::EnvEvent,
 };
 
@@ -17,9 +17,11 @@ use crate::sse_event::WebEvent;
 pub struct AgentChannel {
     agent_info: Arc<RwLock<AgentInfo>>,
     event_sender: mpsc::Sender<AgentEvent>,
+    pub(crate) status_sender: watch::Sender<AgentStatus>,
     //函数调用
     call_watcher: RwLock<watch::Receiver<bool>>,
     run_watcher: RwLock<watch::Receiver<bool>>,
+    status_watcher: RwLock<watch::Receiver<AgentStatus>>,
     web_sender: RwLock<Option<mpsc::UnboundedSender<sse::Event>>>,
 }
 
@@ -27,14 +29,19 @@ impl AgentChannel {
     pub fn new(
         agent_info: Arc<RwLock<AgentInfo>>,
         event_sender: mpsc::Sender<AgentEvent>,
+        status_sender: watch::Sender<AgentStatus>,
+        //
         call_watcher: RwLock<watch::Receiver<bool>>,
         run_watcher: RwLock<watch::Receiver<bool>>,
+        status_watcher: RwLock<watch::Receiver<AgentStatus>>,
     ) -> Self {
         Self {
             agent_info,
             event_sender,
+            status_sender,
             call_watcher,
             run_watcher,
+            status_watcher,
             web_sender: RwLock::new(None),
         }
     }
@@ -99,6 +106,17 @@ impl AgentChannel {
         call_watcher.wait_for(|v| *v == is).await?;
         Ok(())
     }
+    pub async fn wait_status_is(&self, is: AgentStatus) -> anyhow::Result<()> {
+        let mut status_watcher = self.status_watcher.write().await;
+        status_watcher.wait_for(|v| *v == is).await?;
+        Ok(())
+    }
+
+    pub fn send_status(&self, status: AgentStatus) -> anyhow::Result<()> {
+        self.status_sender.send(status)?;
+        Ok(())
+    }
+
     pub(crate) async fn send_web_event(&self, e: WebEvent) {
         let web_sender = self.web_sender.read().await;
         if let Some(sender) = &*web_sender {

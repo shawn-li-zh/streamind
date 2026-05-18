@@ -11,7 +11,7 @@ use entity_service::DB;
 use futures::{Stream, StreamExt, stream};
 
 use kernel::{
-    agent::AgentEvent,
+    agent::context::AgentEvent,
     message::{Message, Role},
     section::{self, Section},
 };

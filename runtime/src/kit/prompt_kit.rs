@@ -9,7 +9,7 @@ use async_openai::types::chat::{
 };
 
 use base64::{Engine, engine::general_purpose};
-use kernel::agent::{AgentContext, AgentInfo};
+use kernel::agent::context::{AgentContext, AgentInfo};
 
 pub static GENERATE_RULE: &str = include_str!("../../../prompts/common/generate_rule.md");
 pub static TOOL_CALL_RULE: &str = include_str!("../../../prompts/common/tool_call_rule.md");

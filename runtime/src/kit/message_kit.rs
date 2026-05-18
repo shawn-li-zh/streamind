@@ -3,7 +3,7 @@ use std::{collections::HashMap, fs::File};
 use async_openai::types::chat::ChatCompletionRequestMessage;
 use entity::event::EnvEventType;
 
-use kernel::{agent::AgentContext, event::EnvEvent, message::Message, section::Section};
+use kernel::{agent::context::AgentContext, event::EnvEvent, message::Message, section::Section};
 
 use crate::{
     context::stack::{MindNode, MindStack},
@@ -100,7 +100,7 @@ pub async fn load_stack(agent_ctx: &AgentContext) -> anyhow::Result<MindStack> {
         let events = state_id_map_events.remove(&state.id).unwrap_or_default();
         for event in events {
             let agent_event = entity_service::event::convert::from_entity(event);
-      
+
             if let EnvEvent::AgentResponse(s) = &agent_event.data {
                 if let EnvEvent::AgentResponse(sections) = agent_event.data {
                     stack.push_response(sections);

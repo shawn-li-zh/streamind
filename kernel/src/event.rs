@@ -120,6 +120,8 @@ impl EnvEvent {
                         list.push(Information::Text(head));
                         for value in item.values {
                             match value {
+                                ToolReturnValue::Ignore => {}
+
                                 ToolReturnValue::Raw(text) => {
                                     list.push(Information::Text(text));
                                 }
@@ -146,11 +148,7 @@ impl EnvEvent {
                 vec![one]
             }
             EnvEvent::Interaction(data) => {
-                let one = format!(
-                    "渲染ID:{}, 负载消息:{}",
-                    data.section_id, data.message
-                )
-                .into();
+                let one = format!("渲染ID:{}, 负载消息:{}", data.section_id, data.message).into();
                 vec![one]
             }
         }

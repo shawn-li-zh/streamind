@@ -1,7 +1,7 @@
 use anyhow::Context;
 
 use kernel::{
-    agent::AgentEvent,
+    agent::context::AgentEvent,
     event::EnvEvent,
     section::{Section, SectionTag},
 };

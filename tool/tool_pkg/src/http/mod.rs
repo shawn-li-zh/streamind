@@ -1,5 +1,4 @@
 use std::{
-    any::Any,
     collections::HashMap,
     fs::File,
     io::{Read, Seek, SeekFrom, Write},
@@ -26,20 +25,20 @@ use tool_macro::package;
 //     });
 //     pkg
 // }
-#[package("HTTP网络请求与测试工具")]
+#[package("HTTP网络请求,核心工具是request")]
 pub mod http {
     use crate::http::{
         PreparedBody, ResponseEntry, assemble_body, assemble_headers, process_response,
     };
-    use anyhow::{Result, anyhow};
-    use kernel::agent::AgentInfo;
+    use anyhow::anyhow;
+
     use kernel::tool::core::ToolReturn;
-    use kernel::{agent::AgentContext, tool::ToolCallContext};
+    use kernel::{agent::context::AgentContext, tool::ToolCallContext};
     use reqwest::{Client, Method};
     use serde::{Deserialize, Serialize};
-    use serde_json::{Value, json};
-    use std::{any::Any, collections::HashMap, time::Duration};
-    use std::{path::Path, sync::Arc, time::Instant};
+    use serde_json::Value;
+    use std::{collections::HashMap, time::Duration};
+    use std::{sync::Arc, time::Instant};
     use tokio::sync::RwLock;
 
     pub struct Context {

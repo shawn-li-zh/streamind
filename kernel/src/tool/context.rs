@@ -7,12 +7,11 @@ use std::{
 };
 
 use chrono::Local;
-use tokio::sync::RwLock;
 
 use crate::{
-    agent::AgentContext,
+    agent::{AgentHandler, context::AgentContext},
     tool::{
-        ContextData, SafeAny, Tool, ToolPackage,
+        ContextData, Tool, ToolPackage,
         plugin::{
             interceptor::{ContentSizeLimiter, PermissonChecker, RateLimiter, ToolCallnterceptor},
             wrapper::TimeoutWrapper,
@@ -85,7 +84,8 @@ impl ToolPackageContext {
 }
 
 pub struct ToolCallContext {
-    pub agent_context: Arc<AgentContext>,
+    // pub agent_context: Arc<AgentContext>,
+    pub agent_handler: Arc<dyn AgentHandler>,
     pub context_data: ContextData,
     pub workspace: PathBuf,
     pkg: &'static ToolPackage,
@@ -94,20 +94,17 @@ pub struct ToolCallContext {
 }
 
 impl ToolCallContext {
-    pub async fn new(
-        agent_context: Arc<AgentContext>,
+    pub fn new(
+        agent_handler: Arc<dyn AgentHandler>,
         context_data: ContextData,
         pkg: &'static ToolPackage,
         tool: &'static Tool,
         call_id: String,
     ) -> Self {
-        let workspace = {
-            let cur = std::env::current_dir().unwrap();
-            let info = agent_context.info.read().await;
-            cur.join(&info.workspace)
-        };
+        let agent_context = agent_handler.context();
+        let workspace = agent_context.worksapce.clone();
         Self {
-            agent_context,
+            agent_handler,
             context_data,
             workspace,
             pkg,
@@ -160,7 +157,8 @@ impl ToolCallContext {
         self.new_file(&path)
     }
     pub fn has_permission(&self, code: &str, sub_code: Option<&str>) -> bool {
-        let code = format!("{}:{}", code, sub_code.unwrap_or_default());
-        self.agent_context.permissions.contains_key(&code)
+        self.agent_handler
+            .authority()
+            .has_permission(code, sub_code)
     }
 }

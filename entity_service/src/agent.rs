@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
-use chrono::Local;
+use chrono::{DateTime, Local};
 
-use entity::types::array::StringArray;
+use entity::{agent::AgentStatus, types::array::StringArray};
 use sea_orm::{
     ActiveModelTrait,
     ActiveValue::{self, Set},
@@ -36,6 +36,7 @@ pub async fn save(
         code: Set(code),
         tool_packages: Set(StringArray(tool_packages)),
         create_time: Set(Local::now()),
+        status: Set(AgentStatus::Idle),
         ..Default::default()
     };
     let agent = agent.insert(db).await?;
@@ -43,6 +44,28 @@ pub async fn save(
     let state = format!("{CORE_STATE}");
     crate::state::push(db, agent.id, 0, "根节点".to_string(), state).await?;
     Ok(agent)
+}
+
+pub async fn update_status(
+    db: &impl ConnectionTrait,
+    agent_id: u32,
+    status: kernel::agent::context::AgentStatus,
+    sleep_until: Option<DateTime<Local>>,
+) -> anyhow::Result<()> {
+    let s = serde_json::to_string(&status)?;
+    let status: AgentStatus = serde_json::from_str(&s)?;
+    let agent = entity::agent::ActiveModel {
+        status: Set(status),
+        sleep_until: Set(sleep_until),
+        ..Default::default()
+    };
+    entity::agent::Entity::update_many()
+        .set(agent)
+        .filter(entity::agent::Column::Id.eq(agent_id))
+        .exec(db)
+        .await?;
+
+    Ok(())
 }
 pub async fn startup(db: &impl ConnectionTrait, agent_id: u32) -> anyhow::Result<()> {
     entity::agent::Entity::update_many()

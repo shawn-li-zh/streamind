@@ -21,7 +21,7 @@ pub mod browser {
     };
     use futures::StreamExt;
     use kernel::{
-        agent::{AgentContext, AgentInfo},
+        agent::context::{AgentContext, AgentInfo},
         simple_id,
         tool::{ContextData, core::ToolReturn},
     };

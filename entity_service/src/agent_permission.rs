@@ -1,5 +1,5 @@
 use chrono::Local;
-use kernel::agent::PermissionLife;
+use kernel::agent::context::PermissionLife;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter,
 };
@@ -14,6 +14,17 @@ pub async fn list(agent_id: u32) -> anyhow::Result<Vec<entity::agent_permission:
         .filter(entity::agent_permission::Column::AgentId.eq(agent_id))
         .filter(entity::agent_permission::Column::Disused.eq(false))
         .all(db)
+        .await?;
+    Ok(res)
+}
+pub async fn get(agent_id: u32, id: i64) -> anyhow::Result<Option<entity::agent_permission::Model>> {
+    let db = DB.get().unwrap();
+    //获取权限
+    let res = entity::agent_permission::Entity::find()
+        .filter(entity::agent_permission::Column::AgentId.eq(agent_id))
+        .filter(entity::agent_permission::Column::Id.eq(id))
+        .filter(entity::agent_permission::Column::Disused.eq(false))
+        .one(db)
         .await?;
     Ok(res)
 }
@@ -32,14 +43,14 @@ pub async fn revoke(db: &impl ConnectionTrait, agent_id: u32, id: i64) -> anyhow
     Ok(())
 }
 
-pub async fn apply(
+pub async fn create(
     db: &impl ConnectionTrait,
     agent_id: u32,
     code: String,
     sub_code: Option<String>,
     purpose: String,
     life: PermissionLife,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<i64> {
     let mut query = entity::agent_permission::Entity::find()
         .filter(entity::agent_permission::Column::AgentId.eq(agent_id))
         .filter(entity::agent_permission::Column::Code.eq(&code))
@@ -53,7 +64,7 @@ pub async fn apply(
             return Err(anyhow::anyhow!("权限已存在"));
         }
     }
-    entity::agent_permission::ActiveModel {
+    let model = entity::agent_permission::ActiveModel {
         agent_id: Set(agent_id),
         code: Set(code),
         sub_code: Set(sub_code),
@@ -65,5 +76,5 @@ pub async fn apply(
     }
     .insert(db)
     .await?;
-    Ok(())
+    Ok(model.id)
 }

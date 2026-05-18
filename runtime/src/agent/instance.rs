@@ -1,21 +1,35 @@
-use std::{collections::HashSet, path::PathBuf, sync::Arc};
+use std::{
+    collections::HashSet,
+    path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicPtr, AtomicU32},
+    },
+};
 
+use async_trait::async_trait;
 use dashmap::DashMap;
 
-use entity_service::DB;
-// use sea_orm::{DbErr, TransactionTrait};
+use entity::agent;
 use kernel::{
-    agent::{AgentContext, AgentInfo, PermissionLife},
+    agent::{
+        AgentHandler,
+        context::{AgentContext, AgentEvent, AgentInfo, AgentStatus, AgentTimer, PermissionLife},
+    },
     event::EnvEvent,
     tool::engine::{ToolEngine, ToolEngineContext},
 };
 
 use tokio::sync::{RwLock, mpsc, watch};
-use tracing::info;
 
 use crate::{
-    agent::{channel::AgentChannel, runtime::AgentRuntime},
-    context::mind::{self, StreamMind},
+    agent::{
+        channel::AgentChannel,
+        permission::AgentAuthority,
+        runtime::AgentRuntime,
+        scheduler::{self, AgentScheduler},
+    },
+    context::mind::StreamMind,
     global::{AGENT_CTX_POOL, ENGINE_POOL, TOOL_PACKAGE_TOOL},
     kit::message_kit,
 };
@@ -23,10 +37,13 @@ use crate::{
 pub struct AgentInstance {
     pub context: Arc<AgentContext>,
     pub channel: Arc<AgentChannel>,
+    pub scheduler: Arc<AgentScheduler>,
+    pub authority: Arc<AgentAuthority>,
+    pub status_watcher: watch::Sender<AgentStatus>,
 }
 
 impl AgentInstance {
-    pub async fn new(
+    pub async fn build(
         agent: entity::agent::Model,
     ) -> (Arc<AgentInstance>, AgentRuntime, StreamMind) {
         let agent_id = agent.id;
@@ -45,15 +62,17 @@ impl AgentInstance {
         let reorganize_watcher: (watch::Sender<bool>, watch::Receiver<bool>) =
             watch::channel(false);
         let run_watcher: (watch::Sender<bool>, watch::Receiver<bool>) = watch::channel(false);
+        let status_watcher: (watch::Sender<AgentStatus>, watch::Receiver<AgentStatus>) =
+            watch::channel(AgentStatus::Idle);
 
-        //工具执行器
-        let tool_engine = { ToolEngine::new(context.clone(), context.tool_engine_context.clone()) };
         //初始化
         let channel = AgentChannel::new(
             context.info.clone(),
             event.0,
+            status_watcher.0,
             RwLock::new(call_watcher.1),
             RwLock::new(run_watcher.1),
+            RwLock::new(status_watcher.1),
         );
 
         let channel = Arc::new(channel);
@@ -75,6 +94,22 @@ impl AgentInstance {
             reorganize_watcher.0,
             run_watcher.0,
         );
+        //定时器
+        let scheduler = AgentScheduler::new(context.clone(), channel.clone());
+        let authority: Arc<AgentAuthority> = Arc::new(AgentAuthority {
+            context: context.clone(),
+        });
+        //创建代理实例
+        let agent = AgentInstance {
+            context: context.clone(),
+            channel: channel.clone(),
+            authority: authority.clone(),
+            scheduler: Arc::new(scheduler),
+            status_watcher: channel.status_sender.clone(),
+        };
+        let agent = Arc::new(agent);
+        //工具执行器
+        let tool_engine = { ToolEngine::new(agent.clone(), context.tool_engine_context.clone()) };
         //运行时
         let runtime = AgentRuntime::new(
             context.clone(),
@@ -85,19 +120,13 @@ impl AgentInstance {
             call_watcher.0,
         );
 
-        let agent = AgentInstance {
-            context: context.clone(),
-            channel: channel.clone(),
-        };
-        let agent = Arc::new(agent);
         (agent, runtime, stream_mind)
     }
-    pub async fn stop(&mut self, reason: String) -> anyhow::Result<()> {
+    pub async fn stop(&self) -> anyhow::Result<()> {
         self.channel
-            .send_event(EnvEvent::Interrupt(reason), true)
+            .send_event(EnvEvent::Interrupt("程序暂停".to_string()), true)
             .await?;
         self.channel.wait_run_is(false).await?;
-
         Ok(())
     }
 }
@@ -105,6 +134,52 @@ impl Drop for AgentInstance {
     fn drop(&mut self) {
         let ctx = self.context.clone();
         tokio::spawn(async move { ctx.tool_engine_context.shutdown().await.unwrap() });
+    }
+}
+#[async_trait]
+impl AgentHandler for AgentInstance {
+    async fn send_event(&self, event: EnvEvent, force: bool) -> anyhow::Result<AgentEvent> {
+        let (event, _) = self.channel.send_event(event, force).await?;
+        Ok(event)
+    }
+
+    async fn sleep_until(&self, time: chrono::DateTime<chrono::Local>) -> anyhow::Result<()> {
+        if time <= chrono::Local::now() {
+            anyhow::bail!("Cannot sleep until the past")
+        }
+        let mut info = self.context.info.write().await;
+        //只设置睡眠时间，当心跳现场执行时自动修改状态
+        info.sleep_until = Some(time);
+        Ok(())
+    }
+
+    async fn wakeup(&self) -> anyhow::Result<()> {
+        let mut info = self.context.info.write().await;
+        info.sleep_until = None;
+        self.status_watcher.send(AgentStatus::Idle)?;
+        Ok(())
+    }
+
+    async fn stop(&self) -> anyhow::Result<()> {
+        AgentInstance::stop(&self).await?;
+        Ok(())
+    }
+
+    async fn get_status(&self) -> AgentStatus {
+        let info = self.context.info.read().await;
+        info.status.clone()
+    }
+
+    fn context(&self) -> Arc<AgentContext> {
+        self.context.clone()
+    }
+
+    fn authority(&self) -> Arc<dyn kernel::agent::AgentAuthorityHandler> {
+        self.authority.clone()
+    }
+
+    fn timer_handler(&self) -> Arc<dyn kernel::agent::AgentSchedulerHandler> {
+        self.scheduler.clone()
     }
 }
 
@@ -132,7 +207,6 @@ pub async fn build_agent_context(agent: entity::agent::Model) -> Arc<AgentContex
         std::fs::create_dir_all(space).unwrap();
     }
     //tool engine context
-
     let tool_engine_context = {
         let mut tool_pkgs = HashSet::new();
         for pkg_name in &agent.tool_packages.0 {
@@ -158,15 +232,32 @@ pub async fn build_agent_context(agent: entity::agent::Model) -> Arc<AgentContex
         for item in permissions {
             let life: PermissionLife = serde_json::from_value(item.life).unwrap();
 
-            let p = kernel::agent::AgentPermission {
+            let p = kernel::agent::context::AgentPermission {
                 id: item.id,
                 code: item.code,
                 sub_code: item.sub_code,
                 life: life,
+                purpose: item.purpose,
                 use_times: item.use_times,
                 create_time: item.create_time,
             };
             map.insert(p.code.clone(), p);
+        }
+        map
+    };
+    //获取定时器
+    let timers = {
+        let timers = entity_service::agent_timer::list(agent.id).await.unwrap();
+        let map = DashMap::new();
+        for t in timers {
+            let timer = AgentTimer {
+                id: t.id,
+                corn: t.corn,
+                times: t.times,
+                trigger_times: AtomicU32::new(t.trigger_times),
+                payload: t.payload,
+            };
+            map.insert(t.id, Arc::new(timer));
         }
         map
     };
@@ -177,6 +268,7 @@ pub async fn build_agent_context(agent: entity::agent::Model) -> Arc<AgentContex
         info: Arc::new(RwLock::new(agent_info)),
         tool_engine_context: Arc::new(tool_engine_context),
         permissions: Arc::new(permissions),
+        timers: Arc::new(timers),
     };
     agent_context
         .tool_engine_context

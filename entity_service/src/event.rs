@@ -5,7 +5,7 @@ use entity::{
     format::date_time,
 };
 use kernel::{
-    agent::{AgentEvent, AgentInfo},
+    agent::context::{AgentEvent, AgentInfo},
     event::{EnvEvent, ToolCallDetailItem},
     section::Section,
 };
@@ -22,7 +22,7 @@ pub mod convert {
 
     use entity::event::EnvEventType;
     use kernel::{
-        agent::AgentEvent,
+        agent::context::AgentEvent,
         event::{EnvEvent, UserMessage},
     };
     use serde_json::json;
@@ -37,7 +37,6 @@ pub mod convert {
     }
     pub fn to_json(event: EnvEvent) -> serde_json::Value {
         match event {
-
             EnvEvent::AgentResponse(sections) => json!(sections),
             EnvEvent::Heartbeat => json!(()),
             EnvEvent::UserRequest(msg) => {
@@ -98,7 +97,6 @@ pub mod convert {
 
     pub fn to_type_enum(event: &EnvEvent) -> EnvEventType {
         match event {
-
             EnvEvent::AgentResponse(_) => EnvEventType::AgentResponse,
             EnvEvent::Heartbeat => EnvEventType::Heartbeat,
             EnvEvent::UserRequest(_) => EnvEventType::UserRequest,
@@ -109,6 +107,71 @@ pub mod convert {
             EnvEvent::Interaction(_) => EnvEventType::Interaction,
         }
     }
+}
+
+pub async fn get_by_id(agent_id: u32, id: i64) -> anyhow::Result<Option<entity::event::Model>> {
+    let db = DB.get().unwrap();
+    let model = entity::event::Entity::find_by_id(id)
+        .filter(entity::event::Column::AgentId.eq(agent_id))
+        .one(db)
+        .await?;
+    Ok(model)
+}
+
+pub async fn time_range(
+    agent_id: u32,
+    start: chrono::DateTime<Local>,
+    end: chrono::DateTime<Local>,
+    event_type: Option<String>,
+    key: Option<String>,
+    limit: u64,
+) -> anyhow::Result<Vec<entity::event::Model>> {
+    let db = DB.get().unwrap();
+    let mut query = entity::event::Entity::find()
+        .filter(entity::event::Column::AgentId.eq(agent_id))
+        .filter(entity::event::Column::Time.between(start, end));
+    if let Some(key) = key {
+        query = query.filter(entity::event::Column::Data.like(key));
+    }
+    if let Some(event_type) = event_type {
+        query = query.filter(entity::event::Column::EventType.eq(event_type));
+    }
+    let models = query
+        .order_by_desc(entity::event::Column::Time)
+        .limit(limit)
+        .all(db)
+        .await?;
+    Ok(models)
+}
+
+pub async fn search_at(
+    agent_id: u32,
+    id: i64,
+    event_type: Option<String>,
+    key: Option<String>,
+    limit: u64,
+    is_before: bool,
+) -> anyhow::Result<Vec<entity::event::Model>> {
+    let db = DB.get().unwrap();
+    let mut query =
+        entity::event::Entity::find().filter(entity::event::Column::AgentId.eq(agent_id));
+    if is_before {
+        query = query.filter(entity::event::Column::Id.lt(id));
+    } else {
+        query = query.filter(entity::event::Column::Id.gt(id));
+    }
+    if let Some(key) = key {
+        query = query.filter(entity::event::Column::Data.like(key));
+    }
+    if let Some(event_type) = event_type {
+        query = query.filter(entity::event::Column::EventType.eq(event_type));
+    }
+    let models = query
+        .order_by_desc(entity::event::Column::Time)
+        .limit(limit)
+        .all(db)
+        .await?;
+    Ok(models)
 }
 
 pub async fn save(

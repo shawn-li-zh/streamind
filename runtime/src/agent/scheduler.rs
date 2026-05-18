@@ -1,90 +1,211 @@
 use std::{
-    sync::Arc,
+    sync::{Arc, OnceLock, atomic::AtomicBool},
     time::{Duration, Instant},
 };
 
+use async_trait::async_trait;
 use chrono::Local;
 use dashmap::DashMap;
+
+use entity_service::DB;
 use kernel::{
-    agent::{AgentContext, AgentTimer},
+    agent::{
+        AgentSchedulerHandler,
+        context::{AgentContext, AgentStatus, AgentTimer},
+    },
     event::{EnvEvent, TimerData},
-    message::Message,
 };
-use tokio::{sync::RwLock, time::sleep_until};
+use tokio::time::sleep_until;
 use tokio_cron_scheduler::{Job, JobScheduler};
+use uuid::Uuid;
 
 use crate::agent::channel::AgentChannel;
+
+pub(crate) static SCHEDULER: OnceLock<JobScheduler> = OnceLock::new();
 
 pub struct AgentScheduler {
     pub context: Arc<AgentContext>,
     pub channel: Arc<AgentChannel>,
-    pub timers: DashMap<i64, AgentTimer>,
-    pub sched: Arc<JobScheduler>,
-    map: Arc<DashMap<String, i64>>,
+    timers: DashMap<i64, (Arc<AgentTimer>, Uuid)>,
+    uuid_timers: DashMap<Uuid, Arc<AgentTimer>>,
+    is_running: AtomicBool,
 }
 impl AgentScheduler {
-    pub async fn push_scheduled(&self, payload: Message, time: Instant) {
-
-        // agent.timers.insert(timer.id, timer);
+    pub fn new(context: Arc<AgentContext>, channel: Arc<AgentChannel>) -> Self {
+        Self {
+            context,
+            channel,
+            timers: DashMap::new(),
+            uuid_timers: DashMap::new(),
+            is_running: AtomicBool::new(false),
+        }
     }
-    async fn run_scheduled(&self) -> anyhow::Result<()> {
-        for timer in &self.timers {
-            if timer.is_disused() {
-                continue;
+    pub fn start(self: Arc<Self>) -> anyhow::Result<()> {
+        if self.is_running.load(std::sync::atomic::Ordering::Relaxed) {
+            anyhow::bail!("AgentScheduler is already running");
+        }
+        self.is_running
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+
+        let var = std::env::var("HEARTBEAT_INTERVAL").unwrap_or("5".to_string());
+        let secs = var.parse::<u64>()?;
+
+        let interval = std::time::Duration::from_secs(secs);
+
+        let s = self.clone();
+        tokio::spawn(async move {
+            //添加进调度器
+            for timer in self.context.timers.iter() {
+                self.add_timer(timer.clone()).await.unwrap();
             }
-            let channel = self.channel.clone();
-            let map = self.map.clone();
-            let timers = self.timers.clone();
-            let job = Job::new_async(&timer.corn, move |uuid, l| {
-                let channel = channel.clone();
-                let map = map.clone();
-                let timers = timers.clone();
-                Box::pin(async move {
-                    if let Some(id) = map.get(&uuid.to_string()) {
-                        if let Some(mut timer) = timers.get_mut(&id) {
-                            timer.trigger_times += 1;
-                            let event = EnvEvent::Timer(TimerData {
-                                id: timer.id,
-                                corn: timer.corn.clone(),
-                                payload: timer.payload.clone(),
-                                times: timer.times,
-                                trigger_times: timer.trigger_times,
-                            });
-                            let _ = channel.send_event(event, false).await.unwrap();
-                            if !timer.is_disused() {
-                                return;
-                            }
-                        }
-                    }
-                    l.remove(&uuid).await.unwrap();
-                })
-            })?;
-            let id = timer.id;
-            self.map.insert(job.guid().to_string(), id);
-            self.sched.add(job).await?;
+            //启动心跳
+            s.heartbeat(interval).await;
+        });
+        Ok(())
+    }
+    pub async fn add_timer(&self, timer: Arc<AgentTimer>) -> anyhow::Result<()> {
+        if timer.is_disused() {
+            return Ok(());
+        }
+        let id = timer.id;
+        let job = self.to_job(timer.clone())?;
+        self.uuid_timers.insert(job.guid(), timer.clone());
+        self.timers.insert(id, (timer, job.guid()));
+        let sched = SCHEDULER.get().unwrap();
+        sched.add(job).await?;
+        Ok(())
+    }
+    pub async fn remove_timer(&self, id: i64) -> anyhow::Result<()> {
+        if let Some((_, (_, uuid))) = self.timers.remove(&id) {
+            let sched = SCHEDULER.get().unwrap();
+            sched.remove(&uuid).await?;
+            self.uuid_timers.remove(&uuid);
         }
         Ok(())
     }
+
     async fn heartbeat(&self, interval: Duration) {
         let mut interval = tokio::time::interval(interval);
-
+        let db = DB.get().unwrap();
         loop {
             let info = self.context.info.read().await;
             if let Some(date_time) = &info.sleep_until {
-                // 休眠中
-                let deadline = *date_time - Local::now();
-                let deadline = Instant::now() + deadline.to_std().unwrap();
-                sleep_until(deadline.into()).await;
+                let date_time = date_time.clone();
+                let deadline = date_time - Local::now();
                 drop(info);
-                let mut info = self.context.info.write().await;
-                info.sleep_until = None
+                {
+                    //修改状态
+                    let mut info = self.context.info.write().await;
+                    info.status = AgentStatus::Sleep;
+                    entity_service::agent::update_status(
+                        db,
+                        info.id,
+                        info.status.clone(),
+                        Some(date_time),
+                    )
+                    .await
+                    .unwrap();
+                    // 休眠中
+                    let ch = self.channel.clone();
+                    let ctx = self.context.clone();
+                    tokio::spawn(async move {
+                        let deadline = Instant::now() + deadline.to_std().unwrap();
+                        sleep_until(deadline.into()).await;
+                        //修改状态
+                        let mut info = ctx.info.write().await;
+                        info.status = AgentStatus::Idle;
+                        info.sleep_until = None;
+                        entity_service::agent::update_status(
+                            db,
+                            info.id,
+                            info.status.clone(),
+                            None,
+                        )
+                        .await
+                        .unwrap();
+                        //发送状态
+                        ch.send_status(AgentStatus::Idle).unwrap();
+                    });
+                    self.channel
+                        .wait_status_is(AgentStatus::Idle)
+                        .await
+                        .unwrap();
+                }
             }
             interval.tick().await;
-
-            self.channel
-                .send_event(EnvEvent::Heartbeat, false)
-                .await
-                .unwrap();
+            let info = self.context.info.read().await;
+            match info.status {
+                AgentStatus::Idle => {
+                    self.channel
+                        .send_event(EnvEvent::Heartbeat, false)
+                        .await
+                        .unwrap();
+                }
+                _ => {
+                    continue;
+                }
+            }
         }
+    }
+    fn to_job(&self, timer: Arc<AgentTimer>) -> anyhow::Result<Job> {
+        let channel = self.channel.clone();
+        let timers = self.timers.clone();
+        let uuid_timers = self.uuid_timers.clone();
+        let timer_id = timer.id;
+        let job: Job = Job::new_async(&timer.corn, move |uuid, l| {
+            let channel = channel.clone();
+
+            let timers = timers.clone();
+            let uuid_timers = uuid_timers.clone();
+            Box::pin(async move {
+                if let Some(timer) = uuid_timers.get(&uuid) {
+                    let times = timer
+                        .trigger_times
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+                    let event = EnvEvent::Timer(TimerData {
+                        id: timer.id,
+                        corn: timer.corn.clone(),
+                        payload: timer.payload.clone(),
+                        times: timer.times,
+                        trigger_times: times + 1,
+                    });
+                    let _ = channel.send_event(event, false).await.unwrap();
+                    if !timer.is_disused() {
+                        return;
+                    }
+                }
+                // 删除定时器
+                l.remove(&uuid).await.unwrap();
+                uuid_timers.remove(&uuid);
+                timers.remove(&timer_id);
+            })
+        })?;
+        Ok(job)
+    }
+}
+#[async_trait]
+impl AgentSchedulerHandler for AgentScheduler {
+    async fn add(&self, mut timer: AgentTimer) -> anyhow::Result<i64> {
+        let db = DB.get().unwrap();
+        let agent_id = self.context.agent_id;
+        let id = entity_service::agent_timer::create(
+            db,
+            agent_id,
+            timer.corn.clone(),
+            timer.times,
+            timer.payload.clone(),
+        )
+        .await?;
+        timer.id = id;
+        self.add_timer(Arc::new(timer)).await?;
+        Ok(id)
+    }
+
+    async fn cancel(&self, id: i64) -> anyhow::Result<()> {
+        let db = DB.get().unwrap();
+        entity_service::agent_timer::cancel(db, id).await?;
+        self.remove_timer(id).await?;
+        Ok(())
     }
 }

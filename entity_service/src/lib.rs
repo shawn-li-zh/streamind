@@ -1,11 +1,12 @@
 use std::{pin::Pin, sync::OnceLock, time::Duration};
 
+pub use entity::*;
 use sea_orm::{
     ConnectOptions, Database, DatabaseConnection, DatabaseTransaction, TransactionTrait,
 };
-
 pub mod agent;
 pub mod agent_permission;
+pub mod agent_timer;
 pub mod component;
 pub mod dependence;
 pub mod event;

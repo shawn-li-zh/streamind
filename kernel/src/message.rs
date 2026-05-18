@@ -2,7 +2,6 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::section::Section;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Binary {
     pub path: PathBuf,
@@ -84,7 +83,6 @@ impl Role {
         Role::Tool.message()
     }
 }
-
 
 #[derive(Debug, Clone)]
 pub struct Message {

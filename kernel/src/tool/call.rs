@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use crate::{
-    agent::AgentContext,
+    agent::{AgentHandler, context::AgentContext},
     tool::{
         Tool, ToolCallContext, ToolPackage,
         context::{ToolContext, ToolPackageContext},
@@ -69,16 +69,15 @@ impl ToolCall {
             tool_context,
         })
     }
-    pub async fn exec(self, agent_ctx: Arc<AgentContext>) -> anyhow::Result<ToolReturn> {
+    pub async fn exec(self, agent_handler: Arc<dyn AgentHandler>) -> anyhow::Result<ToolReturn> {
         let ctx_data = self.package_context.data.clone();
         let ctx = ToolCallContext::new(
-            agent_ctx,
+            agent_handler,
             ctx_data,
             self.package,
             self.tool,
             format!("{}", self.id),
-        )
-        .await;
+        );
         for interceptor in &self.tool_context.interceptors {
             interceptor.on_call(&ctx, &self)?;
         }

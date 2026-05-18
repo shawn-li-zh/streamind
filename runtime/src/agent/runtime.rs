@@ -1,16 +1,16 @@
 use std::{backtrace::Backtrace, collections::HashMap, sync::Arc, time::Instant};
 
 use anyhow::Context as _;
-use async_openai::types::responses;
+
 use entity::event::{EnvEventStatus, EnvEventType};
 use entity_service::DB;
 // use sea_orm::{DbErr, TransactionTrait};
 use kernel::{
-    agent::{AgentContext, AgentStatus},
+    agent::context::{AgentContext, AgentStatus},
     event::{CallItem, EnvEvent, SectionEvent, ToolCallDetailItem, ToolCallEvent, ToolCallStatus},
     render::RenderContext,
     section::{Section, SectionTag},
-    tool::{call::ToolCall, engine::ToolEngine},
+    tool::{call::ToolCall, core::ToolReturnValue, engine::ToolEngine},
 };
 
 use serde_json::json;
@@ -31,7 +31,7 @@ pub struct AgentRuntime {
     // pub agent: Arc<RwLock<AgentInstance>>,
     context: Arc<AgentContext>,
     channel: Arc<AgentChannel>,
-    mind_stack: Arc<RwLock<MindStack>>,
+    stack: Arc<RwLock<MindStack>>,
     tool_engine: ToolEngine,
     section_receiver: mpsc::Receiver<mind::Event>,
     call_watcher: watch::Sender<bool>,
@@ -41,7 +41,7 @@ impl AgentRuntime {
     pub(crate) fn new(
         context: Arc<AgentContext>,
         channel: Arc<AgentChannel>,
-        mind_stack: Arc<RwLock<MindStack>>,
+        stack: Arc<RwLock<MindStack>>,
         tool_engine: ToolEngine,
         section_receiver: mpsc::Receiver<mind::Event>,
         call_watcher: watch::Sender<bool>,
@@ -49,7 +49,7 @@ impl AgentRuntime {
         Self {
             context,
             channel,
-            mind_stack,
+            stack,
             tool_engine,
             section_receiver,
             call_watcher,
@@ -77,7 +77,7 @@ impl AgentRuntime {
                 info.status = AgentStatus::Idle;
             }
             let mut worker = ReactWorker {
-                stack: self.mind_stack.clone(),
+                stack: self.stack.clone(),
                 response_event_id: 0,
                 response_sections: vec![],
             };
@@ -225,7 +225,7 @@ impl AgentRuntime {
                     }
                     //处理压栈
                     if !pushs.is_empty() {
-                        push_state(agent_id, self.mind_stack.clone(), pushs).await?;
+                        push_state(agent_id, self.stack.clone(), pushs).await?;
                     }
                     //解锁
                     self.call_watcher.clone().send(false).unwrap();
@@ -355,7 +355,7 @@ async fn tool_call(
         tool_calls.push(call);
     }
     let (sender, mut receiver) = mpsc::channel::<ToolCallEvent>(tool_calls.len());
-    //批执行
+
     let ch = channel.clone();
     tokio::spawn(async move {
         //异步处理函数调用结果
@@ -375,13 +375,31 @@ async fn tool_call(
             detial.status = item.status;
             detial.elapsed = item.elapsed;
             //保存
-            entity_service::section::update_payload(db, detial.id, detial.clone()).await.unwrap();
+            entity_service::section::update_payload(db, detial.id, detial.clone())
+                .await
+                .unwrap();
         }
         //排序
         let details: Vec<ToolCallDetailItem> = call_ids
             .iter()
             .map(|id| tool_call_details.remove(id).unwrap())
+            .filter(|d| {
+                d.values
+                    .iter()
+                    .filter(|v| {
+                        if let ToolReturnValue::Ignore = v {
+                            return false;
+                        }
+                        return true;
+                    })
+                    .count()
+                    != 0
+            })
             .collect();
+        if details.is_empty() {
+            //没有有效的工具调用结果
+            return;
+        }
         //发送完整事件
         ch.send_event(EnvEvent::ToolCallResult(details), true)
             .await
@@ -394,7 +412,7 @@ async fn tool_call(
             response_event_id,
         ))
         .await;
-
+    //批执行
     tool_engine.batch_call(tool_calls, sender).await?;
     //结束
     channel

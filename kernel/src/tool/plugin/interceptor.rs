@@ -8,7 +8,7 @@ use std::{
 };
 
 use crate::{
-    agent::AgentContext,
+    agent::context::AgentContext,
     tool::{Tool, ToolCallContext, ToolPackage, call::ToolCall},
 };
 
@@ -135,12 +135,11 @@ impl ToolCallnterceptor for PermissonChecker {
         if call.tool.permissions.is_empty() {
             return Ok(());
         }
-        let valid = call.tool.permissions.iter().any(|v| {
-            if let Some(rf) = ctx.agent_context.permissions.get(*v) {
-                return rf.is_valid();
-            }
-            false
-        });
+        let valid = call
+            .tool
+            .permissions
+            .iter()
+            .any(|v| ctx.agent_handler.authority().has_permission(*v, None));
         if !valid {
             return Err(anyhow::anyhow!("权限缺失:{:#?}", &call.tool.permissions));
         }
