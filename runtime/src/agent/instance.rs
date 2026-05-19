@@ -5,12 +5,14 @@ use std::{
         Arc,
         atomic::{AtomicPtr, AtomicU32},
     },
+    time::{Duration, Instant},
 };
 
 use async_trait::async_trait;
 use dashmap::DashMap;
 
 use entity::agent;
+use entity_service::DB;
 use kernel::{
     agent::{
         AgentHandler,
@@ -20,7 +22,10 @@ use kernel::{
     tool::engine::{ToolEngine, ToolEngineContext},
 };
 
-use tokio::sync::{RwLock, mpsc, watch};
+use tokio::{
+    sync::{RwLock, mpsc, watch},
+    time::sleep_until,
+};
 
 use crate::{
     agent::{
@@ -39,7 +44,6 @@ pub struct AgentInstance {
     pub channel: Arc<AgentChannel>,
     pub scheduler: Arc<AgentScheduler>,
     pub authority: Arc<AgentAuthority>,
-    pub status_watcher: watch::Sender<AgentStatus>,
 }
 
 impl AgentInstance {
@@ -58,9 +62,7 @@ impl AgentInstance {
             mpsc::UnboundedSender<(String, bool)>,
             mpsc::UnboundedReceiver<(String, bool)>,
         ) = mpsc::unbounded_channel();
-        let call_watcher: (watch::Sender<bool>, watch::Receiver<bool>) = watch::channel(false);
-        let reorganize_watcher: (watch::Sender<bool>, watch::Receiver<bool>) =
-            watch::channel(false);
+
         let run_watcher: (watch::Sender<bool>, watch::Receiver<bool>) = watch::channel(false);
         let status_watcher: (watch::Sender<AgentStatus>, watch::Receiver<AgentStatus>) =
             watch::channel(AgentStatus::Idle);
@@ -70,7 +72,6 @@ impl AgentInstance {
             context.info.clone(),
             event.0,
             status_watcher.0,
-            RwLock::new(call_watcher.1),
             RwLock::new(run_watcher.1),
             RwLock::new(status_watcher.1),
         );
@@ -91,7 +92,6 @@ impl AgentInstance {
             inject.1,
             event.1,
             section.0,
-            reorganize_watcher.0,
             run_watcher.0,
         );
         //定时器
@@ -105,7 +105,6 @@ impl AgentInstance {
             channel: channel.clone(),
             authority: authority.clone(),
             scheduler: Arc::new(scheduler),
-            status_watcher: channel.status_sender.clone(),
         };
         let agent = Arc::new(agent);
         //工具执行器
@@ -117,7 +116,6 @@ impl AgentInstance {
             stack.clone(),
             tool_engine,
             section.1,
-            call_watcher.0,
         );
 
         (agent, runtime, stream_mind)
@@ -143,25 +141,48 @@ impl AgentHandler for AgentInstance {
         Ok(event)
     }
 
-    async fn sleep_until(&self, time: chrono::DateTime<chrono::Local>) -> anyhow::Result<()> {
-        if time <= chrono::Local::now() {
-            anyhow::bail!("Cannot sleep until the past")
+    async fn sleep(&self, duration: Duration) -> anyhow::Result<()> {
+        let ok = self
+            .channel
+            .send_status_if(AgentStatus::Waiting, AgentStatus::Sleep)
+            .await?;
+        if !ok {
+            anyhow::bail!("状态异常,睡眠失败");
         }
-        let mut info = self.context.info.write().await;
-        //只设置睡眠时间，当心跳现场执行时自动修改状态
-        info.sleep_until = Some(time);
+        //修改状态
+        println!("sleep...");
+        // 休眠中
+        let ch = self.channel.clone();
+        tokio::spawn(async move {
+            let deadline = Instant::now() + duration;
+
+            sleep_until(deadline.into()).await;
+            println!("wake up...");
+            //发送状态
+            ch.send_status(AgentStatus::Idle).await.unwrap();
+        });
         Ok(())
     }
 
     async fn wakeup(&self) -> anyhow::Result<()> {
-        let mut info = self.context.info.write().await;
-        info.sleep_until = None;
-        self.status_watcher.send(AgentStatus::Idle)?;
+        println!("wakeup...");
+        self.channel
+            .send_status_if(AgentStatus::Sleep, AgentStatus::Idle)
+            .await?;
+        let db = DB.get().unwrap();
+
+        entity_service::agent::update_status(db, self.context.agent_id, AgentStatus::Idle).await?;
         Ok(())
     }
 
     async fn stop(&self) -> anyhow::Result<()> {
-        AgentInstance::stop(&self).await?;
+        self.channel
+            .send_event(EnvEvent::Interrupt("程序暂停".to_string()), true)
+            .await?;
+        self.channel.wait_run_is(false).await?;
+        let db = DB.get().unwrap();
+        let info = self.context.info.read().await;
+        entity_service::agent::update_status(db, info.id, AgentStatus::Paused).await?;
         Ok(())
     }
 
@@ -178,7 +199,7 @@ impl AgentHandler for AgentInstance {
         self.authority.clone()
     }
 
-    fn timer_handler(&self) -> Arc<dyn kernel::agent::AgentSchedulerHandler> {
+    fn scheduler(&self) -> Arc<dyn kernel::agent::AgentSchedulerHandler> {
         self.scheduler.clone()
     }
 }
@@ -199,7 +220,6 @@ pub async fn build_agent_context(agent: entity::agent::Model) -> Arc<AgentContex
         workspace: PathBuf::from(&agent.workspace),
         avatar: agent.avatar,
         status: serde_json::from_value(serde_json::to_value(agent.status).unwrap()).unwrap(),
-        sleep_until: agent.sleep_until,
     };
     //初始化工作空间
     let space = std::env::current_dir().unwrap().join(&agent.workspace);
@@ -270,13 +290,13 @@ pub async fn build_agent_context(agent: entity::agent::Model) -> Arc<AgentContex
         permissions: Arc::new(permissions),
         timers: Arc::new(timers),
     };
+    let agent_context = Arc::new(agent_context);
     agent_context
         .tool_engine_context
         .init(agent_context.clone());
     //
     let id = agent.id;
 
-    let agent_context = Arc::new(agent_context);
     //
     let mut p = AGENT_CTX_POOL.write().await;
     p.insert(id, agent_context.clone());

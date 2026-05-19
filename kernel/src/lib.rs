@@ -5,6 +5,7 @@ pub mod section;
 pub mod tool;
 pub mod message;
 pub mod kits;
+pub mod parser;
 
 pub fn simple_id(digit: usize) -> String {
     const ALPHABET: [char; 36] = [

@@ -30,7 +30,13 @@ pub enum Event {
     Open(&'static SectionTag),
     Chunk(&'static SectionTag, String),
     Close(&'static SectionTag, String),
-    End(Vec<i64>),
+    End(Vec<i64>, EndReason),
+}
+
+pub enum EndReason {
+    Normal,
+    Error,
+    Canceled,
 }
 pub struct StreamMind {
     pub agent_id: u32,
@@ -41,7 +47,6 @@ pub struct StreamMind {
     inject_receiver: mpsc::UnboundedReceiver<(String, bool)>,
     event_receiver: mpsc::Receiver<AgentEvent>,
     section_sender: mpsc::Sender<Event>,
-    reorganize_watcher: watch::Sender<bool>,
     run_watcher: watch::Sender<bool>,
 }
 
@@ -53,7 +58,7 @@ impl StreamMind {
         inject_receiver: mpsc::UnboundedReceiver<(String, bool)>,
         event_receiver: mpsc::Receiver<AgentEvent>,
         section_sender: mpsc::Sender<Event>,
-        reorganize_watcher: watch::Sender<bool>,
+
         run_watcher: watch::Sender<bool>,
     ) -> Self {
         StreamMind {
@@ -65,7 +70,7 @@ impl StreamMind {
             inject_receiver,
             event_receiver,
             section_sender,
-            reorganize_watcher,
+
             run_watcher,
         }
     }
@@ -111,16 +116,27 @@ impl StreamMind {
                 section_sender: self.section_sender.clone(),
                 last_tag: None,
                 chunk_buffer: String::new(),
-                event_ids:vec![]
+                event_ids: vec![],
             };
-
-            let res = self.event_listening(&mut worker).await;
-            worker.end().await;
-            self.run_watcher.send(false)?;
-            let is_close = res?;
-            if is_close {
-                return Ok(MindFlag::Closed);
+            //抽干事件
+            self.drain_events();
+            // 1. 如果没有待处理任务，阻塞等待下一个事件到达
+            if self.event_buffer.is_empty() {
+                if let Some(agent_event) = self.event_receiver.recv().await {
+                    self.event_buffer.push(agent_event);
+                } else {
+                    info!("通道已关闭，智能体即将退出");
+                    return Ok(MindFlag::Closed);
+                }
             }
+            let resaon = self
+                .event_stream(&mut worker)
+                .await
+                .unwrap_or(EndReason::Error);
+
+            worker.end(resaon).await;
+            self.run_watcher.send(false)?;
+
             //检查上下文长度是否超过配置
             let stack = self.stack.read().await;
             if stack.content_len >= len {
@@ -128,28 +144,23 @@ impl StreamMind {
             }
         }
     }
-    async fn event_listening(&mut self, worker: &mut ListeningWorker) -> anyhow::Result<bool> {
-        //抽干事件
-        self.drain_events();
-        // 1. 如果没有待处理任务，阻塞等待下一个事件到达
-        if self.event_buffer.is_empty() {
-            if let Some(agent_event) = self.event_receiver.recv().await {
-                self.event_buffer.push(agent_event);
-            } else {
-                info!("通道已关闭，智能体即将退出");
-                return Ok(true);
-            }
-        }
+    async fn event_stream(&mut self, worker: &mut ListeningWorker) -> anyhow::Result<EndReason> {
         self.run_watcher.send(true)?;
         worker.event_ids = self.event_buffer.iter().map(|e| e.id).collect();
         let proxy = mpsc::unbounded_channel();
         // 3. 准备当前要处理的上下文
         // 提取出当前所有的任务，清空 pending 准备接收新的
         let mut chunk_stream = {
-            let mut stack = self.stack.write().await;
-            stack.push_events(&mut self.event_buffer);
-            // 4. 创建生成流（模拟大模型输出或耗时任务）
-            stack.chunk_stream(self.client.clone()).await
+            {
+                let mut stack = self.stack.write().await;
+                stack.push_events(&mut self.event_buffer);
+            }
+            // 4. 创建生成流
+            self.stack
+                .read()
+                .await
+                .chunk_stream(self.client.clone())
+                .await
         };
         // 3. 将 Rx 转换为 Stream 并与 LLM 流合并
         let mut inject_stream =
@@ -162,7 +173,7 @@ impl StreamMind {
                     chunk_opt = chunk_stream.next() => {
                         match chunk_opt {
                             Some(val) => {
-                                print!("{}",&val);
+                                // print!("{}",&val);
                                 yield val
                             },
                             None => {
@@ -193,7 +204,7 @@ impl StreamMind {
                 }
                 // 分支 A：段落生成流
                 Some(section_event) = section_stream.next() =>  {
-                    let mut is_end=false;
+
                    let event= match section_event {
                         section::Event::Start => {
                             Event::Start(worker.event_ids.clone())
@@ -202,20 +213,21 @@ impl StreamMind {
                             //必须由外部确认是否真的结束,所以不发送事件
                             break;
                         }
-                        
+
                         section::Event::Open(tag)=>{
                             worker.last_tag=Some(tag);
+                            worker.chunk_buffer.clear();
                             Event::Open(tag)
 
                         }
                         section::Event::Chunk(tag,chunk)=>{
                             worker.chunk_buffer.push_str(&chunk);
                             Event::Chunk(tag,chunk)
-
                         }
                         section::Event::Close(tag,content) => {
                             worker.last_tag=None;
-                             Event::Close(tag,content)
+                            worker.chunk_buffer.clear();
+                            Event::Close(tag,content)
                         }
                     };
 
@@ -224,17 +236,20 @@ impl StreamMind {
                 // 分支 B：在生成过程中，收到了新事件
                 Some(event) = self.event_receiver.recv() => {
                     let force= event.force;
+                    //   println!("new event:{},{:?}", force,&event.data);
                     self.event_buffer.push(event);
+
                     if force{
-                        break; // 跳出内部 loop,强制处理
+                        // 跳出内部 loop,强制处理
+                        return Ok(EndReason::Canceled)
                     }
                 }
                 else=>{
-                    break ;
+                     return Ok(EndReason::Error)
                 }
             };
         }
-        Ok(false)
+        Ok(EndReason::Normal)
     }
 }
 struct ListeningWorker {
@@ -244,7 +259,7 @@ struct ListeningWorker {
     event_ids: Vec<i64>,
 }
 impl ListeningWorker {
-    async fn end(self) {
+    async fn end(self, reson: EndReason) {
         if let Some(last_tag) = self.last_tag {
             let last = (last_tag, self.chunk_buffer);
             self.section_sender
@@ -253,7 +268,7 @@ impl ListeningWorker {
                 .expect("section_sender");
         }
         self.section_sender
-            .send(Event::End(self.event_ids))
+            .send(Event::End(self.event_ids, reson))
             .await
             .expect("section_sender"); //输出结束
     }

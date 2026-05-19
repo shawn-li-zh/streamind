@@ -61,7 +61,7 @@ mod editor {
         fs::{File, OpenOptions},
         io::{BufReader, BufWriter},
         os::windows::fs::{MetadataExt, OpenOptionsExt},
-        path::PathBuf,
+        path::PathBuf, sync::Arc,
     };
 
     use kernel::{
@@ -78,7 +78,7 @@ mod editor {
         pub is_safe: bool,
     }
     #[context]
-    pub fn new_context(ctx: AgentContext) -> Context {
+    pub fn new_context(ctx: Arc<AgentContext>) -> Context {
         Context {
             path: None,
             content: None,

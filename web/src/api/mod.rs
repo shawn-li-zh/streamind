@@ -35,24 +35,35 @@ pub fn inject_router(mut router: Router) -> Router {
     //事件
     router = router
         .route("/api/event/list", get(event::list))
-        .route("/api/event/count_by_status/{id}", get(event::count_by_status))
+        .route(
+            "/api/event/count_by_status/{id}",
+            get(event::count_by_status),
+        )
         .route("/api/event/load", get(event::load));
     //响应
     router = router
         .route("/api/section/list", get(section::list))
         .route("/api/section/list_in_range", get(section::list_in_range))
-        .route("/api/section/update_value/{id}", post(section::update_value))
+        .route(
+            "/api/section/update_value/{id}",
+            post(section::update_value),
+        )
         .route("/api/section/{id}", get(section::get_by_id));
     //组件
-    router = router.route(
-        "/api/render_component/{id}",
-        get(render_component::get_by_id),
-    );
+    router = router
+        .route(
+            "/api/render_component/{id}",
+            get(render_component::get_by_id),
+        )
+        .route("/api/render_component", post(render_component::create))
+        .route("/api/render_component/{id}", put(render_component::update))
+        .route("/api/render_component/page", get(render_component::page))
+        .route("/api/render_component/total", get(render_component::total));
     //依赖
     router = router
         .route("/api/render_dependence/list", get(render_dependence::list))
         .route("/api/render_dependence", post(render_dependence::create))
-        .route("/api/render_dependence", put(render_dependence::update))
+        .route("/api/render_dependence/{id}", put(render_dependence::update))
         .route(
             "/api/render_dependence/{id}",
             delete(render_dependence::remove),

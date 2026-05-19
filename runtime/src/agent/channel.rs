@@ -17,11 +17,10 @@ use crate::sse_event::WebEvent;
 pub struct AgentChannel {
     agent_info: Arc<RwLock<AgentInfo>>,
     event_sender: mpsc::Sender<AgentEvent>,
-    pub(crate) status_sender: watch::Sender<AgentStatus>,
+    status_sender: watch::Sender<AgentStatus>,
     //函数调用
-    call_watcher: RwLock<watch::Receiver<bool>>,
     run_watcher: RwLock<watch::Receiver<bool>>,
-    status_watcher: RwLock<watch::Receiver<AgentStatus>>,
+    pub(crate) status_watcher: RwLock<watch::Receiver<AgentStatus>>,
     web_sender: RwLock<Option<mpsc::UnboundedSender<sse::Event>>>,
 }
 
@@ -31,7 +30,6 @@ impl AgentChannel {
         event_sender: mpsc::Sender<AgentEvent>,
         status_sender: watch::Sender<AgentStatus>,
         //
-        call_watcher: RwLock<watch::Receiver<bool>>,
         run_watcher: RwLock<watch::Receiver<bool>>,
         status_watcher: RwLock<watch::Receiver<AgentStatus>>,
     ) -> Self {
@@ -39,7 +37,7 @@ impl AgentChannel {
             agent_info,
             event_sender,
             status_sender,
-            call_watcher,
+
             run_watcher,
             status_watcher,
             web_sender: RwLock::new(None),
@@ -53,11 +51,6 @@ impl AgentChannel {
         event_data: EnvEvent,
         force: bool,
     ) -> anyhow::Result<(AgentEvent, entity::event::Model)> {
-        //等待工具调用结束
-        {
-            let mut call_watcher = self.call_watcher.write().await;
-            call_watcher.wait_for(|&is_paused| !is_paused).await?;
-        }
         self.send_event_unblock(event_data, force).await
     }
 
@@ -75,6 +68,22 @@ impl AgentChannel {
         };
         //发送事件
         self.event_sender.send(event.clone()).await?;
+        //是否唤醒agent
+        {
+            match &event.data {
+                EnvEvent::UserRequest(_)
+                | EnvEvent::Timer(_)
+                | EnvEvent::Error(_)
+                | EnvEvent::Interaction(_) => {
+                    //唤醒
+                    self.send_status_if(AgentStatus::Paused, AgentStatus::Idle)
+                        .await?;
+                    self.send_status_if(AgentStatus::Sleep, AgentStatus::Idle)
+                        .await?;
+                }
+                _ => {}
+            }
+        }
         //发送到前端
         {
             match &event.data {
@@ -101,22 +110,46 @@ impl AgentChannel {
         Ok(())
     }
 
-    pub async fn wait_call_is(&self, is: bool) -> anyhow::Result<()> {
-        let mut call_watcher = self.call_watcher.write().await;
-        call_watcher.wait_for(|v| *v == is).await?;
-        Ok(())
-    }
     pub async fn wait_status_is(&self, is: AgentStatus) -> anyhow::Result<()> {
         let mut status_watcher = self.status_watcher.write().await;
         status_watcher.wait_for(|v| *v == is).await?;
         Ok(())
     }
-
-    pub fn send_status(&self, status: AgentStatus) -> anyhow::Result<()> {
-        self.status_sender.send(status)?;
-        Ok(())
+    pub async fn get_status(&self) -> AgentStatus {
+        self.status_watcher.read().await.borrow().clone()
     }
 
+    pub async fn send_status(&self, status: AgentStatus) -> anyhow::Result<()> {
+        self.status_sender.send(status)?;
+        println!("状态更新:{:?}", status);
+        self.update_status(status).await?;
+        Ok(())
+    }
+    pub async fn send_status_if(
+        &self,
+        value: AgentStatus,
+        status: AgentStatus,
+    ) -> anyhow::Result<bool> {
+        let mut s = false;
+        self.status_sender.send_modify(|cur| {
+            if *cur == value {
+                *cur = status;
+                s = true;
+            }
+        });
+        if s {
+            println!("状态更新:{:?}->{:?}", value, status);
+            self.update_status(status).await?;
+        }
+        Ok(s)
+    }
+    async fn update_status(&self, status: AgentStatus) -> anyhow::Result<()> {
+        let mut info = self.agent_info.write().await;
+        info.status = status;
+        let db = DB.get().unwrap();
+        entity_service::agent::update_status(db, info.id, info.status.clone()).await?;
+        Ok(())
+    }
     pub(crate) async fn send_web_event(&self, e: WebEvent) {
         let web_sender = self.web_sender.read().await;
         if let Some(sender) = &*web_sender {

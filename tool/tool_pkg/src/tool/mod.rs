@@ -15,7 +15,7 @@ pub mod tool {
         #[arg("关键字")] key: Option<String>,
         #[ctx] ctx: ToolCallContext,
     ) -> anyhow::Result<ToolReturn> {
-        let agent_context = ctx.agent_handler.context();
+        let agent_context = ctx.agent.context();
         let tool_engine_context = &agent_context.tool_engine_context;
         let tool_packages = &tool_engine_context.tool_packages;
         let total = tool_packages.len();
@@ -51,7 +51,7 @@ pub mod tool {
         #[arg("tool关键词")] tool_key: Option<String>,
         #[ctx] ctx: ToolCallContext,
     ) -> anyhow::Result<ToolReturn> {
-        let agent_context = ctx.agent_handler.context();
+        let agent_context = ctx.agent.context();
         let tool_engine_context = &agent_context.tool_engine_context;
         let pkg = match tool_engine_context.get_package(&pkg_name) {
             Some(e) => e,
@@ -79,7 +79,7 @@ pub mod tool {
         #[arg("工具name")] tool_name: String,
         #[ctx] ctx: ToolCallContext,
     ) -> anyhow::Result<ToolReturn> {
-        let agent_context = ctx.agent_handler.context();
+        let agent_context = ctx.agent.context();
         let tool_engine_context = &agent_context.tool_engine_context;
         let pkg = match tool_engine_context.get_package(&pkg_name) {
             Some(e) => e,
@@ -99,7 +99,7 @@ pub mod tool {
         #[arg("类型name")] type_name: String,
         #[ctx] ctx: ToolCallContext,
     ) -> anyhow::Result<ToolReturn> {
-        let agent_context = ctx.agent_handler.context();
+        let agent_context = ctx.agent.context();
         let tool_engine_context = &agent_context.tool_engine_context;
         let pkg = match tool_engine_context.get_package(&pkg_name) {
             Some(e) => e,

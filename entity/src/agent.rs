@@ -29,9 +29,8 @@ pub struct Model {
     #[sea_orm(column_type = "Timestamp")]
     #[serde(with = "date_time_option")]
     pub startup_time: Option<chrono::DateTime<chrono::Local>>,
-    #[sea_orm(column_type = "Timestamp")]
-    #[serde(with = "date_time_option")]
-    pub sleep_until: Option<chrono::DateTime<chrono::Local>>,
+
+    pub sleep_duration: Option<String>,
     #[sea_orm(column_type = "Timestamp", not_null)]
     #[serde(with = "date_time")]
     pub create_time: chrono::DateTime<chrono::Local>,
@@ -53,5 +52,6 @@ pub enum AgentStatus {
     Idle, //空闲
     Sleep,      //睡眠
     Processing, //处理任务中
-    Paused,     //暂停 需要用户手动恢复到空闲
+    Waiting,
+    Paused, //暂停 需要用户手动恢复到空闲
 }

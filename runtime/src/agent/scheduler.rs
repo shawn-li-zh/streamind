@@ -1,10 +1,9 @@
 use std::{
     sync::{Arc, OnceLock, atomic::AtomicBool},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use async_trait::async_trait;
-use chrono::Local;
 use dashmap::DashMap;
 
 use entity_service::DB;
@@ -15,7 +14,7 @@ use kernel::{
     },
     event::{EnvEvent, TimerData},
 };
-use tokio::time::sleep_until;
+
 use tokio_cron_scheduler::{Job, JobScheduler};
 use uuid::Uuid;
 
@@ -47,7 +46,7 @@ impl AgentScheduler {
         self.is_running
             .store(true, std::sync::atomic::Ordering::Relaxed);
 
-        let var = std::env::var("HEARTBEAT_INTERVAL").unwrap_or("5".to_string());
+        let var = std::env::var("HEARTBEAT_INTERVAL").unwrap_or("10".to_string());
         let secs = var.parse::<u64>()?;
 
         let interval = std::time::Duration::from_secs(secs);
@@ -86,67 +85,22 @@ impl AgentScheduler {
 
     async fn heartbeat(&self, interval: Duration) {
         let mut interval = tokio::time::interval(interval);
-        let db = DB.get().unwrap();
+        interval.tick().await;
         loop {
-            let info = self.context.info.read().await;
-            if let Some(date_time) = &info.sleep_until {
-                let date_time = date_time.clone();
-                let deadline = date_time - Local::now();
-                drop(info);
-                {
-                    //修改状态
-                    let mut info = self.context.info.write().await;
-                    info.status = AgentStatus::Sleep;
-                    entity_service::agent::update_status(
-                        db,
-                        info.id,
-                        info.status.clone(),
-                        Some(date_time),
-                    )
-                    .await
-                    .unwrap();
-                    // 休眠中
-                    let ch = self.channel.clone();
-                    let ctx = self.context.clone();
-                    tokio::spawn(async move {
-                        let deadline = Instant::now() + deadline.to_std().unwrap();
-                        sleep_until(deadline.into()).await;
-                        //修改状态
-                        let mut info = ctx.info.write().await;
-                        info.status = AgentStatus::Idle;
-                        info.sleep_until = None;
-                        entity_service::agent::update_status(
-                            db,
-                            info.id,
-                            info.status.clone(),
-                            None,
-                        )
-                        .await
-                        .unwrap();
-                        //发送状态
-                        ch.send_status(AgentStatus::Idle).unwrap();
-                    });
-                    self.channel
-                        .wait_status_is(AgentStatus::Idle)
-                        .await
-                        .unwrap();
-                }
-            }
             interval.tick().await;
-            let info = self.context.info.read().await;
-            match info.status {
-                AgentStatus::Idle => {
-                    self.channel
-                        .send_event(EnvEvent::Heartbeat, false)
-                        .await
-                        .unwrap();
-                }
-                _ => {
-                    continue;
-                }
+            //只有空闲时才发送心跳
+            let status = self.channel.status_watcher.read().await;
+            if status.borrow().clone() != AgentStatus::Idle {
+                continue;
             }
+            self.channel
+                .send_event(EnvEvent::Heartbeat, false)
+                .await
+                .unwrap();
+            println!("heartbeat");
         }
     }
+
     fn to_job(&self, timer: Arc<AgentTimer>) -> anyhow::Result<Job> {
         let channel = self.channel.clone();
         let timers = self.timers.clone();

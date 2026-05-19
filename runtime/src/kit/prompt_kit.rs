@@ -12,6 +12,7 @@ use base64::{Engine, engine::general_purpose};
 use kernel::agent::context::{AgentContext, AgentInfo};
 
 pub static GENERATE_RULE: &str = include_str!("../../../prompts/common/generate_rule.md");
+pub static STACK_CONTEXT_RULE: &str = include_str!("../../../prompts/common/stack_context_rule.md");
 pub static TOOL_CALL_RULE: &str = include_str!("../../../prompts/common/tool_call_rule.md");
 pub static RENDER_RULE: &str = include_str!("../../../prompts/common/render_rule.md");
 
@@ -26,26 +27,17 @@ pub fn build_system_prompt(ctx: &AgentContext, agent_code: &str, agent_name: &st
             format!("{}(tools:{tool_size}):{}", pkg_name, pkg.annotation)
         })
         .collect();
-
-    format!(
-        r#"
-    # 基础信息:
-    - 编号:{}
-    - 名称:{}
-    
-    {}
-    {}
-    {}
-    # 工具包列表(全部)
-    {}
-    "#,
-        agent_code,
-        agent_name,
-        GENERATE_RULE,
-        TOOL_CALL_RULE,
-        RENDER_RULE,
-        items.join("\n")
-    )
+    let mut lines = vec![];
+    lines.push(format!(
+        "# 基础信息:\n- 编号:{}\n- 名称:{}",
+        agent_code, agent_name,
+    ));
+    lines.push(GENERATE_RULE.trim().to_string());
+    lines.push(STACK_CONTEXT_RULE.trim().to_string());
+    lines.push(TOOL_CALL_RULE.trim().to_string());
+    lines.push(RENDER_RULE.trim().to_string());
+    lines.push(format!("# 工具包列表(全部)\n{}", items.join("\n"),));
+    lines.join("\n\n")
 }
 pub fn assistant_message(content: String) -> ChatCompletionRequestMessage {
     ChatCompletionRequestAssistantMessageArgs::default()
@@ -79,7 +71,20 @@ pub fn user_message(content: String, paths: Vec<PathBuf>) -> ChatCompletionReque
 }
 
 pub fn tool_message(content: String, paths: Vec<PathBuf>) -> ChatCompletionRequestMessage {
-    system_message(content)
+    // system_message(content)
+    let (texts, urls) = to_parts(content, paths);
+    let mut list = vec![];
+    for ele in texts {
+        list.push(ele.into());
+    }
+    for ele in urls {
+        list.push(ele.into());
+    }
+    ChatCompletionRequestUserMessageArgs::default()
+        .content(list)
+        .build()
+        .unwrap()
+        .into()
 }
 
 fn to_parts(

@@ -1,10 +1,9 @@
 pub mod context;
 pub mod error;
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use chrono::Local;
 
 use crate::{
     agent::context::{AgentContext, AgentEvent, AgentPermission, AgentStatus, AgentTimer},
@@ -16,17 +15,19 @@ pub trait AgentHandler: Send + Sync + 'static {
     //发送环境事件
     async fn send_event(&self, event: EnvEvent, force: bool) -> anyhow::Result<AgentEvent>;
     //睡眠
-    async fn sleep_until(&self, time: chrono::DateTime<Local>) -> anyhow::Result<()>;
+    async fn sleep(&self, duration: Duration) -> anyhow::Result<()>;
     //唤醒
     async fn wakeup(&self) -> anyhow::Result<()>;
     //停止
     async fn stop(&self) -> anyhow::Result<()>;
     //获取状态
     async fn get_status(&self) -> AgentStatus;
+    // async fn send_status(&self, status: AgentStatus) -> anyhow::Result<()>;
+    // async fn send_status_if(&self, value: AgentStatus, status: AgentStatus) -> anyhow::Result<bool>;
     //
     fn context(&self) -> Arc<AgentContext>;
     fn authority(&self) -> Arc<dyn AgentAuthorityHandler>;
-    fn timer_handler(&self) -> Arc<dyn AgentSchedulerHandler>;
+    fn scheduler(&self) -> Arc<dyn AgentSchedulerHandler>;
 }
 
 #[async_trait]

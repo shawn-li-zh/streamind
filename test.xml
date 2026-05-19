@@ -1,29 +1,28 @@
 <think>
-用户想了解北京的天气，我需要调用天气查询工具... 
+    用户想了解北京的天气，我需要调用天气查询工具...
 </think>
 <tool_call>http.request(method="get",url="https://crates.io/crates/nanoid")</tool_call>
 <tool_call>http.request(method="get",url="https://crates.io111111123/crates/nanoid")</tool_call>
 <push>
-1:测试
+    1:测试
 
-我需要调用天气查询工具来获取北京的天气信息。
+    我需要调用天气查询工具来获取北京的天气信息。
 </push>
 <end/>
 <think>
-已获得查询结果
+    已获得查询结果
 </think>
 <reply>
-根据查询结果，北京现在的天气是晴天，气温约为 25 摄氏度，非常宜人。
+    根据查询结果，北京现在的天气是晴天，气温约为 25 摄氏度，非常宜人。
 </reply>
 <render>
-{
-   "path":"Grant", 
-   "title":"获取/usr/info.json文件的创建权限", 
-   "class":"flex flex-col", 
-   "style":"with:100px;", 
-   "attrs":{
-    "code":"0",
-    "purpose":"需要保存您的个人基本信息以提供个性化服务。"
-    }
-}
+    <AuthRequest title="获取/usr/info.json文件的创建权限" class="flex flex-col" style="with:100px;" attrs= {  "code" :"file_unsafe" ,
+    "subCode" :"/usr/info.json" ,
+    "purpose" :"需要保存您的个人基本信息以提供个性化服务。" } />
 </render>
+<render>
+    <ImageList title="图片渲染" class="flex flex-col" attrs= {"height" :100,"images" :[{"name" :"鹿" ,"url" :"https://fuss10.elemecdn.com/a/3f/3302e58f9a181d2509f3dc0fa68b0jpeg.jpeg" },{"name" :"马" ,"url" :"https://fuss10.elemecdn.com/1/34/19aa98b1fcb2781c4fba33d850549jpeg.jpeg" },{"name" :"母狮" ,"url" :"https://fuss10.elemecdn.com/0/6f/e35ff375812e6b0020b6b4e8f9583jpeg.jpeg" },{"name" :"傻狍子" ,"url" :"https://fuss10.elemecdn.com/9/bb/e27858e973f5d7d3904835f46abbdjpeg.jpeg" },{"name" :"狐狸" ,"url" :"https://fuss10.elemecdn.com/d/e6/c4d93a3805b3ce3f323f7974e6f78jpeg.jpeg" },{"name" :"雪狐" ,"url" :"https://fuss10.elemecdn.com/3/28/bbf893f792f03a54408b3b7a7ebf0jpeg.jpeg" },{"name" :"猴" ,"url" :"https://fuss10.elemecdn.com/2/11/6535bcfb26e4c79b48ddde44f4b6fjpeg.jpeg" }],"title" :"动物摄影" ,"width" :100} />
+
+</render>
+
+<tool_call>timer.sleep(time="1m")</tool_call>

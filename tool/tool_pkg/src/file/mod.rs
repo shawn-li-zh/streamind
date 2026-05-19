@@ -2,7 +2,7 @@ pub use self::file::build_package;
 use tool_macro::package;
 #[package("文件操作工具包")]
 pub mod file {
-    use std::path::{self, PathBuf};
+    use std::{path::{self, PathBuf}, sync::Arc};
 
     use kernel::agent::context::{AgentContext, AgentInfo};
 
@@ -14,7 +14,7 @@ pub mod file {
     pub struct Context {}
 
     #[context]
-    pub fn new_context(agent: AgentContext) -> Context {
+    pub fn new_context(agent: Arc<AgentContext>) -> Context {
         Context {}
     }
     #[class("文件对象")]

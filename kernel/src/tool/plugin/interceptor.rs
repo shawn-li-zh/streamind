@@ -1,6 +1,5 @@
 use std::{
     collections::VecDeque,
-    fs::OpenOptions,
     io::Write,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
@@ -13,7 +12,7 @@ use crate::{
 };
 
 pub trait ToolCallnterceptor {
-    fn build(agent: AgentContext, pkg: &'static ToolPackage, tool: &'static Tool) -> Option<Self>
+    fn build(agent: Arc<AgentContext>, pkg: &'static ToolPackage, tool: &'static Tool) -> Option<Self>
     where
         Self: Sized;
     fn on_call(&self, ctx: &ToolCallContext, call: &ToolCall) -> anyhow::Result<()> {
@@ -66,7 +65,11 @@ impl RateLimiter {
 }
 
 impl ToolCallnterceptor for RateLimiter {
-    fn build(agent: AgentContext, pkg: &'static ToolPackage, tool: &'static Tool) -> Option<Self>
+    fn build(
+        agent: Arc<AgentContext>,
+        pkg: &'static ToolPackage,
+        tool: &'static Tool,
+    ) -> Option<Self>
     where
         Self: Sized,
     {
@@ -89,7 +92,11 @@ pub struct ContentSizeLimiter {
     max_size: usize,
 }
 impl ToolCallnterceptor for ContentSizeLimiter {
-    fn build(agent: AgentContext, pkg: &'static ToolPackage, tool: &'static Tool) -> Option<Self>
+    fn build(
+        agent: Arc<AgentContext>,
+        pkg: &'static ToolPackage,
+        tool: &'static Tool,
+    ) -> Option<Self>
     where
         Self: Sized,
     {
@@ -124,7 +131,7 @@ fn split_after_folder(path: &Path, marker: &str) -> Option<PathBuf> {
 //权限校验==========
 pub struct PermissonChecker {}
 impl ToolCallnterceptor for PermissonChecker {
-    fn build(agent: AgentContext, pkg: &'static ToolPackage, tool: &'static Tool) -> Option<Self>
+    fn build(agent: Arc<AgentContext>, pkg: &'static ToolPackage, tool: &'static Tool) -> Option<Self>
     where
         Self: Sized,
     {
@@ -139,7 +146,7 @@ impl ToolCallnterceptor for PermissonChecker {
             .tool
             .permissions
             .iter()
-            .any(|v| ctx.agent_handler.authority().has_permission(*v, None));
+            .any(|v| ctx.agent.authority().has_permission(*v, None));
         if !valid {
             return Err(anyhow::anyhow!("权限缺失:{:#?}", &call.tool.permissions));
         }

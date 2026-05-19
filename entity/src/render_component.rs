@@ -15,6 +15,9 @@ pub struct Model {
     pub annotation: String,
     #[sea_orm(column_type = "Text", not_null)]
     pub doc: String,
+    pub author_type: String,
+    pub author_name: String,
+    pub preview_attrs: serde_json::Value,
     #[sea_orm(column_type = "Timestamp", not_null)]
     pub create_time: chrono::DateTime<chrono::Local>,
 }

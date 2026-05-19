@@ -32,3 +32,4 @@ reqwest = { version = "0.12", features = ["json", "rustls-tls","stream"] }
 
 chrono = "0.4.44"
 dashmap = "6.1.0"
+humantime = "2.1" # 可读时间

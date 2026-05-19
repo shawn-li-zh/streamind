@@ -19,7 +19,7 @@ pub mod timer {
         #[arg("关键字")] key: Option<String>,
         #[ctx] ctx: ToolCallContext,
     ) -> anyhow::Result<ToolReturn> {
-        let agent_context = ctx.agent_handler.context();
+        let agent_context = ctx.agent.context();
         let agent_id = agent_context.agent_id;
         let agent_timers = entity_service::agent_timer::range(agent_id, start, num, key).await?;
         let mut res = vec![];
@@ -38,8 +38,8 @@ pub mod timer {
         #[arg("任务id")] id: i64,
         #[ctx] ctx: ToolCallContext,
     ) -> anyhow::Result<ToolReturn> {
-        let agent: std::sync::Arc<dyn AgentHandler> = ctx.agent_handler.clone();
-        let _ = agent.timer_handler().cancel(id).await?;
+        let agent: std::sync::Arc<dyn AgentHandler> = ctx.agent.clone();
+        let _ = agent.scheduler().cancel(id).await?;
 
         Ok(ToolReturn::raw("取消成功"))
     }
@@ -55,9 +55,9 @@ pub mod timer {
         #[arg("当触发时,发送给智能体的附加信息")] payload: String,
         #[ctx] ctx: ToolCallContext,
     ) -> anyhow::Result<ToolReturn> {
-        let agent: std::sync::Arc<dyn AgentHandler> = ctx.agent_handler.clone();
+        let agent: std::sync::Arc<dyn AgentHandler> = ctx.agent.clone();
         let timer = AgentTimer::new(corn, times, payload);
-        let id = agent.timer_handler().add(timer).await?;
+        let id = agent.scheduler().add(timer).await?;
         Ok(ToolReturn::raw(format!("创建成功,定时器ID={}", id)))
     }
 
@@ -71,14 +71,14 @@ pub mod timer {
         #[arg("睡眠时间,格式:数字+时间单位,")] time: String,
         #[ctx] ctx: ToolCallContext,
     ) -> anyhow::Result<ToolReturn> {
-        let dur = match humantime::parse_duration(&time) {
+        let dur = match humantime::parse_duration(&time.trim()) {
             Ok(v) => v,
             Err(e) => {
                 anyhow::bail!("时间格式错误:{}", e)
             }
         };
-        let time = Local::now() + dur;
-        ctx.agent_handler.sleep_until(time).await?;
+
+        ctx.agent.sleep(dur).await?;
         Ok(ToolReturn::ignore())
     }
 }

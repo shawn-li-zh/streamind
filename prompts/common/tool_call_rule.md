@@ -1,14 +1,14 @@
 # 工具调用规范
 所有你能调用的函数工具包，都是使用ts来描述参数和类型定义。  
-当你需要调用某些函数时，输出一个<tool_call>标签，并将需要调用的函数放在标签中。
+当你需要调用某些函数时，输出一个<tool_call id="任意不重复字符">标签，并将需要调用的函数放在标签中。
 函数调用格式:包名.工具名(key1=value1,key2=value2,...)
 
 ## 举例
 假设有一个mock工具包。
 ```text
 异步调用：
-<tool_call>mock.get_weather(code="shanghai")</tool_call>
-<tool_call>mock.println(text="hello world")</tool_call>
+<tool_call id="abc1">mock.get_weather(code="shanghai")</tool_call>
+<tool_call id="abc2">mock.println(text="hello world")</tool_call>
 ps:以上两个函数会同时异步执行。
 
 同步调用：
@@ -25,6 +25,7 @@ ps:以上两个函数会同时异步执行。
 ## 注意事项
 你可以输出多个调用，执行器会按顺序执行。
 在获取到明确的、完整的工具定义信息之前，不允许假设某个工具是否存在，不允许调用不存在的工具！
+tool_call标签头不允许添加换行符或者多余的空白字符,id必须存在，且唯一。
 参数列表传的参数值必须符合JSON规范！
 
 

@@ -51,7 +51,7 @@ impl ToolEngineContext {
     }
 
     //初始化
-    pub fn init(&self, agent_context: AgentContext) {
+    pub fn init(&self, agent_context: Arc<AgentContext>) {
         for pkg_name in &self.tool_packages {
             let pkg = self.package_pool.get(pkg_name).expect("工具包不存在");
             let pkg_ctx = ToolPackageContext::form(agent_context.clone(), pkg);
@@ -69,16 +69,13 @@ impl ToolEngineContext {
 }
 
 pub struct ToolEngine {
-    agent_handler: Arc<dyn AgentHandler>,
-    agent_context: Arc<AgentContext>,
+    agent: Arc<dyn AgentHandler>,
     context: Arc<ToolEngineContext>,
 }
 impl ToolEngine {
-    pub fn new(agent_handler: Arc<dyn AgentHandler>, context: Arc<ToolEngineContext>) -> Self {
-        let agent_context = agent_handler.context();
+    pub fn new(agent: Arc<dyn AgentHandler>, context: Arc<ToolEngineContext>) -> Self {
         Self {
-            agent_context,
-            agent_handler,
+            agent,
             context,
         }
     }
@@ -124,7 +121,7 @@ impl ToolEngine {
             sender.send(ToolCallEvent::Active(call.id)).await.unwrap();
             //
             let sender: mpsc::Sender<ToolCallEvent> = sender.clone();
-            let agent_handler = self.agent_handler.clone();
+            let agent_handler = self.agent.clone();
             let handle = tokio::spawn(async move {
                 let res = call.exec(agent_handler).await;
                 send(sender, id, res, start.elapsed()).await

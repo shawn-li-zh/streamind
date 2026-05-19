@@ -1,6 +1,7 @@
 use std::{
     path::{Path, PathBuf},
     sync::{Arc, atomic::AtomicU32},
+
 };
 
 use chrono::Local;
@@ -13,7 +14,7 @@ use crate::{
     message::{Message, Role},
     tool::engine::ToolEngineContext,
 };
-#[derive(Clone)]
+#[derive()]
 pub struct AgentContext {
     pub agent_id: u32,
     pub agent_code: String,
@@ -35,7 +36,6 @@ pub struct AgentInfo {
     pub model: String,
     pub workspace: PathBuf,
     pub avatar: String,
-    pub sleep_until: Option<chrono::DateTime<Local>>,
     pub status: AgentStatus,
 }
 impl AgentInfo {
@@ -148,13 +148,14 @@ impl AgentTimer {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum AgentStatus {
     #[default]
     Idle, //空闲
     Sleep,      //睡眠
     Processing, //处理任务中
+    Waiting,    //等待工具调用返回结果
     Paused,     //暂停 需要用户手动恢复到空闲
 }
 
@@ -171,7 +172,7 @@ impl AgentEvent {
     pub fn to_infos(&self) -> Vec<crate::message::Information> {
         let time = self.time.format("%Y-%m-%d %H:%M:%S").to_string();
         let head = format!(
-            "# 事件\nid={},type={},time={}",
+            "# 事件\nevent_id={},type={},time={}",
             self.id,
             self.data.name(),
             time

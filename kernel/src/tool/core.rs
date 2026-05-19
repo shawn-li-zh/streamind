@@ -36,12 +36,12 @@ pub type ActiveFn = Box<
 >;
 pub type SafeAny = dyn Any + Send + Sync + 'static;
 pub type ContextData = Arc<RwLock<SafeAny>>;
-pub type ContextBuilder = Box<dyn Fn(AgentContext) -> ContextData + Send + Sync>;
+pub type ContextBuilder = Box<dyn Fn(Arc<AgentContext>) -> ContextData + Send + Sync>;
 pub type PackageRecycler =
-    Box<dyn Fn(AgentContext, ContextData) -> BoxFuture<'static, anyhow::Result<()>> + Send + Sync>;
+    Box<dyn Fn(Arc<AgentContext>, ContextData) -> BoxFuture<'static, anyhow::Result<()>> + Send + Sync>;
 pub fn async_package_recycler<F, Fut>(f: F) -> PackageRecycler
 where
-    F: Fn(AgentContext, ContextData) -> Fut + Send + Sync + 'static,
+    F: Fn(Arc<AgentContext>, ContextData) -> Fut + Send + Sync + 'static,
     Fut: std::future::Future<Output = anyhow::Result<()>> + Send + 'static,
 {
     Box::new(move |agent_info, context_data| f(agent_info, context_data).boxed())

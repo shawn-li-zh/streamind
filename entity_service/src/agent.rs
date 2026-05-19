@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, time::Duration};
 
 use chrono::{DateTime, Local};
 
@@ -50,13 +50,12 @@ pub async fn update_status(
     db: &impl ConnectionTrait,
     agent_id: u32,
     status: kernel::agent::context::AgentStatus,
-    sleep_until: Option<DateTime<Local>>,
 ) -> anyhow::Result<()> {
     let s = serde_json::to_string(&status)?;
     let status: AgentStatus = serde_json::from_str(&s)?;
     let agent = entity::agent::ActiveModel {
         status: Set(status),
-        sleep_until: Set(sleep_until),
+
         ..Default::default()
     };
     entity::agent::Entity::update_many()

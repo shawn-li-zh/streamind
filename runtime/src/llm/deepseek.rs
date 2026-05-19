@@ -71,11 +71,15 @@ impl From<kernel::message::Message> for Message {
     fn from(value: kernel::message::Message) -> Self {
         let role = value.get_role();
         let (content, _paths) = value.to_tuple();
+        let call_id=match role {
+            Role::Tool => Some("tool_id".to_string()),
+            _=> None,
+        };
         Message {
             role: role,
             content: content,
             prefix: false,
-            tool_call_id: None,
+            tool_call_id: call_id,
         }
     }
 }

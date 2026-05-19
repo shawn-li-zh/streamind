@@ -1,18 +1,18 @@
 use std::{collections::HashMap, sync::Arc};
 
 use crate::{
-    agent::{AgentHandler, context::AgentContext},
-    tool::{
+    agent::AgentHandler, parser, tool::{
         Tool, ToolCallContext, ToolPackage,
         context::{ToolContext, ToolPackageContext},
         core::ToolReturn,
         engine::ToolEngineContext,
-        parser,
-    },
+    }
 };
 
 pub struct ToolCall {
     pub id: i64,
+    //模型输出的id
+    pub call_id:String,
     pub package: &'static ToolPackage,
     pub tool: &'static Tool,
     pub package_context: Arc<ToolPackageContext>,
@@ -21,23 +21,14 @@ pub struct ToolCall {
 }
 impl ToolCall {
     pub fn from(code: &str, engine_ctx: &ToolEngineContext) -> anyhow::Result<Self> {
-        let (pkg_name, expr) = match code.split_once(".") {
-            Some(p) => p,
-            None => {
-                return Err(anyhow::anyhow!("Invalid tool_call format: '{}'", code));
-            }
-        };
+        let (pkg_name, tool_name, args) = parser::parse_call(code.trim())?;
+        //
+        let pkg_name = pkg_name.unwrap_or_default();
         let package: &'static ToolPackage = match engine_ctx.get_package(pkg_name) {
             Some(v) => v,
             None => return Err(anyhow::anyhow!("Package '{}' not found!", code)),
         };
-        //
-        let (tool_name, args) = match expr.find("(") {
-            Some(i) => (&expr[..i], &expr[i..]),
-            None => {
-                return Err(anyhow::anyhow!("Invalid tool_call format: '{}'", code));
-            }
-        };
+
         let tool: &'static Tool = match package.get_tool(tool_name) {
             Some(v) => v,
             None => {
@@ -48,9 +39,6 @@ impl ToolCall {
                 ));
             }
         };
-        //
-        let args: HashMap<String, serde_json::Value> =
-            parser::parse_args(args).map_err(|e| anyhow::anyhow!("Invalid arguments:{e}"))?;
         //
         let package_context = engine_ctx
             .get_package_context(package.name)

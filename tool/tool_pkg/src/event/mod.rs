@@ -16,7 +16,7 @@ pub mod event {
         #[arg("事件id")] id: i64,
         #[ctx] ctx: ToolCallContext,
     ) -> anyhow::Result<ToolReturn> {
-        let agent_context = ctx.agent_handler.context();
+        let agent_context = ctx.agent.context();
         let model = entity_service::event::get_by_id(agent_context.agent_id, id).await?;
         match model {
             Some(model) => {
@@ -44,7 +44,7 @@ pub mod event {
         if limit > 100 {
             limit = 100;
         }
-        let agent_context = ctx.agent_handler.context();
+        let agent_context = ctx.agent.context();
         let models = entity_service::event::search_at(
             agent_context.agent_id,
             id,
@@ -74,7 +74,7 @@ pub mod event {
         if limit > 100 {
             limit = 100;
         }
-        let agent_context = ctx.agent_handler.context();
+        let agent_context = ctx.agent.context();
         let start = chrono::DateTime::parse_from_str(&start, FMT)?.with_timezone(&Local);
         let end = chrono::DateTime::parse_from_str(&end, FMT)?.with_timezone(&Local);
         let models = entity_service::event::time_range(

@@ -3,7 +3,6 @@ pub mod context;
 pub mod core;
 pub mod engine;
 
-pub mod parser;
 pub mod plugin;
 
 pub mod value_type;

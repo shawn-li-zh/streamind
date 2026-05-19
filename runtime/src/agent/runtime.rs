@@ -1,4 +1,4 @@
-use std::{backtrace::Backtrace, collections::HashMap, sync::Arc, time::Instant};
+use std::{backtrace::Backtrace, collections::HashMap, hash::Hash, sync::Arc, time::Instant};
 
 use anyhow::Context as _;
 
@@ -6,19 +6,22 @@ use entity::event::{EnvEventStatus, EnvEventType};
 use entity_service::DB;
 // use sea_orm::{DbErr, TransactionTrait};
 use kernel::{
-    agent::context::{AgentContext, AgentStatus},
+    agent::{
+        self, AgentHandler,
+        context::{AgentContext, AgentStatus},
+    },
     event::{CallItem, EnvEvent, SectionEvent, ToolCallDetailItem, ToolCallEvent, ToolCallStatus},
     render::RenderContext,
-    section::{Section, SectionTag},
+    section::Section,
     tool::{call::ToolCall, core::ToolReturnValue, engine::ToolEngine},
 };
 
 use serde_json::json;
 use tokio::sync::{RwLock, mpsc, watch};
-use tracing::info;
+use tracing::{error, info};
 
 use crate::{
-    agent::channel::AgentChannel,
+    agent::{channel::AgentChannel, instance::AgentInstance},
     context::{
         mind::{self, StreamMind},
         section,
@@ -28,13 +31,11 @@ use crate::{
 };
 
 pub struct AgentRuntime {
-    // pub agent: Arc<RwLock<AgentInstance>>,
     context: Arc<AgentContext>,
     channel: Arc<AgentChannel>,
     stack: Arc<RwLock<MindStack>>,
     tool_engine: ToolEngine,
     section_receiver: mpsc::Receiver<mind::Event>,
-    call_watcher: watch::Sender<bool>,
 }
 
 impl AgentRuntime {
@@ -44,7 +45,6 @@ impl AgentRuntime {
         stack: Arc<RwLock<MindStack>>,
         tool_engine: ToolEngine,
         section_receiver: mpsc::Receiver<mind::Event>,
-        call_watcher: watch::Sender<bool>,
     ) -> Self {
         Self {
             context,
@@ -52,7 +52,6 @@ impl AgentRuntime {
             stack,
             tool_engine,
             section_receiver,
-            call_watcher,
         }
     }
     pub fn start(mut self, mind: StreamMind) {
@@ -72,10 +71,7 @@ impl AgentRuntime {
     }
     async fn react_loop(&mut self) -> anyhow::Result<()> {
         loop {
-            {
-                let mut info = self.context.info.write().await;
-                info.status = AgentStatus::Idle;
-            }
+            self.channel.wait_status_is(AgentStatus::Idle).await?;
             let mut worker = ReactWorker {
                 stack: self.stack.clone(),
                 response_event_id: 0,
@@ -83,7 +79,13 @@ impl AgentRuntime {
             };
             let res = self.react(&mut worker).await;
             worker.end().await.expect("end failed");
+            println!("react end...");
+            self.channel
+                .send_status_if(AgentStatus::Processing, AgentStatus::Idle)
+                .await?;
             if let Err(e) = res {
+                let bt = Backtrace::capture();
+                error!("{}", bt);
                 self.channel
                     .send_event(EnvEvent::Error(format!("{}", e)), true)
                     .await
@@ -99,13 +101,13 @@ impl AgentRuntime {
             (info.id, info.state_id)
         };
         let db = DB.get().unwrap();
-        let mut tool_call_infos: Vec<(ToolCallDetailItem, ToolCall)> = vec![];
-        let mut pushs: Vec<Push> = vec![];
         //
         let mut start_time = Instant::now();
         while let Some(section_event) = self.section_receiver.recv().await {
             match section_event {
                 mind::Event::Start(event_ids) => {
+                    println!("start...");
+                    self.channel.send_status(AgentStatus::Processing).await?;
                     entity_service::event::update_event_status(
                         db,
                         event_ids,
@@ -114,8 +116,6 @@ impl AgentRuntime {
                     .await
                     .unwrap();
                     {
-                        let mut info = ctx.info.write().await;
-                        info.status = AgentStatus::Processing;
                         //
                         //保存一个空事件
                         let (event, model) = entity_service::event::save(
@@ -148,20 +148,20 @@ impl AgentRuntime {
                                 WebEvent::Section(SectionEvent::Chunk(tag, chunk), event_id);
                             self.channel.send_web_event(web_event).await;
                         }
-                        _ => {
-                            continue;
-                        }
+                        _ => {}
                     }
                 }
                 mind::Event::Close(tag, content) => {
-                    let (mut section, payload) = parse_close_content(
-                        &self,
-                        tag,
-                        content,
-                        start_time,
-                        &mut tool_call_infos,
-                        &mut pushs,
-                    )?;
+                    let mut section = {
+                        let elapsed = start_time.elapsed();
+                        let elapsed = humantime::format_duration(elapsed).to_string();
+                        Section {
+                            id: 0,
+                            name: tag.name.to_string(),
+                            content,
+                            elapsed,
+                        }
+                    };
                     //保存section
                     {
                         let model = entity_service::section::save(
@@ -169,41 +169,75 @@ impl AgentRuntime {
                             agent_id,
                             worker.response_event_id,
                             section.clone(),
-                            payload,
+                            serde_json::Value::Null,
                         )
                         .await?;
                         section.id = model.id;
                         worker.response_sections.push(section.clone());
                     };
-                    if let Some((detail, call)) = tool_call_infos.last_mut() {
-                        if detail.id == 0 {
-                            call.id = section.id;
-                            detail.id = call.id;
-                        }
-                    }
-                    if let Some(push) = pushs.last_mut() {
-                        if push.id == 0 {
-                            push.id = section.id;
-                        }
-                    }
+
                     //发送到前端
                     info!("SECTION:{}", &tag.name);
                     let web_event =
                         WebEvent::Section(SectionEvent::Close(section), worker.response_event_id);
                     self.channel.send_web_event(web_event).await;
                 }
-                mind::Event::End(event_ids) => {
-                    entity_service::event::update_event_status(db, event_ids, EnvEventStatus::Done)
+                mind::Event::End(event_ids, resaon) => {
+                    {
+                        //修改事件状态为完成
+                        entity_service::event::update_event_status(
+                            db,
+                            event_ids,
+                            EnvEventStatus::Done,
+                        )
                         .await
                         .unwrap();
-                    let web_event = WebEvent::Section(SectionEvent::End, worker.response_event_id);
-                    self.channel.send_web_event(web_event).await;
-                    //没有调用的话，则等待外部事件触发循环
-                    if tool_call_infos.is_empty() {
-                        return Ok(());
+                        let web_event =
+                            WebEvent::Section(SectionEvent::End, worker.response_event_id);
+                        self.channel.send_web_event(web_event).await;
                     }
-                    //加入临时阻塞事件接收机制，防止期间有事件触发
-                    self.call_watcher.send(true).unwrap();
+                    //加入临时阻塞事件接收机制，防止期间有事件触发执行其他任务去了
+                    println!("call start...");
+                    self.channel.send_status(AgentStatus::Waiting).await?;
+                    //解析响应的section
+                    let mut errors = vec![];
+                    let mut tool_call_infos: Vec<(ToolCallDetailItem, ToolCall)> = vec![];
+                    let mut pushs: Vec<Push> = vec![];
+                    {
+                        let mut counter: HashMap<&String, u32> = HashMap::new();
+                        for section in &worker.response_sections {
+                            let value = counter.entry(&section.name).or_default();
+                            *value += 1;
+                            match parse_section(&self, section, &mut tool_call_infos, &mut pushs)
+                                .await
+                            {
+                                Ok(payload) => {
+                                    entity_service::section::update_payload(
+                                        db, section.id, payload,
+                                    )
+                                    .await?;
+                                }
+                                Err(e) => {
+                                    errors.push(format!(
+                                        "第{}个<{}>解析失败:{}",
+                                        value, section.name, e
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                    if !errors.is_empty() {
+                        self.channel
+                            .send_event_unblock(EnvEvent::Error(errors.join("\n")), false)
+                            .await?;
+                        break;
+                    }
+                    //非正常结束则不处理任何功能调用
+                    match resaon {
+                        mind::EndReason::Error | mind::EndReason::Canceled => break,
+                        _ => {}
+                    }
+
                     //函数调用
                     if !tool_call_infos.is_empty() {
                         if let Err(e) = tool_call(
@@ -225,14 +259,18 @@ impl AgentRuntime {
                     }
                     //处理压栈
                     if !pushs.is_empty() {
-                        push_state(agent_id, self.stack.clone(), pushs).await?;
+                        push_state(self.context.clone(), self.stack.clone(), pushs).await?;
                     }
-                    //解锁
-                    self.call_watcher.clone().send(false).unwrap();
-                    return Ok(());
+
+                    break;
                 }
             }
         }
+        println!("call end...");
+        //解锁,调用工具后,可能状态被修改,不能直接恢复
+        self.channel
+            .send_status_if(AgentStatus::Waiting, AgentStatus::Processing)
+            .await?;
         Ok(())
     }
 }
@@ -261,23 +299,27 @@ impl ReactWorker {
     }
 }
 
-fn parse_close_content(
+async fn parse_section(
     rt: &AgentRuntime,
-    tag: &'static SectionTag,
-    content: String,
-    start_time: Instant,
+    section: &Section,
     tool_call_infos: &mut Vec<(ToolCallDetailItem, ToolCall)>,
     pushs: &mut Vec<Push>,
-) -> anyhow::Result<(Section, serde_json::Value)> {
-    let payload = match tag.name {
+) -> anyhow::Result<serde_json::Value> {
+    let content = section.content.trim();
+    let payload = match section.name.as_str() {
         "render" => {
-            let ctx: RenderContext = serde_json::from_str(content.trim())?;
+            let mut ctx = RenderContext::from_xml(content)?;
+            let comp = entity_service::component::get_by_name(&ctx.name)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("组件不存在"))?;
+            ctx.path = Some(comp.path);
             serde_json::to_value(ctx)?
         }
         "tool_call" => {
-            let call = rt.tool_engine.preprocess(content.trim())?;
+            let mut call = rt.tool_engine.preprocess(content)?;
+            call.id = section.id;
             let detail = ToolCallDetailItem {
-                id: 0,
+                id: section.id,
                 package: call.package.name.to_string(),
                 tool: call.tool.name.to_string(),
                 values: vec![],
@@ -291,25 +333,15 @@ fn parse_close_content(
             p
         }
         "push" => {
-            let push = parse_push(content.trim())?;
+            let mut push = parse_push(content)?;
+            push.id = section.id;
             let p = json!(&push);
             pushs.push(push);
             p
         }
         _ => serde_json::Value::Null,
     };
-
-    let elapsed = start_time.elapsed();
-    let elapsed = humantime::format_duration(elapsed).to_string();
-    Ok((
-        Section {
-            id: 0,
-            name: tag.name.to_string(),
-            content: content,
-            elapsed: elapsed,
-        },
-        payload,
-    ))
+    Ok(payload)
 }
 fn parse_push(content: &str) -> anyhow::Result<Push> {
     let (head, content) = content
@@ -401,7 +433,7 @@ async fn tool_call(
             return;
         }
         //发送完整事件
-        ch.send_event(EnvEvent::ToolCallResult(details), true)
+        ch.send_event(EnvEvent::ToolCallResult(details), false)
             .await
             .unwrap();
     });
@@ -422,12 +454,14 @@ async fn tool_call(
 }
 
 async fn push_state(
-    agent_id: u32,
+    context: Arc<AgentContext>,
     stack: Arc<RwLock<MindStack>>,
     pushs: Vec<Push>,
 ) -> anyhow::Result<()> {
+    let agent_id = context.agent_id;
     for push in pushs {
         let stack = stack.clone();
+        let context = context.clone();
         entity_service::transaction::<_, _>(move |txn| {
             Box::pin(async move {
                 let model = entity_service::state::push(
@@ -438,6 +472,8 @@ async fn push_state(
                     push.content.clone(),
                 )
                 .await?;
+                let mut info = context.info.write().await;
+                info.state_id = model.id;
                 let mut stack = stack.write().await;
                 stack.push(push);
                 Ok(())

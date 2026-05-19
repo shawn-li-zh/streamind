@@ -15,7 +15,7 @@ impl Section {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SectionTag {
     pub name: &'static str,
     pub start: &'static str,
@@ -30,7 +30,7 @@ pub static TAGS: LazyLock<Vec<SectionTag>> = LazyLock::new(|| {
     vec![
         SectionTag::new("reply", "<reply>", "</reply>"),
         SectionTag::new("think", "<think>", "</think>"),
-        SectionTag::new("tool_call", "<tool_call>", "</tool_call>"),
+        SectionTag::new("tool_call", "<tool_call id=", "</tool_call>"),
         SectionTag::new("render", "<render>", "</render>"),
         SectionTag::new("push", "<push>", "</push>"),
     ]

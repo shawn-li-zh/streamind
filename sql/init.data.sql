@@ -17,3 +17,33 @@ INSERT INTO "main"."render_dependence" ("name", "version", "path","ext", "editab
 INSERT INTO "main"."render_dependence" ("name", "version", "path","ext", "editable") VALUES ( '@/render/Grant', '1.0.0', 'http://localhost:3000/public/components/Grant/index.js', 'js',false);
 INSERT INTO "main"."render_dependence" ("name", "version", "path","ext", "editable") VALUES ( '@/render/GrantList', '1.0.0', 'http://localhost:3000/public/components/GrantList/index.js', 'js',false);
 INSERT INTO "main"."render_dependence" ("name", "version", "path","ext", "editable") VALUES ( 'dayjs', '1.11.0', 'https://unpkg.com/dayjs@1.11.0/dayjs.min.js','js',false);
+
+
+-- 初始化组件
+INSERT INTO "main"."render_component" ("id", "name", "path", "annotation", "doc", "create_time", "author_type", "author_name", "preview_attrs") VALUES (1, 'AuthRequest', 'AuthRequest/index.js', '向用户申请指定权限', 'interface Attrs {
+  // 授权码
+  code: string;
+  // 子授权码
+  subCode?: string;
+  // 申请用途
+  purpose: string;
+}
+', '2026-05-18T12:26:36.995581600+08:00', 'system', 'system', '{"code":"0","purpose":"需要保存您的个人基本信息以提供个性化服务。"}');
+INSERT INTO "main"."render_component" ("id", "name", "path", "annotation", "doc", "create_time", "author_type", "author_name", "preview_attrs") VALUES (2, 'ImageList', 'ImageList/index.js', '向用户展示一组图片', 'interface Attrs {
+  urls: string[];
+  width?: number;
+  height?: number;
+}
+', '2026-05-18T14:06:23.154057600+08:00', 'system', 'system', '{"height":100,"images":[{"name":"鹿","url":"https://fuss10.elemecdn.com/a/3f/3302e58f9a181d2509f3dc0fa68b0jpeg.jpeg"},{"name":"马","url":"https://fuss10.elemecdn.com/1/34/19aa98b1fcb2781c4fba33d850549jpeg.jpeg"},{"name":"母狮","url":"https://fuss10.elemecdn.com/0/6f/e35ff375812e6b0020b6b4e8f9583jpeg.jpeg"},{"name":"傻狍子","url":"https://fuss10.elemecdn.com/9/bb/e27858e973f5d7d3904835f46abbdjpeg.jpeg"},{"name":"狐狸","url":"https://fuss10.elemecdn.com/d/e6/c4d93a3805b3ce3f323f7974e6f78jpeg.jpeg"},{"name":"雪狐","url":"https://fuss10.elemecdn.com/3/28/bbf893f792f03a54408b3b7a7ebf0jpeg.jpeg"},{"name":"猴","url":"https://fuss10.elemecdn.com/2/11/6535bcfb26e4c79b48ddde44f4b6fjpeg.jpeg"}],"title":"动物摄影","width":100}');
+INSERT INTO "main"."render_component" ("id", "name", "path", "annotation", "doc", "create_time", "author_type", "author_name", "preview_attrs") VALUES (3, 'FileList', 'FileList/index.js', '向用户展示一组文件', 'interface File {
+  url: string;
+  name: string;
+  description?: string; // 描述
+  time?: string;        // 时间
+  size?: string;        // 大小
+}
+
+interface Attrs {
+  files: File[];
+}
+', '2026-05-18T14:07:31.231423500+08:00', 'system', 'system', '"null"');

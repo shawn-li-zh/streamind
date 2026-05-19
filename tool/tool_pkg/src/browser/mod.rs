@@ -55,7 +55,7 @@ pub mod browser {
         pub page: Page,
     }
     #[context]
-    pub fn new_context(agent: AgentContext) -> Context {
+    pub fn new_context(agent: Arc<AgentContext>) -> Context {
         Context {
             is_runing: false,
             tabs: HashMap::new(),
@@ -64,7 +64,7 @@ pub mod browser {
         }
     }
     #[shutdown]
-    pub async fn shutdown(agent: AgentContext, ctx: ContextData) -> anyhow::Result<()> {
+    pub async fn shutdown(agent: Arc<AgentContext>, ctx: ContextData) -> anyhow::Result<()> {
         let mut ctx = ctx.write().await;
         let ctx = ctx.downcast_mut::<Context>().unwrap();
         if ctx.is_runing {
@@ -400,7 +400,7 @@ mod utils {
         keys,
         layout::Point,
     };
-    use kernel::tool::parser::parse_call;
+    use kernel::parser::parse_call;
     use tokio::time::sleep;
 
     use crate::browser::utils;

@@ -24,18 +24,19 @@ use crate::{
 };
 
 /// test
-static OUTPUTS: LazyLock<Vec<Vec<String>>> = LazyLock::new(|| {
+pub(crate) static OUTPUTS: LazyLock<Vec<Vec<String>>> = LazyLock::new(|| {
     if let Ok(test) = std::fs::read_to_string("./test.xml") {
         return test
             .split("<end/>")
+            .map(|item| item.trim())
             .filter(|v| !v.is_empty())
-            .map(|item| split_into_random_chunks(item, 2, 5))
+            .map(|item| split_into_chunks(item))
             .collect();
     }
     vec![]
 });
 
-fn split_into_random_chunks(input: &str, min_size: usize, max_size: usize) -> Vec<String> {
+pub fn split_into_chunks(input: &str) -> Vec<String> {
     let chars: Vec<char> = input.chars().collect(); // 转为字符数组
     let mut chunks = Vec::new();
     let mut start = 0;
@@ -84,6 +85,7 @@ impl MindStack {
         }
     }
     pub fn push_response(&mut self, sections: Vec<Section>) {
+        info!("response sections [{}]", sections.len());
         if let Some(output) = message_kit::to_assistant_ouput(sections) {
             let msg = Role::assistant().text(output);
             self.push_msg(msg);
@@ -139,37 +141,37 @@ impl MindStack {
         }
         msgs
     }
-    // pub async fn chunk_stream(
-    //     &self,
-    //     llm_engine: Arc<dyn ChatClient>,
-    // ) -> std::pin::Pin<Box<dyn Stream<Item = String> + Send>> {
-    //     let messages = self.messages();
-    //     // println!("{:#?}", &messages);
-    //     let llm_stream = llm_engine
-    //         .stream(messages)
-    //         .await
-    //         .expect("Failed to llm stream");
-
-    //     llm_stream
-    //         .map(|r| match r {
-    //             Ok(v) => v,
-    //             Err(e) => {
-    //                 let a = Backtrace::capture();
-    //                 eprintln!("{:#?}", a);
-    //                 format!("<error>{e}</error>")
-    //             }
-    //         })
-    //         .boxed()
-    // }
-
     pub async fn chunk_stream(
         &self,
         llm_engine: Arc<dyn ChatClient>,
     ) -> std::pin::Pin<Box<dyn Stream<Item = String> + Send>> {
-        let o = &*OUTPUTS;
-        let i = self.step % o.len();
-        stream::iter(o[i].clone()).boxed()
+        let messages = self.messages();
+        // println!("{:#?}", &messages);
+        let llm_stream = llm_engine
+            .stream(messages)
+            .await
+            .expect("Failed to llm stream");
+
+        llm_stream
+            .map(|r| match r {
+                Ok(v) => v,
+                Err(e) => {
+                    let a = Backtrace::capture();
+                    eprintln!("{:#?}", a);
+                    format!("<error>{e}</error>")
+                }
+            })
+            .boxed()
     }
+
+    //     pub async fn chunk_stream(
+    //         &self,
+    //         llm_engine: Arc<dyn ChatClient>,
+    //     ) -> std::pin::Pin<Box<dyn Stream<Item = String> + Send>> {
+    //         let o = &*OUTPUTS;
+    //         let i = self.step % o.len();
+    //         stream::iter(o[i].clone()).boxed()
+    //     }
 }
 #[derive(Debug, Clone, Serialize)]
 pub struct Push {
