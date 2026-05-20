@@ -74,7 +74,10 @@ pub mod browser {
         Ok(())
     }
     #[tool(anno = "启动浏览器", example = r#"lunch()"#)]
-    pub async fn lunch(#[ctx] ctx: ToolCallContext) -> anyhow::Result<()> {
+    pub async fn lunch(
+        #[arg("浏览器启动参数")] args: Option<Vec<String>>,
+        #[ctx] ctx: ToolCallContext,
+    ) -> anyhow::Result<()> {
         let chrome_path = std::env::var("CHROME_PATH")
             .map_err(|e| anyhow::anyhow!("请先设置浏览器执行文件地址"))?;
         let chrome_path = PathBuf::from_str(&chrome_path)?;
@@ -99,25 +102,26 @@ pub mod browser {
             .with_head()
             // .port(port)
             .hide()
-            .args(vec![
-                "--disable-extensions",     // 禁用扩展
-                "--disable-popup-blocking", // 禁用弹窗拦截
-                "--disable-notifications",  // 禁用通知
-                "--disable-translate",      // 禁用翻译
-                "--disable-infobars",       // 禁用信息栏
-                                            // "--disable-dev-shm-usage",         // 禁用共享内存
-                                            // "--disable-gpu",                   // 禁用 GPU
-                                            // "--disable-software-rasterizer",   // 禁用软件渲染器
-                                            // "--disable-default-apps",          // 禁用默认应用
-                                            // "--disable-background-networking", // 禁用后台网络
-            ])
+            .args(args.unwrap_or_default())
+            // .args(vec![
+            //     "--disable-extensions",     // 禁用扩展
+            //     "--disable-popup-blocking", // 禁用弹窗拦截
+            //     "--disable-notifications",  // 禁用通知
+            //     "--disable-translate",      // 禁用翻译
+            //     "--disable-infobars",       // 禁用信息栏
+            //                                 // "--disable-dev-shm-usage",         // 禁用共享内存
+            //                                 // "--disable-gpu",                   // 禁用 GPU
+            //                                 // "--disable-software-rasterizer",   // 禁用软件渲染器
+            //                                 // "--disable-default-apps",          // 禁用默认应用
+            //                                 // "--disable-background-networking", // 禁用后台网络
+            // ])
             .arg("--start-maximized") // 最大化
-            // 隐藏“正受自动测试软件控制”提示条
-            .arg("--exclude-switches=enable-automation")
-            // 屏蔽其他干扰弹窗
-            .arg("--no-first-run") // 跳过首次运行设置
-            .arg("--no-default-browser-check") // 不检查是否为默认浏览器
-            .launch_timeout(Duration::from_secs(5))
+            // // 隐藏“正受自动测试软件控制”提示条
+            // .arg("--exclude-switches=enable-automation")
+            // // 屏蔽其他干扰弹窗
+            // .arg("--no-first-run") // 跳过首次运行设置
+            // .arg("--no-default-browser-check") // 不检查是否为默认浏览器
+            .launch_timeout(Duration::from_secs(10))
             .build()
             .map_err(|e| anyhow::anyhow!("Browser Cdp:{e}"))?;
         let (browser, mut handler) = Browser::launch(config).await?;

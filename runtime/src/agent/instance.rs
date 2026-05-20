@@ -1,17 +1,13 @@
 use std::{
     collections::HashSet,
     path::PathBuf,
-    sync::{
-        Arc,
-        atomic::{AtomicPtr, AtomicU32},
-    },
+    sync::{Arc, atomic::AtomicU32},
     time::{Duration, Instant},
 };
 
 use async_trait::async_trait;
 use dashmap::DashMap;
 
-use entity::agent;
 use entity_service::DB;
 use kernel::{
     agent::{

@@ -1,7 +1,6 @@
 use std::{
     path::{Path, PathBuf},
     sync::{Arc, atomic::AtomicU32},
-
 };
 
 use chrono::Local;
@@ -11,7 +10,7 @@ use tokio::sync::RwLock;
 
 use crate::{
     event::EnvEvent,
-    message::{Message, Role},
+    message::{Role, RoleMessage},
     tool::engine::ToolEngineContext,
 };
 #[derive()]
@@ -171,24 +170,24 @@ pub struct AgentEvent {
 impl AgentEvent {
     pub fn to_infos(&self) -> Vec<crate::message::Information> {
         let time = self.time.format("%Y-%m-%d %H:%M:%S").to_string();
+        let type_code = self.data.code();
         let head = format!(
-            "# 事件\nevent_id={},type={},time={}",
-            self.id,
-            self.data.name(),
-            time
+            "<event id={},type=\"{}\",time=\"{}\">",
+            self.id, type_code, time
         );
         let mut infos = self.data.clone().to_infos();
         infos.insert(0, head.into());
+        infos.push("</event>".into());
         return infos;
     }
-    pub fn to_message(&self) -> Message {
-        let msg = match &self.data {
-            EnvEvent::AgentResponse(sections) => Role::assistant(),
-            EnvEvent::UserRequest(user_message) => Role::user(),
-            EnvEvent::ToolCallResult(tool_call_detail_items) => Role::system(),
-            _ => Role::system(),
-        };
+    pub fn to_message(&self) -> RoleMessage {
         let infos = self.to_infos();
-        msg.infos(infos)
+        match &self.data {
+            EnvEvent::AgentResponse(_sections) => RoleMessage::System(infos),
+            EnvEvent::Error(_error) => RoleMessage::System(infos),
+            EnvEvent::UserRequest(_user_message) => RoleMessage::User(infos),
+            EnvEvent::ToolResponse(detail) => RoleMessage::Tool(detail.call_id.clone(), infos),
+            _ => RoleMessage::User(infos),
+        }
     }
 }

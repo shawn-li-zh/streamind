@@ -44,7 +44,7 @@ impl WebEvent {
                 | EnvEvent::UserRequest(_)
                 | EnvEvent::Interaction(_)
                 | EnvEvent::Heartbeat
-                | EnvEvent::ToolCallResult(_) => {
+                | EnvEvent::ToolResponse(_) => {
                     unreachable!("调用出错")
                 }
                 EnvEvent::Timer(timer_data) => {

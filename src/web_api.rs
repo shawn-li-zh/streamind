@@ -98,7 +98,7 @@ pub async fn chat(
         .channel
         .send_event(
             EnvEvent::UserRequest(kernel::event::UserMessage {
-                content: msg.content,
+                content: msg.content.trim().to_string(),
                 attachments: vec![],
             }),
             false,

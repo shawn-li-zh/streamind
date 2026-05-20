@@ -80,6 +80,7 @@ impl AgentChannel {
                         .await?;
                     self.send_status_if(AgentStatus::Sleep, AgentStatus::Idle)
                         .await?;
+                    println!("唤醒agent")
                 }
                 _ => {}
             }
@@ -92,7 +93,7 @@ impl AgentChannel {
                 | EnvEvent::Interaction(_)
                 | EnvEvent::Interrupt(_)
                 | EnvEvent::Heartbeat
-                | EnvEvent::ToolCallResult(_) => {
+                | EnvEvent::ToolResponse(_) => {
                     //忽略
                 }
                 _ => {
@@ -115,8 +116,14 @@ impl AgentChannel {
         status_watcher.wait_for(|v| *v == is).await?;
         Ok(())
     }
+    pub async fn wait_status_not_is(&self, not_is: AgentStatus) -> anyhow::Result<()> {
+        let mut status_watcher = self.status_watcher.write().await;
+        status_watcher.wait_for(|v| *v != not_is).await?;
+        Ok(())
+    }
     pub async fn get_status(&self) -> AgentStatus {
-        self.status_watcher.read().await.borrow().clone()
+        let s = self.status_sender.borrow().clone();
+        s
     }
 
     pub async fn send_status(&self, status: AgentStatus) -> anyhow::Result<()> {

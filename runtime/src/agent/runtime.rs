@@ -11,6 +11,7 @@ use kernel::{
         context::{AgentContext, AgentStatus},
     },
     event::{CallItem, EnvEvent, SectionEvent, ToolCallDetailItem, ToolCallEvent, ToolCallStatus},
+    parser,
     render::RenderContext,
     section::Section,
     tool::{call::ToolCall, core::ToolReturnValue, engine::ToolEngine},
@@ -103,6 +104,7 @@ impl AgentRuntime {
         let db = DB.get().unwrap();
         //
         let mut start_time = Instant::now();
+        let mut last_tag_open = None;
         while let Some(section_event) = self.section_receiver.recv().await {
             match section_event {
                 mind::Event::Start(event_ids) => {
@@ -133,7 +135,8 @@ impl AgentRuntime {
                         WebEvent::Section(SectionEvent::Start, worker.response_event_id);
                     self.channel.send_web_event(web_event).await;
                 }
-                mind::Event::Open(tag) => {
+                mind::Event::Open(tag, header) => {
+                    last_tag_open = Some((tag, header));
                     start_time = Instant::now();
                     let event_id = worker.response_event_id;
                     let web_event = WebEvent::Section(SectionEvent::Open(tag), event_id);
@@ -153,10 +156,12 @@ impl AgentRuntime {
                 }
                 mind::Event::Close(tag, content) => {
                     let mut section = {
+                        let (tag, header) = last_tag_open.take().unwrap();
                         let elapsed = start_time.elapsed();
                         let elapsed = humantime::format_duration(elapsed).to_string();
                         Section {
                             id: 0,
+                            header,
                             name: tag.name.to_string(),
                             content,
                             elapsed,
@@ -316,10 +321,26 @@ async fn parse_section(
             serde_json::to_value(ctx)?
         }
         "tool_call" => {
-            let mut call = rt.tool_engine.preprocess(content)?;
+            let inner = section
+                .header
+                .trim_start_matches("<tool_call")
+                .trim_end_matches(">")
+                .trim();
+            let mut attrs = parser::parse_attrs(inner);
+            let call_id = match attrs
+                .remove("id")
+                .map(|v| v.as_str().unwrap_or_default().to_string())
+            {
+                Some(v) => v,
+                None => {
+                    anyhow::bail!("tool_call id is required")
+                }
+            };
+            let mut call = rt.tool_engine.preprocess(call_id.clone(), content)?;
             call.id = section.id;
             let detail = ToolCallDetailItem {
                 id: section.id,
+                call_id,
                 package: call.package.name.to_string(),
                 tool: call.tool.name.to_string(),
                 values: vec![],
@@ -333,7 +354,7 @@ async fn parse_section(
             p
         }
         "push" => {
-            let mut push = parse_push(content)?;
+            let mut push = parse_push(&section.header, content)?;
             push.id = section.id;
             let p = json!(&push);
             pushs.push(push);
@@ -343,18 +364,28 @@ async fn parse_section(
     };
     Ok(payload)
 }
-fn parse_push(content: &str) -> anyhow::Result<Push> {
-    let (head, content) = content
+fn parse_push(header: &str, content: &str) -> anyhow::Result<Push> {
+    let inner = header
+        .trim_start_matches("<push")
+        .trim_end_matches(">")
+        .trim();
+    let mut attrs = parser::parse_attrs(inner);
+    let pos = match attrs.remove("pos") {
+        Some(v) => v
+            .as_u64()
+            .ok_or_else(|| anyhow::anyhow!("push pos is invalid"))?,
+        None => {
+            anyhow::bail!("push pos is required")
+        }
+    };
+
+    let (title, content) = content
         .split_once("\n")
         .with_context(|| anyhow::anyhow!("栈格式异常:{content}"))?;
-    let (pos, title) = head
-        .split_once(":")
-        .with_context(|| anyhow::anyhow!("栈头格式异常:{head}"))?;
-    let pos =
-        usize::from_str_radix(pos.trim(), 10).map_err(|e| anyhow::anyhow!("栈指针格式异常"))?;
+
     Ok(Push {
         id: 0,
-        pos,
+        pos: pos as _,
         title: title.trim().to_string(),
         content: content.trim().to_string(),
     })
@@ -410,32 +441,25 @@ async fn tool_call(
             entity_service::section::update_payload(db, detial.id, detial.clone())
                 .await
                 .unwrap();
+            let is_empty = detial
+                .values
+                .iter()
+                .filter(|v| {
+                    if let ToolReturnValue::Ignore = v {
+                        return false;
+                    }
+                    return true;
+                })
+                .count()
+                == 0;
+            if is_empty {
+                return;
+            }
+            //发送完整事件
+            ch.send_event(EnvEvent::ToolResponse(detial.clone()), false)
+                .await
+                .unwrap();
         }
-        //排序
-        let details: Vec<ToolCallDetailItem> = call_ids
-            .iter()
-            .map(|id| tool_call_details.remove(id).unwrap())
-            .filter(|d| {
-                d.values
-                    .iter()
-                    .filter(|v| {
-                        if let ToolReturnValue::Ignore = v {
-                            return false;
-                        }
-                        return true;
-                    })
-                    .count()
-                    != 0
-            })
-            .collect();
-        if details.is_empty() {
-            //没有有效的工具调用结果
-            return;
-        }
-        //发送完整事件
-        ch.send_event(EnvEvent::ToolCallResult(details), false)
-            .await
-            .unwrap();
     });
     //通知前端 工具调用开始执行
     channel
@@ -460,6 +484,9 @@ async fn push_state(
 ) -> anyhow::Result<()> {
     let agent_id = context.agent_id;
     for push in pushs {
+        if push.pos == 0 {
+            anyhow::bail!("核心栈状态不能重置")
+        }
         let stack = stack.clone();
         let context = context.clone();
         entity_service::transaction::<_, _>(move |txn| {

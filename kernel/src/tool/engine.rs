@@ -74,10 +74,7 @@ pub struct ToolEngine {
 }
 impl ToolEngine {
     pub fn new(agent: Arc<dyn AgentHandler>, context: Arc<ToolEngineContext>) -> Self {
-        Self {
-            agent,
-            context,
-        }
+        Self { agent, context }
     }
     //code格式  package.tool(..args)
     pub async fn batch_call(
@@ -155,8 +152,8 @@ impl ToolEngine {
     //     PreprocessResult::Valid(valid_tasks)
     // }
 
-    pub fn preprocess(&self, code: &str) -> anyhow::Result<ToolCall> {
-        ToolCall::from(code, self.context.as_ref())
+    pub fn preprocess(&self, call_id: String, code: &str) -> anyhow::Result<ToolCall> {
+        ToolCall::from(call_id,code, self.context.as_ref())
     }
 }
 

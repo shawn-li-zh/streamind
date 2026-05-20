@@ -6,7 +6,7 @@ use async_openai::{
 };
 use async_trait::async_trait;
 use futures::StreamExt;
-use kernel::message::Role;
+use kernel::message::{Information, Role};
 use serde::{Deserialize, Serialize};
 
 use crate::llm::{client::ChatClient, family::ModelFamily};
@@ -14,6 +14,7 @@ use crate::llm::{client::ChatClient, family::ModelFamily};
 pub struct Message {
     pub role: Role,
     pub content: String,
+    pub reasoning_content: Option<String>,
     pub prefix: bool,
     tool_call_id: Option<String>,
 }
@@ -67,19 +68,63 @@ pub struct StreamResponseDelta {
     pub reasoning_content: Option<String>,
 }
 
-impl From<kernel::message::Message> for Message {
-    fn from(value: kernel::message::Message) -> Self {
-        let role = value.get_role();
-        let (content, _paths) = value.to_tuple();
-        let call_id=match role {
-            Role::Tool => Some("tool_id".to_string()),
-            _=> None,
-        };
-        Message {
-            role: role,
-            content: content,
-            prefix: false,
-            tool_call_id: call_id,
+impl From<kernel::message::RoleMessage> for Message {
+    fn from(value: kernel::message::RoleMessage) -> Self {
+        let role = value.role();
+        let (content, _paths) = value.clone().to_tuple();
+        match value {
+            kernel::message::RoleMessage::Assistant(informations, prefix) => {
+                let origin = content;
+                let mut reasoning_content = vec![];
+                let mut content = vec![];
+                let mut has_tool_call = false;
+                for info in informations {
+                    if let Information::Function(tag, full) = &info {
+                        if tag == "think" {
+                            reasoning_content.push(info);
+                            continue;
+                        }
+                        if tag == "tool_call" {
+                            has_tool_call = true;
+                        }
+                    }
+                    content.push(info);
+                }
+                if has_tool_call {
+                    return Message {
+                        role: role,
+                        content: origin,
+                        prefix: prefix,
+                        reasoning_content: None,
+                        tool_call_id: None,
+                    };
+                }
+                let (reasoning_content, _) = Information::join(reasoning_content);
+                let (content, _) = Information::join(content);
+                return Message {
+                    role: role,
+                    reasoning_content: Some(reasoning_content),
+                    content: content,
+                    prefix: prefix,
+                    tool_call_id: None,
+                };
+            }
+            kernel::message::RoleMessage::Tool(tool_call_id, _informations) => {
+                return Message {
+                    role: Role::User,
+                    content: content,
+                    reasoning_content: None,
+                    prefix: false,
+                    tool_call_id: None,
+                };
+            }
+            _ => Message {
+                role: role,
+                content: content,
+                reasoning_content: None,
+                prefix: false,
+                tool_call_id: None,
+            },
         }
     }
 }
@@ -95,7 +140,7 @@ impl ChatClient for DeepseekClient {
     }
     async fn stream(
         &self,
-        messages: Vec<kernel::message::Message>,
+        messages: Vec<kernel::message::RoleMessage>,
     ) -> Result<super::client::ChunkStream, OpenAIError> {
         let messages = messages.into_iter().map(|v| v.into()).collect();
         let request = Request {
@@ -114,7 +159,7 @@ impl ChatClient for DeepseekClient {
             .create_stream_byot::<Request, ChatStreamResponse>(request)
             .await?;
         let mut in_think = false;
-        let stream = stream.map(move|r| {
+        let stream = stream.map(move |r| {
             r.map(|mut v| {
                 let text = v.choices[0].delta.content.take();
                 let reasoning = v.choices[0].delta.reasoning_content.take();

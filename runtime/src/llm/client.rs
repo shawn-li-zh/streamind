@@ -20,7 +20,7 @@ pub trait ChatClient: Send + Sync + 'static {
     fn model_info(&self) -> (ModelFamily, String);
     async fn stream(
         &self,
-        messages: Vec<kernel::message::Message>,
+        messages: Vec<kernel::message::RoleMessage>,
     ) -> Result<ChunkStream, OpenAIError>;
 }
 
@@ -37,7 +37,7 @@ impl ChatClient for LLMClient {
     }
     async fn stream(
         &self,
-        messages: Vec<kernel::message::Message>,
+        messages: Vec<kernel::message::RoleMessage>,
     ) -> Result<super::client::ChunkStream, OpenAIError> {
         let messages: Vec<ChatCompletionRequestMessage> = messages
             .into_iter()

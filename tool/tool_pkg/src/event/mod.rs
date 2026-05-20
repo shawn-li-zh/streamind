@@ -21,7 +21,7 @@ pub mod event {
         match model {
             Some(model) => {
                 let agent_event = entity_service::event::convert::from_entity(model);
-                let (text, paths) = agent_event.to_message().to_tuple();
+                let (text, _paths) = agent_event.to_message().to_tuple();
                 Ok(ToolReturn::raw(text))
             }
             None => Ok(ToolReturn::raw("事件不存在")),
@@ -36,7 +36,7 @@ pub mod event {
         #[arg("事件id")] id: i64,
         #[arg("时间方向")] before: bool,
         #[arg("关键字")] key: Option<String>,
-        #[arg("事件类型: agentResponse、userRequest、toolCallResult、error、timer、interaction")]
+        #[arg("事件类型")]
         r#type: Option<String>,
         #[arg("数量,最多100")] mut limit: u64,
         #[ctx] ctx: ToolCallContext,
@@ -66,7 +66,7 @@ pub mod event {
         #[arg("开始时间")] start: String,
         #[arg("结束时间")] end: String,
         #[arg("关键字")] key: Option<String>,
-        #[arg("事件类型: agentResponse、userRequest、toolCallResult、error、timer、interaction")]
+        #[arg("事件类型")]
         r#type: Option<String>,
         #[arg("数量,最多100")] mut limit: u64,
         #[ctx] ctx: ToolCallContext,
@@ -93,7 +93,7 @@ pub mod event {
         res.push(format!("结果总数:{}\n---", events.len()));
         for event in events {
             let agent_event = entity_service::event::convert::from_entity(event);
-            let (text, paths) = agent_event.to_message().to_tuple();
+            let (text, _paths) = agent_event.to_message().to_tuple();
             res.push(text);
         }
         ToolReturn::raws(res)

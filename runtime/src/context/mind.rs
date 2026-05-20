@@ -27,7 +27,7 @@ pub enum MindFlag {
 }
 pub enum Event {
     Start(Vec<i64>),
-    Open(&'static SectionTag),
+    Open(&'static SectionTag, String),
     Chunk(&'static SectionTag, String),
     Close(&'static SectionTag, String),
     End(Vec<i64>, EndReason),
@@ -213,11 +213,10 @@ impl StreamMind {
                             //必须由外部确认是否真的结束,所以不发送事件
                             break;
                         }
-
-                        section::Event::Open(tag)=>{
+                        section::Event::Open(tag,head)=>{
                             worker.last_tag=Some(tag);
                             worker.chunk_buffer.clear();
-                            Event::Open(tag)
+                            Event::Open(tag,head)
 
                         }
                         section::Event::Chunk(tag,chunk)=>{

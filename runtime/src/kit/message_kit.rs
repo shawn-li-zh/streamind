@@ -3,15 +3,20 @@ use std::{collections::HashMap, fs::File};
 use async_openai::types::chat::ChatCompletionRequestMessage;
 use entity::event::EnvEventType;
 
-use kernel::{agent::context::AgentContext, event::EnvEvent, message::Message, section::Section};
+use kernel::{
+    agent::context::AgentContext,
+    event::EnvEvent,
+    message::{Information, RoleMessage},
+    section::Section,
+};
 
 use crate::{
     context::stack::{MindNode, MindStack},
     kit::prompt_kit,
 };
 
-pub fn to_sdk_message(value: Message) -> ChatCompletionRequestMessage {
-    let role = value.get_role();
+pub fn to_sdk_message(value: RoleMessage) -> ChatCompletionRequestMessage {
+    let role = value.role();
     let (text, paths) = value.to_tuple();
     match role {
         kernel::message::Role::User => prompt_kit::user_message(text, paths),
@@ -21,30 +26,40 @@ pub fn to_sdk_message(value: Message) -> ChatCompletionRequestMessage {
     }
 }
 
-pub fn to_assistant_ouput(sections: Vec<Section>) -> Option<String> {
-    if sections.is_empty() {
-        return None;
-    }
-    let has_tool_call = sections.iter().any(|s| s.name == "tool_call");
-    fn join(sections: Vec<Section>) -> String {
-        let mut text = String::new();
-        for section in sections {
-            text += &section.to_string();
-            text += "\n";
-        }
-        text
-    }
-    if has_tool_call {
-        Some(join(sections))
-    } else {
-        //去除思考内容
-        let sections: Vec<Section> = sections.into_iter().filter(|s| s.name != "think").collect();
-        if sections.is_empty() {
-            None
-        } else {
-            Some(join(sections))
-        }
-    }
+// pub fn to_assistant_ouput(sections: Vec<Section>) -> Option<String> {
+//     if sections.is_empty() {
+//         return None;
+//     }
+//     let has_tool_call = sections.iter().any(|s| s.name == "tool_call");
+//     fn join(sections: Vec<Section>) -> String {
+//         let mut text = String::new();
+//         for section in sections {
+//             text += &section.to_string();
+//             text += "\n";
+//         }
+//         text
+//     }
+//     if has_tool_call {
+//         Some(join(sections))
+//     } else {
+//         //去除思考内容
+//         let sections: Vec<Section> = sections.into_iter().filter(|s| s.name != "think").collect();
+//         if sections.is_empty() {
+//             None
+//         } else {
+//             Some(join(sections))
+//         }
+//     }
+// }
+
+pub fn to_assistant_ouput(sections: Vec<Section>) -> Vec<Information> {
+    sections
+        .into_iter()
+        .map(|s| {
+            let full = s.to_string();
+            Information::Function(s.name, full)
+        })
+        .collect()
 }
 
 pub async fn load_stack(agent_ctx: &AgentContext) -> anyhow::Result<MindStack> {
@@ -84,7 +99,11 @@ pub async fn load_stack(agent_ctx: &AgentContext) -> anyhow::Result<MindStack> {
     //
     let sp = prompt_kit::build_system_prompt(agent_ctx, &agent_code, &agent_name);
     let path = workspace.join("log.txt");
-    let file = File::options().append(true).create(true).open(path)?;
+    let file = File::options()
+        .write(true)
+        .truncate(true)
+        .create(true)
+        .open(path)?;
     let mut stack = MindStack::new(sp, file);
     for state in states {
         let node = MindNode {

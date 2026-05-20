@@ -45,7 +45,7 @@ pub mod convert {
             EnvEvent::Timer(data) => {
                 json!(data)
             }
-            EnvEvent::ToolCallResult(results) => {
+            EnvEvent::ToolResponse(results) => {
                 json!(results)
             }
             EnvEvent::Error(info) => {
@@ -75,8 +75,8 @@ pub mod convert {
                 EnvEvent::UserRequest(msg)
             }
             EnvEventType::Heartbeat => EnvEvent::Heartbeat,
-            EnvEventType::ToolCallResult => {
-                EnvEvent::ToolCallResult(serde_json::from_value(payload).unwrap())
+            EnvEventType::ToolResponse => {
+                EnvEvent::ToolResponse(serde_json::from_value(payload).unwrap())
             }
             EnvEventType::Error => {
                 let mut map: HashMap<String, String> = serde_json::from_value(payload).unwrap();
@@ -101,7 +101,7 @@ pub mod convert {
             EnvEvent::Heartbeat => EnvEventType::Heartbeat,
             EnvEvent::UserRequest(_) => EnvEventType::UserRequest,
             EnvEvent::Timer { .. } => EnvEventType::Timer,
-            EnvEvent::ToolCallResult(_) => EnvEventType::ToolCallResult,
+            EnvEvent::ToolResponse(_) => EnvEventType::ToolResponse,
             EnvEvent::Error(_) => EnvEventType::Error,
             EnvEvent::Interrupt(_) => EnvEventType::Interrupt,
             EnvEvent::Interaction(_) => EnvEventType::Interaction,

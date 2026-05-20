@@ -1,11 +1,11 @@
-use std::{collections::HashMap, f32::consts::E, fmt::Display, path::PathBuf, time::Duration};
+use std::{collections::HashMap, fmt::Display, time::Duration};
 
 use serde::{Deserialize, Serialize};
 
 use crate::{
     message::{Binary, Information},
     section::{Section, SectionTag},
-    tool::core::{ToolReturn, ToolReturnValue},
+    tool::core::ToolReturnValue,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -29,6 +29,7 @@ impl Display for ToolCallStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCallDetailItem {
     pub id: i64,
+    pub call_id: String,
     pub package: String,
     pub tool: String,
     pub values: Vec<ToolReturnValue>,
@@ -70,7 +71,7 @@ pub enum EnvEvent {
     //定时器
     Timer(TimerData),
     //工具调用结果
-    ToolCallResult(Vec<ToolCallDetailItem>),
+    ToolResponse(ToolCallDetailItem),
     //UI交互事件
     Interaction(InteractionData),
     //异常
@@ -111,32 +112,29 @@ impl EnvEvent {
                 let one = format!("{}\n附加信息:\n{}", head, data.payload).into();
                 vec![one]
             }
-            EnvEvent::ToolCallResult(results) => {
-                let list: Vec<Information> = results
-                    .into_iter()
-                    .map(|item| {
-                        let mut list: Vec<Information> = vec![];
-                        let head = format!("status={},elapsed={}", item.status, item.elapsed);
-                        list.push(Information::Text(head));
-                        for value in item.values {
-                            match value {
-                                ToolReturnValue::Ignore => {}
+            EnvEvent::ToolResponse(result) => {
+                let mut list: Vec<Information> = vec![];
+                let head = format!(
+                    r#"<tool_reponse id="{}" status={} elapsed="{}">"#,
+                    result.call_id, result.status, result.elapsed
+                );
+                list.push(Information::Text(head));
+                for value in result.values {
+                    match value {
+                        ToolReturnValue::Ignore => {}
 
-                                ToolReturnValue::Raw(text) => {
-                                    list.push(Information::Text(text));
-                                }
-                                ToolReturnValue::Json(value) => {
-                                    list.push(Information::Text(value.to_string()));
-                                }
-                                ToolReturnValue::Image(bin) => {
-                                    list.push(Information::Image(bin));
-                                }
-                            }
+                        ToolReturnValue::Raw(text) => {
+                            list.push(Information::Text(text));
                         }
-                        list
-                    })
-                    .flat_map(|items| items.into_iter())
-                    .collect();
+                        ToolReturnValue::Json(value) => {
+                            list.push(Information::Text(value.to_string()));
+                        }
+                        ToolReturnValue::Image(bin) => {
+                            list.push(Information::Image(bin));
+                        }
+                    }
+                }
+                 list.push(Information::Text("</tool_reponse>".to_string()));
                 list
             }
             EnvEvent::Error(reason) => {
@@ -160,10 +158,23 @@ impl EnvEvent {
             EnvEvent::Heartbeat => "agent心跳",
             EnvEvent::UserRequest(_) => "用户消息",
             EnvEvent::Timer { .. } => "定时器",
-            EnvEvent::ToolCallResult(_) => "工具调用结果",
+            EnvEvent::ToolResponse(_) => "工具调用结果",
             EnvEvent::Error(_) => "异常",
             EnvEvent::Interrupt(_) => "中断信号",
             EnvEvent::Interaction(_) => "UI交互事件",
+        };
+        name.to_string()
+    }
+    pub fn code(&self) -> String {
+        let name = match self {
+            EnvEvent::AgentResponse(_) => "agentResponse",
+            EnvEvent::Heartbeat => "heartbeat",
+            EnvEvent::UserRequest(_) => "userRequest",
+            EnvEvent::Timer { .. } => "timer",
+            EnvEvent::ToolResponse(_) => "toolResponse",
+            EnvEvent::Error(_) => "error",
+            EnvEvent::Interrupt(_) => "interrupt",
+            EnvEvent::Interaction(_) => "interaction",
         };
         name.to_string()
     }

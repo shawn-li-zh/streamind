@@ -6,22 +6,17 @@ use std::{
     sync::{Arc, LazyLock},
 };
 
-use entity::event::{EnvEventStatus, EnvEventType};
-use entity_service::DB;
 use futures::{Stream, StreamExt, stream};
 
 use kernel::{
     agent::context::AgentEvent,
-    message::{Message, Role},
+    message::{Role, RoleMessage},
     section::{self, Section},
 };
 use serde::{Deserialize, Serialize};
 use tracing::{error, info};
 
-use crate::{
-    kit::{message_kit, prompt_kit},
-    llm::client::{ChatClient, LLMClient},
-};
+use crate::{kit::message_kit, llm::client::ChatClient};
 
 /// test
 pub(crate) static OUTPUTS: LazyLock<Vec<Vec<String>>> = LazyLock::new(|| {
@@ -58,7 +53,7 @@ pub fn split_into_chunks(input: &str) -> Vec<String> {
 }
 pub struct MindStack {
     pub log_file: File,
-    pub system_prompt: Message,
+    pub system_prompt: RoleMessage,
     pub nodes: Vec<MindNode>,
     id_map_pos: HashMap<i64, usize>,
     //上下文长度
@@ -66,10 +61,12 @@ pub struct MindStack {
     step: usize,
 }
 impl MindStack {
-    pub fn new(system_prompt: String, log_file: File) -> Self {
+    pub fn new(system_prompt: String, mut log_file: File) -> Self {
+        // log_file.write(system_prompt.as_bytes()).unwrap();
+        // log_file.flush().unwrap();
         Self {
             log_file,
-            system_prompt: Role::system().text(system_prompt),
+            system_prompt: RoleMessage::System(vec![system_prompt.into()]),
             nodes: vec![],
             id_map_pos: HashMap::new(),
             content_len: 0,
@@ -86,11 +83,13 @@ impl MindStack {
     }
     pub fn push_response(&mut self, sections: Vec<Section>) {
         info!("response sections [{}]", sections.len());
-        if let Some(output) = message_kit::to_assistant_ouput(sections) {
-            let msg = Role::assistant().text(output);
-            self.push_msg(msg);
-        }
         self.step += 1;
+        let infos = message_kit::to_assistant_ouput(sections);
+        if infos.is_empty() {
+            return;
+        }
+        let msg = RoleMessage::Assistant(infos, false);
+        self.push_msg(msg);
     }
 
     pub fn push(&mut self, push: Push) {
@@ -108,6 +107,10 @@ impl MindStack {
     }
 
     pub fn push_node(&mut self, node: MindNode) {
+        let s = format!("\n{:?}:\n{}\n", Role::Assistant, &node.statement());
+        self.log_file.write(s.as_bytes()).unwrap();
+        self.log_file.flush().unwrap();
+        //
         self.id_map_pos.insert(node.id, node.pos);
         self.back_to(node.pos);
         self.nodes.push(node);
@@ -120,11 +123,12 @@ impl MindStack {
         }
         return removed;
     }
-    pub fn push_msg(&mut self, msg: Message) {
-        self.content_len += msg.size;
-        // let s = format!("{:?}\n\n", &msg);
-        // self.log_file.write(s.as_bytes()).unwrap();
-        // self.log_file.flush().unwrap();
+    pub fn push_msg(&mut self, msg: RoleMessage) {
+        self.content_len += msg.size();
+        let (text, _) = msg.clone().to_tuple();
+        let s = format!("\n{:?}:\n{}\n", msg.role(), text);
+        self.log_file.write(s.as_bytes()).unwrap();
+        self.log_file.flush().unwrap();
         let node: &mut MindNode = self.last_mut().unwrap();
         node.push(msg);
     }
@@ -134,7 +138,7 @@ impl MindStack {
     fn last_mut(&mut self) -> Option<&mut MindNode> {
         self.nodes.last_mut()
     }
-    fn messages(&self) -> Vec<Message> {
+    fn messages(&self) -> Vec<RoleMessage> {
         let mut msgs = vec![self.system_prompt.clone()];
         for node in &self.nodes {
             msgs.extend(node.to_messages());
@@ -164,14 +168,14 @@ impl MindStack {
             .boxed()
     }
 
-    //     pub async fn chunk_stream(
-    //         &self,
-    //         llm_engine: Arc<dyn ChatClient>,
-    //     ) -> std::pin::Pin<Box<dyn Stream<Item = String> + Send>> {
-    //         let o = &*OUTPUTS;
-    //         let i = self.step % o.len();
-    //         stream::iter(o[i].clone()).boxed()
-    //     }
+    // pub async fn chunk_stream(
+    //     &self,
+    //     llm_engine: Arc<dyn ChatClient>,
+    // ) -> std::pin::Pin<Box<dyn Stream<Item = String> + Send>> {
+    //     let o = &*OUTPUTS;
+    //     let i = self.step % o.len();
+    //     stream::iter(o[i].clone()).boxed()
+    // }
 }
 #[derive(Debug, Clone, Serialize)]
 pub struct Push {
@@ -185,28 +189,28 @@ pub struct MindNode {
     pub pos: usize,
     pub title: String,
     pub content: String,
-    pub messages: Vec<Message>,
+    pub messages: Vec<RoleMessage>,
     //上下文长度
     pub content_len: usize,
 }
 impl MindNode {
-    pub fn to_messages(&self) -> Vec<Message> {
+    pub fn statement(&self) -> String {
+        format!(
+            "<push pos={}>{}\n\n{}\n</push>",
+            self.pos, self.title, self.content
+        )
+    }
+    pub fn to_messages(&self) -> Vec<RoleMessage> {
         let mut msgs = Vec::with_capacity(self.messages.len() + 1);
         //里面的内容都是第一人称
-        let state = Role::system().text(format!(
-            r#"<栈节点>
-            {}:{}
-            {}
-            </栈节点>"#,
-            self.pos, self.title, self.content
-        ));
+        let state = RoleMessage::Assistant(vec![self.statement().into()], false);
         msgs.push(state);
         msgs.extend(self.messages.clone());
         msgs
     }
 
-    pub fn push(&mut self, msg: Message) {
-        self.content_len += msg.size;
+    pub fn push(&mut self, msg: RoleMessage) {
+        self.content_len += msg.size();
         self.messages.push(msg);
     }
 }

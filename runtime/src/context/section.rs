@@ -1,35 +1,50 @@
 use futures::{Stream, StreamExt};
 use kernel::section::{SectionTag, TAGS};
-use std::pin::Pin;
+use std::{mem::take, pin::Pin};
 
 #[derive(Debug, PartialEq)]
 pub enum Event {
     Start,
-    Open(&'static SectionTag),
+    /// 包含 (标签配置, 完整的标签头文本，例如 `<thought attr="1">`)
+    Open(&'static SectionTag, String),
+    /// 包含 (标签配置, 块状内容)
     Chunk(&'static SectionTag, String),
+    /// 包含 (标签配置, 最后的剩余内容)
     Close(&'static SectionTag, String),
     End,
 }
 
-/// 流式解析状态机：彻底脱离 async_stream 宏，恢复 IDE 的语法提示
+/// 解析器当前所处的状态
+#[derive(Debug)]
+enum State {
+    /// 状态 A: 不在明确标签内，正在处理回复文本或忽略空白
+    Idle,
+    /// 状态 B: 已经匹配到 `<tag`，正在寻找 `>` 以完成 Open 事件
+    ParsingTagHead(&'static SectionTag),
+    /// 状态 C: 正在标签内部，收集 Chunk，寻找结束符
+    InsideTag(&'static SectionTag),
+}
+
 pub struct SectionParser {
-    buffer: String,
-    tag_seek: usize,
-    current_tag: Option<&'static SectionTag>,
-    is_in_reply: bool,
     tags: &'static [SectionTag],
     reply_tag: &'static SectionTag,
     safe_size: usize,
+
+    buffer: String,
+    content: String,
+
+    state: State,
+    is_in_reply: bool,
 }
 
 impl SectionParser {
     pub fn new(tags: &'static [SectionTag], safe_size: usize) -> Self {
         Self {
             buffer: String::new(),
-            tag_seek: 0,
-            current_tag: None,
+            content: String::new(),
+            state: State::Idle,
             is_in_reply: false,
-            reply_tag: &tags[0], // 假设第一个元素是默认的 Reply
+            reply_tag: &tags[0], // 默认 Reply 标签
             tags,
             safe_size,
         }
@@ -37,129 +52,154 @@ impl SectionParser {
 
     /// 推入新文本块，返回解析产生的一系列事件
     pub fn push(&mut self, chunk: &str) -> Vec<Event> {
-        let mut events = Vec::new();
         self.buffer.push_str(chunk);
+        let mut events = Vec::new();
 
+        // 状态机流转
         loop {
-            if let Some(tag) = self.current_tag {
-                // ==========================================
-                // 状态 A: 正在某个明确的标签内，寻找它的闭合符
-                // ==========================================
-                if let Some(pos) = self.buffer.rfind(tag.end) {
-                    if self.tag_seek < pos {
-                        events.push(Event::Chunk(
-                            tag,
-                            self.buffer[self.tag_seek..pos].to_string(),
-                        ));
-                    }
-                    let content = self.buffer[..pos].to_string();
-                    events.push(Event::Close(tag, content));
+            let state_changed = match self.state {
+                State::Idle => self.process_idle(&mut events),
+                State::ParsingTagHead(tag) => self.process_tag_head(tag, &mut events),
+                State::InsideTag(tag) => self.process_inside_tag(tag, &mut events),
+            };
 
-                    // 截断已处理部分，重置状态
-                    self.buffer = self.buffer[pos + tag.end.len()..].to_string();
-                    self.tag_seek = 0;
-                    self.current_tag = None;
-                    // 找到了闭合标签，继续循环处理剩余的 buffer
-                    continue;
-                } else {
-                    // 没有找到闭合符，将安全的部分先 Chunk 出去
-                    self.flush_safe_chunks(&mut events);
-                    break;
-                }
-            } else {
-                // ==========================================
-                // 状态 B: 不在明确标签内（可能在空闲区或 Reply 区）
-                // ==========================================
-                let mut earliest_pos = None;
-                let mut earliest_tag = None;
-
-                // 寻找所有可用标签的最早起始符
-                for tag in self.tags {
-                    if tag.start.is_empty() {
-                        continue;
-                    } // 跳过无头标签（如 reply 自身）
-
-                    if let Some(pos) = self.buffer.find(tag.start) {
-                        if earliest_pos.map_or(true, |p| pos < p) {
-                            earliest_pos = Some(pos);
-                            earliest_tag = Some(tag);
-                        }
-                    }
-                }
-
-                if let Some(tag) = earliest_tag {
-                    let pos = earliest_pos.unwrap();
-                    let pre_text = &self.buffer[..pos];
-
-                    // 关键修复：判断标签前的内容是否纯空白。如果是纯空白且不在 Reply 中，则直接丢弃（满足要求）
-                    if !pre_text.trim_start().is_empty() || self.is_in_reply {
-                        if !self.is_in_reply {
-                            events.push(Event::Open(self.reply_tag));
-                        }
-                        if self.tag_seek < pos {
-                            events.push(Event::Chunk(
-                                self.reply_tag,
-                                self.buffer[self.tag_seek..pos].to_string(),
-                            ));
-                        }
-                        let content = self.buffer[..pos].to_string();
-                        events.push(Event::Close(self.reply_tag, content));
-                    }
-
-                    // 重置 Reply 状态，开启新标签
-                    self.is_in_reply = false;
-                    self.buffer = self.buffer[pos + tag.start.len()..].to_string();
-                    self.tag_seek = 0;
-                    self.current_tag = Some(tag);
-                    events.push(Event::Open(tag));
-                    continue;
-                } else {
-                    // 如果没找到任何标签起始符：
-                    // 关键修复：如果当前不在 Reply 里，则所有打头的换行、空格全部清空抛弃！
-                    if !self.is_in_reply {
-                        let trimmed = self.buffer.trim_start();
-                        if trimmed.len() < self.buffer.len() {
-                            self.buffer = trimmed.to_string();
-                            self.tag_seek = 0;
-                        }
-                        if self.buffer.is_empty() {
-                            break; // 全是空白且被清空了，直接等待下一个 Chunk
-                        }
-                    }
-
-                    // buffer 中存在无法构成完整 tag 的文本，安全输出 Chunk
-                    self.flush_safe_chunks(&mut events);
-                    break;
-                }
+            // 如果当前 buffer 数据不足以推进状态，退出循环等待下一次 push
+            if !state_changed {
+                break;
             }
         }
+
+        // 状态机处理完后，将安全窗口之外的文本发送出去
+        self.flush_safe_chunks(&mut events);
         events
     }
 
-    /// 安全窗口流式输出
-    fn flush_safe_chunks(&mut self, events: &mut Vec<Event>) {
-        let safe_len = self.buffer.len().saturating_sub(self.tag_seek);
-        if safe_len > self.safe_size {
-            let mut offset = self.buffer.len() - self.safe_size;
+    // ==========================================
+    // 状态处理器 (模块化拆分)
+    // ==========================================
 
-            // 防止把 UTF-8 字符切断
-            while offset > self.tag_seek && !self.buffer.is_char_boundary(offset) {
-                offset -= 1;
+    /// 寻找下一个起始标签，并处理中间的空白或 Reply 文本
+    fn process_idle(&mut self, events: &mut Vec<Event>) -> bool {
+        let mut earliest = None;
+
+        // 寻找最早出现的有效标签起始符
+        for tag in self.tags {
+            if tag.start.is_empty() {
+                continue;
+            } // 跳过 reply 自身
+            if let Some(pos) = self.buffer.find(tag.start) {
+                if earliest.map_or(true, |(p, _)| pos < p) {
+                    earliest = Some((pos, tag));
+                }
+            }
+        }
+
+        if let Some((pos, tag)) = earliest {
+            let pre_text = &self.buffer[..pos];
+
+            // 核心逻辑：如果非纯空白或已经在 Reply 中，则算作 Reply 闭合
+            if self.is_in_reply || !pre_text.trim_start().is_empty() {
+                if !self.is_in_reply {
+                    events.push(Event::Open(self.reply_tag, "".to_string()));
+                }
+                take(&mut self.content);
+                events.push(Event::Close(self.reply_tag, pre_text.to_string()));
             }
 
-            if offset > self.tag_seek {
-                let chunk_text = self.buffer[self.tag_seek..offset].to_string();
+            self.is_in_reply = false;
+            // 消耗掉前置文本和标签起始符 (例如 `<think`)
+            self.buffer.drain(..pos + tag.start.len());
+            self.state = State::ParsingTagHead(tag);
+            true
+        } else {
+            // 没有找到标签。如果不处于 Reply 且全是空白，直接清空丢弃
+            if !self.is_in_reply && self.buffer.trim_start().is_empty() {
+                self.buffer.clear();
+            }
+            false
+        }
+    }
 
-                if let Some(tag) = self.current_tag {
-                    events.push(Event::Chunk(tag, chunk_text));
-                } else {
-                    if !self.is_in_reply {
-                        events.push(Event::Open(self.reply_tag));
-                        self.is_in_reply = true;
+    /// 已经找到了 `<tag`，继续寻找 `>` 取出整个标签头
+    fn process_tag_head(&mut self, tag: &'static SectionTag, events: &mut Vec<Event>) -> bool {
+        if let Some(pos) = self.buffer.find('>') {
+            let attrs = &self.buffer[..pos];
+            let full_head = format!("{}{}>", tag.start, attrs); // 还原完整头部 <tag attr="1">
+
+            events.push(Event::Open(tag, full_head));
+
+            // 消耗到 `>` 之后
+            self.buffer.drain(..pos + 1);
+            self.state = State::InsideTag(tag);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// 在标签内部，寻找闭合符
+    fn process_inside_tag(&mut self, tag: &'static SectionTag, events: &mut Vec<Event>) -> bool {
+        if let Some(pos) = self.buffer.find(tag.end) {
+            let chunk = self.buffer[..pos].to_string();
+            self.content.push_str(&chunk);
+            events.push(Event::Chunk(tag, chunk));
+            events.push(Event::Close(tag, take(&mut self.content)));
+
+            // 消耗到闭合符之后
+            self.buffer.drain(..pos + tag.end.len());
+            self.state = State::Idle;
+            true
+        } else {
+            false
+        }
+    }
+
+    // ==========================================
+    // 缓冲与清理逻辑
+    // ==========================================
+
+    /// 安全输出窗口外的 Chunk
+    fn flush_safe_chunks(&mut self, events: &mut Vec<Event>) {
+        if self.buffer.len() <= self.safe_size {
+            return;
+        }
+
+        let split_pos = self.find_char_boundary(self.buffer.len() - self.safe_size);
+        if split_pos == 0 {
+            return;
+        }
+
+        match self.state {
+            State::Idle => {
+                if !self.is_in_reply {
+                    let trim_len = self.buffer.len() - self.buffer.trim_start().len();
+                    if trim_len > 0 {
+                        self.buffer.drain(..trim_len);
                     }
-                    events.push(Event::Chunk(self.reply_tag, chunk_text));
+                    if self.buffer.is_empty() {
+                        return;
+                    }
+
+                    self.is_in_reply = true;
+                    events.push(Event::Open(self.reply_tag, "".to_string()));
                 }
-                self.tag_seek = offset;
+
+                // 此时已经处于 Reply 状态，执行 Chunk 输出
+                let safe_pos =
+                    self.find_char_boundary(self.buffer.len().saturating_sub(self.safe_size));
+                if safe_pos > 0 {
+                    let chunk: String = self.buffer.drain(..safe_pos).collect();
+                    self.content.push_str(&chunk);
+                    events.push(Event::Chunk(self.reply_tag, chunk));
+                }
+            }
+            State::InsideTag(tag) => {
+                let chunk: String = self.buffer.drain(..split_pos).collect();
+                self.content.push_str(&chunk);
+                events.push(Event::Chunk(tag, chunk));
+            }
+            State::ParsingTagHead(_) => {
+                // 解析标签头期间（寻找 '>'），不输出 Chunk 避免截断头部
             }
         }
     }
@@ -168,34 +208,46 @@ impl SectionParser {
     pub fn finish(&mut self) -> Vec<Event> {
         let mut events = Vec::new();
 
-        if let Some(tag) = self.current_tag {
-            if self.tag_seek < self.buffer.len() {
-                events.push(Event::Chunk(tag, self.buffer[self.tag_seek..].to_string()));
-            }
-            events.push(Event::Close(tag, self.buffer.clone()));
-        } else {
-            let remain_trimmed = if self.is_in_reply {
-                &self.buffer[..] // 如果已经在 reply 中了，结尾的空格就不吃掉了
-            } else {
-                self.buffer.trim_start()
-            };
+        match self.state {
+            State::Idle => {
+                let remainder = if self.is_in_reply {
+                    self.buffer.clone()
+                } else {
+                    self.buffer.trim_start().to_string()
+                };
 
-            if !remain_trimmed.is_empty() || self.is_in_reply {
-                if !self.is_in_reply {
-                    events.push(Event::Open(self.reply_tag));
+                if !remainder.is_empty() || self.is_in_reply {
+                    if !self.is_in_reply {
+                        events.push(Event::Open(self.reply_tag, "".to_string()));
+                    }
+                    events.push(Event::Close(self.reply_tag, take(&mut self.content)));
                 }
-                if self.tag_seek < self.buffer.len() {
-                    events.push(Event::Chunk(
-                        self.reply_tag,
-                        self.buffer[self.tag_seek..].to_string(),
-                    ));
-                }
-                events.push(Event::Close(self.reply_tag, self.buffer.clone()));
+            }
+            State::ParsingTagHead(tag) => {
+                // 流异常中断在标签头中，降级为直接 Close
+                let full_head = format!("{}{}", tag.start, self.buffer);
+                events.push(Event::Open(tag, full_head));
+                events.push(Event::Close(tag, take(&mut self.content)));
+            }
+            State::InsideTag(tag) => {
+                events.push(Event::Close(tag, take(&mut self.content)));
             }
         }
 
+        self.buffer.clear();
+        self.state = State::Idle;
+        self.is_in_reply = false;
         events.push(Event::End);
+
         events
+    }
+
+    /// 辅助方法：寻找安全的 UTF-8 切断点
+    fn find_char_boundary(&self, mut pos: usize) -> usize {
+        while pos > 0 && !self.buffer.is_char_boundary(pos) {
+            pos -= 1;
+        }
+        pos
     }
 }
 
@@ -252,7 +304,7 @@ mod test {
         };
         let (tx, rx) = mpsc::unbounded_channel();
         tokio::spawn(async move {
-            for _ in 0..100 {
+            for _ in 0..1 {
                 for chunks in &outputs {
                     for chunk in chunks {
                         tokio::time::sleep(Duration::from_millis(10)).await;
@@ -271,8 +323,8 @@ mod test {
                 Event::Start => {
                     println!("\n[事件] >>> 流开始 <<<");
                 }
-                Event::Open(tag) => {
-                    println!("\n[事件] 开启标签: {}", tag.start);
+                Event::Open(tag, head) => {
+                    println!("\n[事件] 开启标签: {}", head);
                 }
                 Event::Chunk(tag, chunk) => {
                     // print!("{}", chunk)

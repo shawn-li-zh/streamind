@@ -80,7 +80,7 @@ pub fn parse_xml(xml: &str) -> anyhow::Result<(String, HashMap<String, serde_jso
         }
     };
     let name = name.to_string();
-    let attrs = parse_kv_pairs(attr_str);
+    let attrs = parse_attrs(attr_str);
     Ok((name, attrs))
 }
 
@@ -120,10 +120,10 @@ fn split_top_level(s: &str, delimiter: char) -> anyhow::Result<Vec<String>> {
     Ok(parts)
 }
 
-use serde_json::Value;
+
 
 /// 专门解析 "key=value key=value" 格式的字符串，输出 KV 键值对
-pub fn parse_kv_pairs(mut s: &str) -> HashMap<String, Value> {
+pub fn parse_attrs(mut s: &str) -> HashMap<String, serde_json::Value> {
     let mut map = HashMap::new();
 
     while !s.is_empty() {
@@ -142,7 +142,7 @@ pub fn parse_kv_pairs(mut s: &str) -> HashMap<String, Value> {
         // 2. 找等号 '='
         if !s.starts_with('=') {
             // 没有等号，当作布尔值标签（如 disabled）
-            map.insert(key.to_string(), Value::Bool(true));
+            map.insert(key.to_string(), serde_json::Value::Bool(true));
             continue;
         }
         s = s[1..].trim_start(); // 跳过 '=' 和后续空格
@@ -156,7 +156,7 @@ pub fn parse_kv_pairs(mut s: &str) -> HashMap<String, Value> {
         let val = serde_json::from_str(raw_val).unwrap_or_else(|_| {
             // 兼容处理：去掉两边可能存在的单引号（serde_json不支持单引号）
             let clean_str = raw_val.trim_matches(|c| c == '\'' || c == '"');
-            Value::String(clean_str.to_string())
+            serde_json::Value::String(clean_str.to_string())
         });
 
         map.insert(key.to_string(), val);

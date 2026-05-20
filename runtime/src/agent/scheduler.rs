@@ -7,6 +7,10 @@ use async_trait::async_trait;
 use dashmap::DashMap;
 
 use entity_service::DB;
+use futures::{
+    SinkExt,
+    channel::{mpsc, oneshot::Receiver},
+};
 use kernel::{
     agent::{
         AgentSchedulerHandler,
@@ -15,6 +19,7 @@ use kernel::{
     event::{EnvEvent, TimerData},
 };
 
+use tokio::sync::watch;
 use tokio_cron_scheduler::{Job, JobScheduler};
 use uuid::Uuid;
 
@@ -28,6 +33,7 @@ pub struct AgentScheduler {
     timers: DashMap<i64, (Arc<AgentTimer>, Uuid)>,
     uuid_timers: DashMap<Uuid, Arc<AgentTimer>>,
     is_running: AtomicBool,
+    watch_dog: Arc<AtomicBool>,
 }
 impl AgentScheduler {
     pub fn new(context: Arc<AgentContext>, channel: Arc<AgentChannel>) -> Self {
@@ -37,6 +43,7 @@ impl AgentScheduler {
             timers: DashMap::new(),
             uuid_timers: DashMap::new(),
             is_running: AtomicBool::new(false),
+            watch_dog: Arc::new(AtomicBool::new(false)),
         }
     }
     pub fn start(self: Arc<Self>) -> anyhow::Result<()> {
@@ -84,20 +91,35 @@ impl AgentScheduler {
     }
 
     async fn heartbeat(&self, interval: Duration) {
+        let (mut sender, mut receiver) = mpsc::channel::<()>(1);
+        let watch_dog = Arc::new(AtomicBool::new(false));
+        tokio::spawn(async move {
+            while let Ok(_) = receiver.recv().await {
+                watch_dog.store(false, std::sync::atomic::Ordering::SeqCst);
+                println!("dog...");
+            }
+        });
         let mut interval = tokio::time::interval(interval);
         interval.tick().await;
         loop {
             interval.tick().await;
+            let is_send = self
+                .watch_dog
+                .fetch_or(true, std::sync::atomic::Ordering::SeqCst);
+            if is_send {
+                continue;
+            }
             //只有空闲时才发送心跳
-            let status = self.channel.status_watcher.read().await;
-            if status.borrow().clone() != AgentStatus::Idle {
+            let status = self.channel.get_status().await;
+            if status != AgentStatus::Idle {
                 continue;
             }
             self.channel
                 .send_event(EnvEvent::Heartbeat, false)
                 .await
                 .unwrap();
-            println!("heartbeat");
+            sender.send(()).await.unwrap();
+            println!("heartbeat...{:?}", status);
         }
     }
 

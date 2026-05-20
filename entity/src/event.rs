@@ -46,7 +46,7 @@ pub enum EnvEventType {
     AgentResponse,
     UserRequest,
     Heartbeat,
-    ToolCallResult,
+    ToolResponse,
     Error,
     Timer,
     Interrupt,

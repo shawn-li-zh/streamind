@@ -36,7 +36,7 @@ pub async fn count_by_status(
     let types = vec![
         EnvEventType::UserRequest,
         EnvEventType::Heartbeat,
-        EnvEventType::ToolCallResult,
+        EnvEventType::ToolResponse,
         EnvEventType::Error,
         EnvEventType::Timer,
         EnvEventType::Interrupt,
@@ -62,7 +62,7 @@ pub async fn list(
     let types = vec![
         EnvEventType::UserRequest,
         EnvEventType::Heartbeat,
-        EnvEventType::ToolCallResult,
+        EnvEventType::ToolResponse,
         EnvEventType::Error,
         EnvEventType::Timer,
         EnvEventType::Interrupt,

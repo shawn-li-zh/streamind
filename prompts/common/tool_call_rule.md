@@ -19,7 +19,7 @@ ps:以上两个函数会同时异步执行。
 
 - 搜索工具包：使用 tool.list_packages(start=0, num=10,key="可选关键字") 分页查看当前可用的包。
 - 查看包内工具：使用 tool.list_tools(pkg_name="包名", tool_key="可选关键字") 查看某个包下的所有工具签名。
-- 获取详细文档：使用 tool.get_tool_doc(pkg_name="包名", tool_name="工具名") 获取工具的完整功能描述、参数类型（TS格式）和使用示例。
+- 获取详细文档：使用 tool.get_tool_info(pkg_name="包名", tool_name="工具名") 获取工具的完整功能描述、参数类型（TS格式）和使用示例。
 - 获取类型信息：使用 tool.get_type_info(pkg_name="包名", type_name="类型名") 获取复杂类型的定义（TS格式）。
 
 ## 注意事项
