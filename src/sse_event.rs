@@ -5,11 +5,15 @@ use runtime::agent::event::{AppEnvEventData, SectionEvent};
 use serde::Serialize;
 use serde_json::json;
 
+pub enum ServerEvent {
+    Connected,
+    Heartbeat,
+}
 pub enum WebEvent {
     Env(AppEnvEventData, i64),
     Section(SectionEvent, i64),
     ToolCall(ToolCallEvent, i64),
-    Connected,
+    Server(ServerEvent),
 }
 impl WebEvent {
     pub fn to_sse_event(self) -> sse::Event {
@@ -86,7 +90,12 @@ impl WebEvent {
                     SsePayload::new("tool_call", "end", (), bind_event_id).to_sse_event()
                 }
             },
-            WebEvent::Connected => SsePayload::new("server", "connected", (), 0).to_sse_event(),
+            WebEvent::Server(e) => match e {
+                ServerEvent::Connected => {
+                    SsePayload::new("server", "connected", (), 0).to_sse_event()
+                }
+                ServerEvent::Heartbeat => sse::Event::default().comment("beat"),
+            },
         }
     }
 }

@@ -188,7 +188,7 @@ impl WebSender {
             }
             return;
         }
-        warn!("断连中...");
+        // warn!("断连中...");
     }
     pub fn set_sender(&self, sender: mpsc::UnboundedSender<sse::Event>) {
         let mut web_sender = self.inner.write();

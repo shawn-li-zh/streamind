@@ -17,7 +17,11 @@ use tokio_stream::{wrappers::UnboundedReceiverStream, StreamExt};
 use tracing::info;
 use web::wrapper::ApiResponse;
 
-use crate::{agent::AppAgent, global::AGENT_POOL, sse_event::WebEvent};
+use crate::{
+    agent::AppAgent,
+    global::AGENT_POOL,
+    sse_event::{ServerEvent, WebEvent},
+};
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct UserMessageReq {
@@ -56,7 +60,7 @@ pub async fn connect(
 
     // 3. 将写入器注入 Agent
     {
-        let e = WebEvent::Connected;
+        let e = WebEvent::Server(ServerEvent::Connected);
         tx.send(e.to_sse_event()).unwrap();
         agent_arc.web_sender.set_sender(tx);
     }

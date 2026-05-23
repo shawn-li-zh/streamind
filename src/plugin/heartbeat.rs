@@ -47,7 +47,7 @@ impl Heartbeat {
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
             .is_err()
         {
-            println!("Previous heartbeat still pending, skipping...");
+            // println!("Previous heartbeat still pending, skipping...");
             return false;
         }
         true

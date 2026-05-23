@@ -1,4 +1,4 @@
-use std::{backtrace::Backtrace, collections::HashMap, mem::take, sync::Arc, time::Instant};
+use std::{backtrace::Backtrace, collections::HashMap, mem::take, sync::Arc, time::{Duration, Instant}};
 
 use anyhow::Context as _;
 use chrono::{DateTime, Local};
@@ -36,7 +36,7 @@ use tracing::{error, info, warn};
 use crate::{
     agent::{AppAgent, WebSender},
     plugin::{heartbeat::HeartbeatRunner, scheduler::AgentSchedulerRunner},
-    sse_event::WebEvent,
+    sse_event::{ServerEvent, WebEvent},
 };
 
 pub struct AgentRuntime {
@@ -70,12 +70,23 @@ impl AgentRuntime {
             let var = std::env::var("HEARTBEAT_INTERVAL").unwrap_or("10".to_string());
             let secs = var.parse::<u64>().unwrap();
             let interval = std::time::Duration::from_secs(secs);
-            self.heartbeat.start(interval);
+            // self.heartbeat.start(interval);
             //
             self.scheduler_runner.start();
             self.event_loop.start();
         }
-
+        {
+            let agent = self.agent.clone();
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(Duration::from_secs(5));
+                loop {
+                    interval.tick().await;
+                    agent
+                        .web_sender
+                        .send(WebEvent::Server(ServerEvent::Heartbeat));
+                }
+            });
+        }
         //
         let ctx: Arc<AgentContext> = self.agent.context();
         let tool_engine_context = ctx.get::<ToolEngineContext>().unwrap();
