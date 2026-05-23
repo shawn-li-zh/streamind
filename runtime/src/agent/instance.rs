@@ -1,10 +1,9 @@
-use std::{ops::Deref, sync::Arc};
+use std::sync::Arc;
 
 use async_trait::async_trait;
-use kernel::agent::{
-    AgentIdentity, AgentOutfit,
-    context::{AgentContext, AgentStatus},
-    port::AgentOutlet,
+use kernel::{
+    agent::{AgentIdentity, AgentOutfit, context::AgentContext, port::AgentOutlet},
+    mind::port::CommandEvent,
 };
 
 use crate::agent::{
@@ -20,12 +19,9 @@ pub struct AgentInstance {
 
 #[async_trait]
 impl AgentOutfit<AppEnvEvent, StackContext<AppEnvEvent>, ()> for AgentInstance {
-    async fn send_event(&self, event: AppEnvEvent) -> anyhow::Result<()> {
-        self.agent.send_event(event).await
+    async fn send_cmd(&self, cmd: CommandEvent<AppEnvEvent>) -> anyhow::Result<()> {
+        self.agent.send_cmd(cmd).await
     }
-    // async fn send_status(&self, status: AgentStatus) -> anyhow::Result<()> {
-    //     self.agent.send_status(status).await
-    // }
     fn event_context(&self) -> Arc<StackContext<AppEnvEvent>> {
         self.agent.event_context()
     }

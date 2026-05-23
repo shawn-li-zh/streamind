@@ -7,7 +7,7 @@ pub mod convert {
 
     use super::*;
 
-    pub fn to_json(event: AppEnvEventData) -> serde_json::Value {
+    pub fn to_json(event: &AppEnvEventData) -> serde_json::Value {
         match event {
             AppEnvEventData::AgentResponse(sections) => json!(sections),
             AppEnvEventData::Heartbeat => json!(()),

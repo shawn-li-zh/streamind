@@ -14,33 +14,54 @@ use tracing::error;
 use crate::{agent::AppAgent, status::AgentStatusHolder};
 pub struct Heartbeat {
     flag: AtomicBool,
+    enabled: AtomicBool,
 }
 
-pub struct HeartbeatRunner {
-    inner: Arc<Heartbeat>,
-    agent: Arc<AppAgent>,
-    status: Arc<AgentStatusHolder>,
-}
 impl Heartbeat {
     pub fn new() -> Self {
         let flag = AtomicBool::new(false);
-        Self { flag }
+        Self {
+            flag: flag,
+            enabled: AtomicBool::new(true),
+        }
     }
-
     pub fn reset(&self) {
         self.flag.store(false, Ordering::SeqCst);
     }
+    pub fn disable(&self) {
+        self.enabled.store(false, Ordering::SeqCst);
+    }
+    pub fn enable(&self) {
+        self.enabled.store(true, Ordering::SeqCst);
+    }
+    pub fn is_enabled(&self) -> bool {
+        self.enabled.load(Ordering::SeqCst)
+    }
+    fn try_beat(&self) -> bool {
+        let status = self.is_enabled();
+        if !status {
+            return false;
+        }
+        if self
+            .flag
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            println!("Previous heartbeat still pending, skipping...");
+            return false;
+        }
+        true
+    }
 }
-
+pub struct HeartbeatRunner {
+    inner: Arc<Heartbeat>,
+    agent: Arc<AppAgent>,
+}
 impl HeartbeatRunner {
-    pub fn new(
-        inner: Arc<Heartbeat>,
-        agent: Arc<AppAgent>,
-        status: Arc<AgentStatusHolder>,
-    ) -> HeartbeatRunner {
+    pub fn new(inner: Arc<Heartbeat>, agent: Arc<AppAgent>) -> HeartbeatRunner {
         Self {
             agent: agent.clone(),
-            status: status.clone(),
+
             inner: inner,
         }
     }
@@ -56,17 +77,7 @@ impl HeartbeatRunner {
         loop {
             interval.tick().await;
             //只有空闲时才发送心跳
-            let status = self.status.get_status().await;
-            if status != AgentStatus::Idle {
-                continue;
-            }
-            if self
-                .inner
-                .flag
-                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-                .is_err()
-            {
-                println!("Previous heartbeat still pending, skipping...");
+            if !self.inner.try_beat() {
                 continue;
             }
             if let Err(e) = self
@@ -77,7 +88,7 @@ impl HeartbeatRunner {
                 error!("Heartbeat failed: {}", e);
                 return;
             };
-            println!("heartbeat...{:?}", status);
+            println!("heartbeat...");
         }
     }
 }

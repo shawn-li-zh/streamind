@@ -12,7 +12,7 @@ use kernel::{
         port::AgentOutlet,
         AgentOutfit,
     },
-    mind::stream::{EndReason, GenerateEvent},
+    mind::port::{CommandEvent, EndReason, GenerateEvent},
     parser,
     render::RenderContext,
     section::{Section, SectionTag},
@@ -30,39 +30,39 @@ use runtime::agent::{
 };
 use serde_json::json;
 
+use tokio::sync::watch;
 use tracing::{error, info, warn};
 
 use crate::{
     agent::{AppAgent, WebSender},
     plugin::{heartbeat::HeartbeatRunner, scheduler::AgentSchedulerRunner},
     sse_event::WebEvent,
-    status::AgentStatusHolder,
 };
 
 pub struct AgentRuntime {
     agent: Arc<AppAgent>,
     agent_outlet: AgentOutlet<AppEnvEvent>,
-    status_holder: Arc<AgentStatusHolder>,
     event_loop: EventLoop,
     heartbeat: HeartbeatRunner,
     scheduler_runner: AgentSchedulerRunner,
+    gen_sender: watch::Sender<bool>,
 }
 impl AgentRuntime {
     pub fn new(
         agent: Arc<AppAgent>,
         event_loop: EventLoop,
         agent_outlet: AgentOutlet<AppEnvEvent>,
-        status_holder: Arc<AgentStatusHolder>,
         heartbeat: HeartbeatRunner,
         scheduler_runner: AgentSchedulerRunner,
+        gen_sender: watch::Sender<bool>,
     ) -> Self {
         Self {
             agent,
             event_loop,
-            agent_outlet: agent_outlet,
-            status_holder: status_holder,
-            heartbeat: heartbeat,
-            scheduler_runner: scheduler_runner,
+            agent_outlet,
+            heartbeat,
+            scheduler_runner,
+            gen_sender,
         }
     }
     pub fn start(mut self) {
@@ -86,7 +86,7 @@ impl AgentRuntime {
             // response_event: None,
             response_event_id: 0,
             response_sections: vec![],
-            status_holder: self.status_holder.clone(),
+            gen_sender: self.gen_sender,
             web_sender: self.agent.web_sender.clone(),
             tool_engine: Arc::new(ToolEngine::new(
                 self.agent.identity(),
@@ -99,7 +99,9 @@ impl AgentRuntime {
             {
                 let identity = self.agent.identity();
                 let db = DB.get().unwrap();
-                entity_service::agent::startup(db, identity.id).await.unwrap();
+                entity_service::agent::startup(db, identity.id)
+                    .await
+                    .unwrap();
             }
             while let Some(c) = self.agent_outlet.next().await {
                 match c {
@@ -142,7 +144,7 @@ struct GenerateWorker {
     response_sections: Vec<Section>,
     web_sender: Arc<WebSender>,
     tool_engine: Arc<ToolEngine>,
-    status_holder: Arc<AgentStatusHolder>,
+    gen_sender: watch::Sender<bool>,
 }
 impl GenerateWorker {
     async fn handle(&mut self, event: GenerateEvent) -> anyhow::Result<()> {
@@ -151,12 +153,10 @@ impl GenerateWorker {
         match event {
             GenerateEvent::Start(event_ids) => {
                 println!("start...");
+                self.gen_sender.send(true)?;
                 self.response_sections.clear(); // 增加清理
                 self.last_tag_open = None;
                 self.start_time = Local::now();
-                self.status_holder
-                    .send_status(AgentStatus::Processing)
-                    .await?;
                 entity_service::event::update_event_status(
                     db,
                     event_ids,
@@ -183,13 +183,9 @@ impl GenerateWorker {
             }
             GenerateEvent::Chunk(tag, chunk) => {
                 let event_id = self.response_event_id;
-                match tag.name {
-                    "reply" | "think" => {
-                        let web_event =
-                            WebEvent::Section(SectionEvent::Chunk(tag, chunk), event_id);
-                        self.web_sender.send(web_event);
-                    }
-                    _ => {}
+                if matches!(tag.name, "reply" | "think") {
+                    let web_event = WebEvent::Section(SectionEvent::Chunk(tag, chunk), event_id);
+                    self.web_sender.send(web_event);
                 }
             }
             GenerateEvent::Close(tag, content) => {
@@ -232,9 +228,20 @@ impl GenerateWorker {
                 self.web_sender.send(web_event);
             }
             GenerateEvent::End(event_ids, reason) => {
-                let res = self.handle_end(event_ids, reason).await;
-                let sections = take(&mut self.response_sections);
-                if !sections.is_empty() {
+                //加入临时阻塞事件接收机制，防止期间有事件触发执行其他任务去了
+                println!("call start...");
+                let events = self.handle_end(event_ids, reason).await;
+
+                //处理响应
+                {
+                    let sections = take(&mut self.response_sections);
+                    //保存到数据库
+                    entity_service::event::update_agent_response(
+                        db,
+                        self.response_event_id,
+                        sections.clone(),
+                    )
+                    .await?;
                     //直接追加到上下文里
                     let event_context = self.agent.event_context();
                     event_context.push_event(AppEnvEvent {
@@ -244,31 +251,41 @@ impl GenerateWorker {
                         time: self.start_time,
                     });
                 }
-                self.status_holder
-                    .send_status_if(AgentStatus::Processing, |v| v == AgentStatus::Waiting)
-                    .await?;
-                let _ = res?;
+                let has_events = events.len() > 0;
+                println!("call end...{}", events.len());
+                for ele in events {
+                    let event = self.agent.save_event(ele).await?;
+                    self.agent.send_cmd(CommandEvent::Event(event)).await?;
+                }
+                if has_events {
+                    self.agent.send_cmd(CommandEvent::Generate).await?;
+                }
+                //释放状态
+                self.agent.heartbeat.enable();
+                self.gen_sender.send(false)?;
             }
             GenerateEvent::Error(e) => {
                 error!("generate event error: {:?}", e);
+                self.gen_sender.send(false)?;
             }
         }
         Ok(())
     }
-    async fn handle_end(&mut self, event_ids: Vec<i64>, resaon: EndReason) -> anyhow::Result<()> {
+    async fn handle_end(
+        &mut self,
+        event_ids: Vec<i64>,
+        resaon: EndReason,
+    ) -> Vec<(AppEnvEventData, bool)> {
+        let mut events: Vec<(AppEnvEventData, bool)> = vec![];
         let db = DB.get().unwrap();
         {
             //修改事件状态为完成
             entity_service::event::update_event_status(db, event_ids, EnvEventStatus::Done)
                 .await
                 .unwrap();
-            let web_event = WebEvent::Section(SectionEvent::End, self.response_event_id);
+            let web_event: WebEvent = WebEvent::Section(SectionEvent::End, self.response_event_id);
             self.web_sender.send(web_event);
         }
-        //加入临时阻塞事件接收机制，防止期间有事件触发执行其他任务去了
-        println!("call start...");
-        self.status_holder.send_status(AgentStatus::Waiting).await?;
-
         //解析响应的section
         let mut errors = vec![];
         let mut tool_call_infos: Vec<(ToolCallDetailItem, ToolCall)> = vec![];
@@ -278,11 +295,16 @@ impl GenerateWorker {
             for section in &self.response_sections {
                 let value = counter.entry(&section.name).or_default();
                 *value += 1;
+                //
                 match parse_section(&self.tool_engine, section, &mut tool_call_infos, &mut pushs)
                     .await
                 {
                     Ok(payload) => {
-                        entity_service::section::update_payload(db, section.id, payload).await?;
+                        if let Err(e) =
+                            entity_service::section::update_payload(db, section.id, payload).await
+                        {
+                            error!("update payload error:{}", e);
+                        };
                     }
                     Err(e) => {
                         errors.push(format!("第{}个<{}>解析失败:{}", value, section.name, e));
@@ -291,15 +313,14 @@ impl GenerateWorker {
             }
         }
         if !errors.is_empty() {
-            self.agent
-                .send_event((AppEnvEventData::Error(errors.join("\n")), false))
-                .await?;
-            return Ok(());
+            //发送事件处理
+            events.push((AppEnvEventData::Error(errors.join("\n")), false));
+            return events;
         }
         //非正常结束则不处理任何功能调用
         match resaon {
             EndReason::Error | EndReason::Canceled => {
-                return Ok(());
+                return events;
             }
             _ => {}
         }
@@ -309,26 +330,25 @@ impl GenerateWorker {
             if let Err(e) = tool_call(
                 self.response_event_id,
                 tool_call_infos,
-                self.agent.clone(),
                 &self.tool_engine,
                 self.web_sender.clone(),
+                &mut events,
             )
             .await
             {
                 let bt = Backtrace::capture();
                 eprintln!("{:?}", bt);
                 //发送事件处理
-                self.agent
-                    .send_event((AppEnvEventData::Error(e.to_string()), false))
-                    .await
-                    .expect("send tool call result error");
+                events.push((AppEnvEventData::Error(e.to_string()), false));
             }
         }
         //处理压栈
         if !pushs.is_empty() {
-            push_state(self.agent.clone(), pushs).await?;
+            if let Err(e) = push_state(self.agent.clone(), pushs).await {
+                events.push((AppEnvEventData::Error(e.to_string()), false));
+            };
         }
-        Ok(())
+        events
     }
 }
 
@@ -422,9 +442,9 @@ fn parse_push(header: &str, content: &str) -> anyhow::Result<Node> {
 async fn tool_call(
     response_event_id: i64,
     tool_call_infos: Vec<(ToolCallDetailItem, ToolCall)>,
-    agent: Arc<AppAgent>,
     tool_engine: &ToolEngine,
     web_sender: Arc<WebSender>,
+    events: &mut Vec<(AppEnvEventData, bool)>,
 ) -> anyhow::Result<()> {
     let db = DB.get().unwrap();
     //
@@ -474,15 +494,14 @@ async fn tool_call(
             continue;
         }
         //发送完整事件
-        agent
-            .send_event((AppEnvEventData::ToolResponse(detial.clone()), false))
-            .await?;
+        events.push((AppEnvEventData::ToolResponse(detial.clone()), false));
     }
     //结束
     Ok(())
 }
 
 async fn push_state(agent: Arc<AppAgent>, pushs: Vec<Node>) -> anyhow::Result<()> {
+    let db = DB.get().unwrap();
     let agent_id = agent.identity().id();
     let stack = agent.event_context();
     for mut push in pushs {
@@ -490,23 +509,16 @@ async fn push_state(agent: Arc<AppAgent>, pushs: Vec<Node>) -> anyhow::Result<()
             anyhow::bail!("核心栈状态不能重置")
         }
         let stack = stack.clone();
-
-        entity_service::transaction::<_, _>(move |txn| {
-            Box::pin(async move {
-                let model = entity_service::state::push(
-                    txn,
-                    agent_id,
-                    push.pos as _,
-                    push.title.clone(),
-                    push.content.clone(),
-                )
-                .await?;
-                push.id = model.id;
-                stack.push(push);
-                Ok(())
-            })
-        })
+        let model = entity_service::state::push(
+            db,
+            agent_id,
+            push.pos as _,
+            push.title.clone(),
+            push.content.clone(),
+        )
         .await?;
+        push.id = model.id;
+        stack.push(push);
     }
     Ok(())
 }

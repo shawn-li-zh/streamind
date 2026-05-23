@@ -132,20 +132,19 @@ pub async fn save(
 pub async fn update_agent_response(
     db: &impl ConnectionTrait,
     event_id: i64,
-    event_type: EnvEventType,
     sections: Vec<Section>,
 ) -> anyhow::Result<()> {
     if sections.is_empty() {
         //删除
         let result = entity::event::Entity::delete_many()
             .filter(entity::event::Column::Id.eq(event_id))
-            .filter(entity::event::Column::EventType.eq(event_type.clone()))
+            .filter(entity::event::Column::EventType.eq(EnvEventType::AgentResponse))
             .exec(db)
             .await?;
         return if result.rows_affected == 1 {
             Ok(())
         } else {
-            Err(anyhow::anyhow!("删除失败:{},{}", event_type, event_id))
+            Err(anyhow::anyhow!("删除失败:{}", event_id))
         };
     }
     let data = serde_json::to_value(sections)?;
@@ -157,7 +156,7 @@ pub async fn update_agent_response(
     let result = entity::event::Entity::update_many()
         .set(model)
         .filter(entity::event::Column::Id.eq(event_id))
-        .filter(entity::event::Column::EventType.eq(event_type))
+        .filter(entity::event::Column::EventType.eq(EnvEventType::AgentResponse))
         .exec(db)
         .await?;
     if result.rows_affected != 1 {

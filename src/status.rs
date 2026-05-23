@@ -31,12 +31,12 @@ impl AgentStatusHolder {
     }
 
     pub async fn send_status(&self, status: AgentStatus) -> anyhow::Result<()> {
-        let mut status_ref = self.status.write().await;
-        *status_ref = status;
-        self.sender.send(status)?;
-        println!("状态更新:{:?}", status);
-        let db = DB.get().unwrap();
-        entity_service::agent::update_status(db, self.identity.id(), status).await?;
+        // let mut status_ref = self.status.write().await;
+        // *status_ref = status;
+        // self.sender.send(status)?;
+        // println!("状态更新:{:?}", status);
+        // let db = DB.get().unwrap();
+        // entity_service::agent::update_status(db, self.identity.id(), status).await?;
         Ok(())
     }
   
@@ -45,15 +45,15 @@ impl AgentStatusHolder {
         status: AgentStatus,
         test:F
     ) -> anyhow::Result<bool> {
-        let mut status_ref = self.status.write().await;
-        if !test(*status_ref) {
-            return Ok(false);
-        }
-        *status_ref = status;
-        self.sender.send(status)?;
-        println!("状态更新:{:?}", status);
-        let db = DB.get().unwrap();
-        entity_service::agent::update_status(db, self.identity.id(), status).await?;
+        // let mut status_ref = self.status.write().await;
+        // if !test(*status_ref) {
+        //     return Ok(false);
+        // }
+        // *status_ref = status;
+        // self.sender.send(status)?;
+        // println!("状态更新:{:?}", status);
+        // let db = DB.get().unwrap();
+        // entity_service::agent::update_status(db, self.identity.id(), status).await?;
         Ok(true)
     }
     pub async fn wait_status_is(&self, is: AgentStatus) -> anyhow::Result<()> {

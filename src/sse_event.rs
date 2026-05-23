@@ -47,11 +47,13 @@ impl WebEvent {
             },
             WebEvent::Env(event, bind_event_id) => match event {
                 AppEnvEventData::AgentResponse(_)
-                | AppEnvEventData::UserRequest(_)
                 | AppEnvEventData::Interaction(_)
                 | AppEnvEventData::Heartbeat
                 | AppEnvEventData::ToolResponse(_) => {
                     unreachable!("调用出错")
+                }
+                AppEnvEventData::UserRequest(user) => {
+                    SsePayload::new("env", "userRequest", user, bind_event_id).to_sse_event()
                 }
                 AppEnvEventData::Timer(timer_data) => {
                     SsePayload::new("env", "timer", timer_data, bind_event_id).to_sse_event()

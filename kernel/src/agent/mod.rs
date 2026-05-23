@@ -12,11 +12,10 @@ use crate::{
         port::AgentOutlet,
     },
     mind::{
-        MindInlet, MindOutlet,
         context::EventContext,
+        port::{CommandEvent, MindInlet, MindOutlet},
         stream::{MindFlag, StreamMind},
     },
-    tool::engine::ToolEngineContext,
 };
 
 use async_trait::async_trait;
@@ -24,7 +23,7 @@ use futures::StreamExt;
 
 use tokio::sync::mpsc;
 
-use crate::agent::context::{AgentContext, AgentStatus};
+use crate::agent::context::AgentContext;
 pub struct AgentIdentity {
     pub id: u32,
     pub code: String,
@@ -48,8 +47,8 @@ impl AgentIdentity {
 }
 #[async_trait]
 pub trait AgentOutfit<E, C, ER> {
-    async fn send_event(&self, event: E) -> anyhow::Result<ER>;
-    // async fn send_status(&self, status: S) -> anyhow::Result<()>;
+    async fn send_cmd(&self, cmd: CommandEvent<E>) -> anyhow::Result<ER>;
+
     fn event_context(&self) -> Arc<C>;
     fn context(&self) -> Arc<AgentContext>;
     fn identity(&self) -> Arc<AgentIdentity>;
@@ -94,8 +93,8 @@ impl<E: EnvEvent, C: EventContext<E>> Agent<E, C> {
 
 #[async_trait]
 impl<E: EnvEvent, C: EventContext<E>> AgentOutfit<E, C, ()> for Agent<E, C> {
-    async fn send_event(&self, event: E) -> anyhow::Result<()> {
-        self.mind_inlet.send(event).await?;
+    async fn send_cmd(&self, cmd: CommandEvent<E>) -> anyhow::Result<()> {
+        self.mind_inlet.send(cmd).await?;
         Ok(())
     }
     // async fn send_status(&self, status: AgentStatus) -> anyhow::Result<()> {

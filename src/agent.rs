@@ -16,8 +16,10 @@ use kernel::{
         port::AgentOutlet,
         AgentIdentity, AgentOutfit,
     },
+    mind::port::CommandEvent,
     tool::engine::ToolEngineContext,
 };
+use parking_lot::RwLock;
 use runtime::agent::{
     authority::{AgentAuthorityContext, AgentPermission, PermissionLife},
     event::{AppEnvEvent, AppEnvEventData},
@@ -26,7 +28,9 @@ use runtime::agent::{
     scheduler::{AgentSchedulerContext, AgentTimer},
 };
 
-use tokio::sync::mpsc::{self, Receiver};
+use tokio::sync::{
+    Mutex, mpsc::{self, Receiver}, watch
+};
 use tool_pkg::timer::TimerInjected;
 use tracing::{error, info, warn};
 
@@ -41,74 +45,49 @@ use crate::{
     },
     runtime::AgentRuntime,
     sse_event::WebEvent,
-    status::AgentStatusHolder,
 };
 pub struct AppAgent {
     pub(crate) instance: Arc<AgentInstance>,
     pub(crate) heartbeat: Arc<Heartbeat>,
     pub(crate) web_sender: Arc<WebSender>,
-    status_holder: Arc<AgentStatusHolder>,
+    gen_watcher: Mutex<watch::Receiver<bool>>,
 }
 impl AppAgent {
     pub async fn new(model: entity::agent::Model) -> (Arc<Self>, AgentRuntime) {
         let (instance, event_loop, outlet, timer_rx) = build_instance(model).await;
         let instance = Arc::new(instance);
-        let status_holder = Arc::new(AgentStatusHolder::new(instance.clone()));
         let heartbeat = Arc::new(Heartbeat::new());
+        let gen = watch::channel(false);
         let agent = AppAgent {
             instance: instance.clone(),
             heartbeat: heartbeat.clone(),
             web_sender: Arc::new(WebSender {
-                inner: std::sync::RwLock::new(None),
+                inner: RwLock::new(None),
             }),
-            status_holder: status_holder.clone(),
+            gen_watcher: Mutex::new(gen.1),
         };
         let agent = Arc::new(agent);
         //
-        let heartbeat_runner =
-            HeartbeatRunner::new(heartbeat, agent.clone(), status_holder.clone());
+        let heartbeat_runner = HeartbeatRunner::new(heartbeat, agent.clone());
         let runner = AgentSchedulerRunner::new(agent.clone(), timer_rx);
         let runtime = AgentRuntime::new(
             agent.clone(),
             event_loop,
             outlet,
-            status_holder.clone(),
             heartbeat_runner,
             runner,
+            gen.0,
         );
 
         (agent, runtime)
     }
 }
 #[async_trait]
-impl AgentOutfit<(AppEnvEventData, bool), StackContext<AppEnvEvent>, i64> for AppAgent {
-    async fn send_event(&self, event: (AppEnvEventData, bool)) -> anyhow::Result<i64> {
-        let (data, force) = event;
-        //保存数据库
-        let env_event = save_event(self.instance.clone(), data.clone(), force).await?;
-
-        let id = env_event.id;
-        //发送给web
-        match &data {
-            AppEnvEventData::AgentResponse(_) => {
-                //响应事件不参与agent处理
-                return Ok(id);
-            }
-            AppEnvEventData::UserRequest(_)
-            | AppEnvEventData::Interaction(_)
-            | AppEnvEventData::Heartbeat
-            | AppEnvEventData::ToolResponse(_) => {}
-            _ => {
-                self.web_sender.send(WebEvent::Env(data, id));
-            }
-        }
-        info!("AgentEvent: {:?}", &env_event.data);
-        //放开阻塞
-        self.status_holder.send_status(AgentStatus::Idle).await?;
-        self.heartbeat.reset();
+impl AgentOutfit<AppEnvEvent, StackContext<AppEnvEvent>, ()> for AppAgent {
+    async fn send_cmd(&self, cmd: CommandEvent<AppEnvEvent>) -> anyhow::Result<()> {
         //发送给代理
-        self.instance.send_event(env_event).await?;
-        Ok(id)
+        self.instance.send_cmd(cmd).await?;
+        Ok(())
     }
 
     fn event_context(&self) -> Arc<StackContext<AppEnvEvent>> {
@@ -128,48 +107,83 @@ impl AgentOutfit<(AppEnvEventData, bool), StackContext<AppEnvEvent>, i64> for Ap
         Ok(())
     }
 }
-
-async fn save_event(
-    agent: Arc<AgentInstance>,
-    event: AppEnvEventData,
-    force: bool,
-) -> anyhow::Result<AppEnvEvent> {
-    //保存数据库
-    let db = DB.get().unwrap();
-    let model = {
-        let identity = agent.identity();
-        let state_id = {
-            if let Some(top_node) = agent.event_context().top_node() {
-                top_node.id
-            } else {
-                anyhow::bail!("没有状态节点");
+impl AppAgent {
+    pub async fn send_event(&self, event: (AppEnvEventData, bool)) -> anyhow::Result<i64> {
+        //保存数据库
+        let env_event = self.save_event(event).await?;
+        let id = env_event.id;
+        //发送给web
+        match &env_event.data {
+            AppEnvEventData::AgentResponse(_) => {
+                //响应事件不参与agent处理
+                return Ok(id);
             }
+            AppEnvEventData::ToolResponse(_)
+            | AppEnvEventData::Interaction(_)
+            | AppEnvEventData::Heartbeat => {}
+            _ => {
+                self.web_sender
+                    .send(WebEvent::Env(env_event.data.clone(), id));
+            }
+        }
+        info!("AgentEvent: {:?}", &env_event.data);
+        //发送给代理
+        if env_event.force {
+            self.instance.send_cmd(CommandEvent::Canceled).await?;
+        }
+        {
+            //等待生成完成
+            let mut gen = self.gen_watcher.lock().await;
+            gen.wait_for(|v| !*v).await?;
+        }
+        self.instance
+            .send_cmd(CommandEvent::Event(env_event))
+            .await?;
+        self.instance.send_cmd(CommandEvent::Generate).await?;
+        self.heartbeat.disable();
+        Ok(id)
+    }
+
+    pub async fn save_event(&self, event: (AppEnvEventData, bool)) -> anyhow::Result<AppEnvEvent> {
+        let (data, force) = event;
+        //保存数据库
+        let db = DB.get().unwrap();
+        //保存数据库
+        let model = {
+            let identity = self.identity();
+            let state_id = {
+                if let Some(top_node) = self.event_context().top_node() {
+                    top_node.id
+                } else {
+                    anyhow::bail!("没有状态节点");
+                }
+            };
+            let ty = convert::to_type_enum(&data);
+            let value = convert::to_json(&data);
+            entity_service::event::save(db, identity.id(), state_id, ty, value, force).await?
         };
-        let ty = convert::to_type_enum(&event);
-        let value = convert::to_json(event.clone());
-        entity_service::event::save(db, identity.id(), state_id, ty, value, force).await?
-    };
-    let env_event = AppEnvEvent {
-        id: model.id,
-        data: event,
-        force,
-        time: model.time,
-    };
-    Ok(env_event)
+        let env_event = AppEnvEvent {
+            id: model.id,
+            data: data,
+            force,
+            time: model.time,
+        };
+        return Ok(env_event);
+    }
 }
 
 pub struct WebSender {
-    inner: std::sync::RwLock<Option<mpsc::UnboundedSender<sse::Event>>>,
+    inner: RwLock<Option<mpsc::UnboundedSender<sse::Event>>>,
 }
 impl WebSender {
     pub fn send(&self, event: WebEvent) {
-        let web_sender = self.inner.read().unwrap();
+        let web_sender = self.inner.read();
         if let Some(sender) = &*web_sender {
             if let Err(e) = sender.send(event.to_sse_event()) {
                 //断开
                 info!("sse连接断开：{}", e);
                 drop(web_sender);
-                let mut web_sender = self.inner.write().unwrap();
+                let mut web_sender = self.inner.write();
                 *web_sender = None;
             }
             return;
@@ -177,7 +191,7 @@ impl WebSender {
         warn!("断连中...");
     }
     pub fn set_sender(&self, sender: mpsc::UnboundedSender<sse::Event>) {
-        let mut web_sender = self.inner.write().unwrap();
+        let mut web_sender = self.inner.write();
         *web_sender = Some(sender);
     }
 }
@@ -334,22 +348,12 @@ async fn build_agent_context(identity: &AgentIdentity) -> Arc<AgentContext> {
 
                 async move {
                     if let Some(agent) = agent {
-                        let re: bool = agent
-                            .status_holder
-                            .send_status_if(AgentStatus::Sleep, |v| v == AgentStatus::Waiting)
-                            .await?;
-                        if !re {
-                            anyhow::bail!("Agent is not waiting")
-                        }
+                        agent.heartbeat.disable();
+                        println!("Sleeping...");
                         tokio::spawn(async move {
                             tokio::time::sleep(dur).await;
-                            if let Err(e) = agent
-                                .status_holder
-                                .send_status_if(AgentStatus::Idle, |v| v == AgentStatus::Sleep)
-                                .await
-                            {
-                                error!("Agent status error: {}", e);
-                            }
+                            agent.heartbeat.enable();
+                            println!("Wake up...");
                         });
                         return Ok(());
                     }

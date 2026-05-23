@@ -176,10 +176,6 @@ impl EnvEvent for AppEnvEvent {
         self.id
     }
 
-    fn is_force(&self) -> bool {
-        self.force
-    }
-
     fn to_message(&self) -> RoleMessage {
         if let AppEnvEventData::AgentResponse(sections) = &self.data {
             let infos: Vec<Information> = sections

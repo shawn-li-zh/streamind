@@ -1,8 +1,7 @@
-use crate::{agent::context::AgentStatus, message::RoleMessage, mind::stream::GenerateEvent};
+use crate::{agent::context::AgentStatus, message::RoleMessage, mind::port::GenerateEvent};
 
 pub trait EnvEvent: Send + Sync + 'static {
     fn id(&self) -> i64;
-    fn is_force(&self) -> bool;
     fn to_message(&self) -> RoleMessage;
 }
 #[derive(Debug, Clone)]
