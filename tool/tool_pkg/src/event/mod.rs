@@ -16,13 +16,14 @@ pub mod event {
         #[arg("事件id")] id: i64,
         #[ctx] ctx: ToolCallContext,
     ) -> anyhow::Result<ToolReturn> {
-        let agent_context = ctx.agent.context();
-        let model = entity_service::event::get_by_id(agent_context.agent_id, id).await?;
+        let identity = ctx.agent_identity;
+        let model = entity_service::event::get_by_id(identity.id(), id).await?;
         match model {
             Some(model) => {
-                let agent_event = entity_service::event::convert::from_entity(model);
-                let (text, _paths) = agent_event.to_message().to_tuple();
-                Ok(ToolReturn::raw(text))
+                 todo!();
+                // let agent_event = entity_service::event::convert::from_entity(model);
+                // let (text, _paths) = agent_event.to_message().to_tuple();
+                // Ok(ToolReturn::raw(text))
             }
             None => Ok(ToolReturn::raw("事件不存在")),
         }
@@ -36,24 +37,16 @@ pub mod event {
         #[arg("事件id")] id: i64,
         #[arg("时间方向")] before: bool,
         #[arg("关键字")] key: Option<String>,
-        #[arg("事件类型")]
-        r#type: Option<String>,
+        #[arg("事件类型")] r#type: Option<String>,
         #[arg("数量,最多100")] mut limit: u64,
         #[ctx] ctx: ToolCallContext,
     ) -> anyhow::Result<ToolReturn> {
         if limit > 100 {
             limit = 100;
         }
-        let agent_context = ctx.agent.context();
-        let models = entity_service::event::search_at(
-            agent_context.agent_id,
-            id,
-            r#type,
-            key,
-            limit,
-            before,
-        )
-        .await?;
+          let identity = ctx.agent_identity;
+        let models =
+            entity_service::event::search_at(identity.id(), id, r#type, key, limit, before).await?;
         Ok(to_return(models))
     }
 
@@ -66,35 +59,29 @@ pub mod event {
         #[arg("开始时间")] start: String,
         #[arg("结束时间")] end: String,
         #[arg("关键字")] key: Option<String>,
-        #[arg("事件类型")]
-        r#type: Option<String>,
+        #[arg("事件类型")] r#type: Option<String>,
         #[arg("数量,最多100")] mut limit: u64,
         #[ctx] ctx: ToolCallContext,
     ) -> anyhow::Result<ToolReturn> {
         if limit > 100 {
             limit = 100;
         }
-        let agent_context = ctx.agent.context();
+           let identity = ctx.agent_identity;
         let start = chrono::DateTime::parse_from_str(&start, FMT)?.with_timezone(&Local);
         let end = chrono::DateTime::parse_from_str(&end, FMT)?.with_timezone(&Local);
-        let models = entity_service::event::time_range(
-            agent_context.agent_id,
-            start,
-            end,
-            r#type,
-            key,
-            limit,
-        )
-        .await?;
+        let models =
+            entity_service::event::time_range(identity.id(), start, end, r#type, key, limit)
+                .await?;
         Ok(to_return(models))
     }
     fn to_return(events: Vec<entity::event::Model>) -> ToolReturn {
         let mut res = vec![];
         res.push(format!("结果总数:{}\n---", events.len()));
         for event in events {
-            let agent_event = entity_service::event::convert::from_entity(event);
-            let (text, _paths) = agent_event.to_message().to_tuple();
-            res.push(text);
+            todo!();
+            // let agent_event = from_entity(event);
+            // let (text, _paths) = agent_event.to_message().to_tuple();
+            // res.push(text);
         }
         ToolReturn::raws(res)
     }

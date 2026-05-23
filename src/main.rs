@@ -4,12 +4,17 @@ use tracing::info;
 use tracing_subscriber::EnvFilter;
 use web::feature::auth::LOGIN_CODE;
 
-// mod agent;
+
+mod agent;
 mod common;
 mod global;
-mod rule;
 mod web_api;
-
+mod plugin;
+mod sse_event;
+mod event;
+mod status;
+mod event_context;
+mod runtime;
 // mod web;
 
 #[tokio::main]
@@ -24,7 +29,8 @@ async fn main() -> anyhow::Result<()> {
     //
     entity_service::init().await?;
     info!("存储服务初始化成功!");
-    runtime::global::init().await?;
+    // runtime::global::init().await?;
+    global::init().await?;
     info!("智能体运行时初始化成功!");
     //
     let port = &std::env::var("PORT").unwrap();

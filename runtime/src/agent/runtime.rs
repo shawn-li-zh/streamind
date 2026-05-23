@@ -8,8 +8,9 @@ use entity_service::DB;
 use kernel::{
     agent::{
         self, AgentHandler,
-        context::{AgentContext, AgentStatus},
+        context::{AgentContext, AgentEvent, AgentStatus},
     },
+    context::stack::{Push, StackContext},
     event::{CallItem, EnvEvent, SectionEvent, ToolCallDetailItem, ToolCallEvent, ToolCallStatus},
     parser,
     render::RenderContext,
@@ -22,11 +23,9 @@ use tokio::sync::{RwLock, mpsc, watch};
 use tracing::{error, info};
 
 use crate::{
-    agent::{channel::AgentChannel, instance::AgentInstance},
-    context::{
+    agent::{
+        channel::AgentChannel,
         mind::{self, StreamMind},
-        section,
-        stack::{self, MindStack, Push},
     },
     sse_event::WebEvent,
 };
@@ -34,7 +33,7 @@ use crate::{
 pub struct AgentRuntime {
     context: Arc<AgentContext>,
     channel: Arc<AgentChannel>,
-    stack: Arc<RwLock<MindStack>>,
+    stack: Arc<RwLock<StackContext>>,
     tool_engine: ToolEngine,
     section_receiver: mpsc::Receiver<mind::Event>,
 }
@@ -43,7 +42,7 @@ impl AgentRuntime {
     pub(crate) fn new(
         context: Arc<AgentContext>,
         channel: Arc<AgentChannel>,
-        stack: Arc<RwLock<MindStack>>,
+        stack: Arc<RwLock<StackContext>>,
         tool_engine: ToolEngine,
         section_receiver: mpsc::Receiver<mind::Event>,
     ) -> Self {
@@ -75,6 +74,7 @@ impl AgentRuntime {
             self.channel.wait_status_is(AgentStatus::Idle).await?;
             let mut worker = ReactWorker {
                 stack: self.stack.clone(),
+                response_event: None,
                 response_event_id: 0,
                 response_sections: vec![],
             };
@@ -129,6 +129,7 @@ impl AgentRuntime {
                         )
                         .await
                         .expect("保存agent回复失败");
+                        worker.response_event = Some(event);
                         worker.response_event_id = model.id;
                     };
                     let web_event =
@@ -281,14 +282,15 @@ impl AgentRuntime {
 }
 
 struct ReactWorker {
-    stack: Arc<RwLock<MindStack>>,
+    stack: Arc<RwLock<StackContext>>,
+    response_event: Option<AgentEvent>,
     response_event_id: i64,
     response_sections: Vec<Section>,
 }
 impl ReactWorker {
     async fn end(self) -> anyhow::Result<()> {
         let db = DB.get().unwrap();
-        if self.response_event_id > 0 {
+        if let Some(mut agent_event) = self.response_event {
             entity_service::event::update_agent_response(
                 db,
                 self.response_event_id,
@@ -296,9 +298,11 @@ impl ReactWorker {
                 self.response_sections.clone(),
             )
             .await?;
+            agent_event.data = EnvEvent::AgentResponse(self.response_sections);
             let mut stack = self.stack.write().await;
-            stack.push_response(self.response_sections);
+            stack.push_event(agent_event);
         }
+
         info!("step end");
         Ok(())
     }
@@ -479,7 +483,7 @@ async fn tool_call(
 
 async fn push_state(
     context: Arc<AgentContext>,
-    stack: Arc<RwLock<MindStack>>,
+    stack: Arc<RwLock<StackContext>>,
     pushs: Vec<Push>,
 ) -> anyhow::Result<()> {
     let agent_id = context.agent_id;

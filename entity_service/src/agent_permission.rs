@@ -1,5 +1,6 @@
 use chrono::Local;
-use kernel::agent::context::PermissionLife;
+
+use runtime::agent::authority::PermissionLife;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter,
 };
@@ -17,7 +18,10 @@ pub async fn list(agent_id: u32) -> anyhow::Result<Vec<entity::agent_permission:
         .await?;
     Ok(res)
 }
-pub async fn get(agent_id: u32, id: i64) -> anyhow::Result<Option<entity::agent_permission::Model>> {
+pub async fn get(
+    agent_id: u32,
+    id: i64,
+) -> anyhow::Result<Option<entity::agent_permission::Model>> {
     let db = DB.get().unwrap();
     //获取权限
     let res = entity::agent_permission::Entity::find()

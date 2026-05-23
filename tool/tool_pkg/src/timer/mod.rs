@@ -1,12 +1,15 @@
 pub use self::timer::build_package;
+
+use futures::future::BoxFuture;
+use runtime::agent::scheduler::AgentTimer;
 use tool_macro::package;
 #[package("定时管理器")]
 pub mod timer {
-    use chrono::Local;
-    use kernel::{
-        agent::{AgentHandler, context::AgentTimer},
-        tool::{ToolCallContext, core::ToolReturn},
-    };
+
+    use kernel::tool::{ToolCallContext, core::ToolReturn};
+    use runtime::agent::scheduler::AgentTimer;
+
+    use crate::timer::TimerInjected;
 
     #[tool(
         anno = "列出没过期的定时任务",
@@ -19,8 +22,8 @@ pub mod timer {
         #[arg("关键字")] key: Option<String>,
         #[ctx] ctx: ToolCallContext,
     ) -> anyhow::Result<ToolReturn> {
-        let agent_context = ctx.agent.context();
-        let agent_id = agent_context.agent_id;
+        let identity = ctx.agent_identity;
+        let agent_id = identity.id();
         let agent_timers = entity_service::agent_timer::range(agent_id, start, num, key).await?;
         let mut res = vec![];
         res.push(format!("结果总数:{}\n---", agent_timers.len()));
@@ -38,9 +41,14 @@ pub mod timer {
         #[arg("任务id")] id: i64,
         #[ctx] ctx: ToolCallContext,
     ) -> anyhow::Result<ToolReturn> {
-        let agent: std::sync::Arc<dyn AgentHandler> = ctx.agent.clone();
-        let _ = agent.scheduler().cancel(id).await?;
-
+        // todo!();
+        let ctx = match ctx.agent_context.get::<TimerInjected>() {
+            Some(v) => v,
+            None => {
+                anyhow::bail!("定时任务功能未启用")
+            }
+        };
+        let _ = (ctx.cancel)(id).await?;
         Ok(ToolReturn::raw("取消成功"))
     }
 
@@ -55,10 +63,15 @@ pub mod timer {
         #[arg("当触发时,发送给智能体的附加信息")] payload: String,
         #[ctx] ctx: ToolCallContext,
     ) -> anyhow::Result<ToolReturn> {
-        let agent: std::sync::Arc<dyn AgentHandler> = ctx.agent.clone();
+        let ctx = match ctx.agent_context.get::<TimerInjected>() {
+            Some(v) => v,
+            None => {
+                anyhow::bail!("定时任务功能未启用")
+            }
+        };
         let timer = AgentTimer::new(corn, times, payload);
-        let id = agent.scheduler().add(timer).await?;
-        Ok(ToolReturn::raw(format!("创建成功,定时器ID={}", id)))
+        let timer_id = (ctx.add)(timer).await?;
+        Ok(ToolReturn::raw(format!("创建成功,定时器ID={}", timer_id)))
     }
 
     //睡眠
@@ -77,8 +90,20 @@ pub mod timer {
                 anyhow::bail!("时间格式错误:{}", e)
             }
         };
-
-        ctx.agent.sleep(dur).await?;
+        let ctx = match ctx.agent_context.get::<TimerInjected>() {
+            Some(v) => v,
+            None => {
+                anyhow::bail!("定时任务功能未启用")
+            }
+        };
+        (ctx.sleep)(dur).await?;
         Ok(ToolReturn::ignore())
     }
+}
+
+pub struct TimerInjected {
+    pub add: Box<dyn (Fn(AgentTimer) -> BoxFuture<'static, anyhow::Result<i64>>) + Send + Sync>,
+    pub cancel: Box<dyn (Fn(i64) -> BoxFuture<'static, anyhow::Result<()>>) + Send + Sync>,
+    pub sleep:
+        Box<dyn (Fn(std::time::Duration) -> BoxFuture<'static, anyhow::Result<()>>) + Send + Sync>,
 }

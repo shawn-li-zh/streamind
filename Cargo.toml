@@ -12,6 +12,7 @@ members = [
     "runtime",
     "entity_service",
     "web",
+    "reflection",
 ]
 [dependencies]
 entity = { path = "entity" }
@@ -24,7 +25,8 @@ tool_pkg = { path = "tool/tool_pkg" }
 
 # ai
 async-openai = "0.38.1"
-
+# 锁
+parking_lot = "0.12.5"
 # 异步库
 tokio = { version = "1", features = ["full"] }
 async-trait = "0.1"
@@ -43,10 +45,6 @@ anyhow = { version = "1", features = ["std"] }
 thiserror = "2.0.18"
 # 数据库
 
-# 语法解析
-pest = "2.8.6"
-pest_derive = "2.8.6"
-
 
 # HTTP 客户端和服务器 web
 
@@ -60,10 +58,10 @@ regex = "1"
 chrono = "0.4.44"
 dotenvy = "0.15"
 
-rayon = "1.8" # 用于并行计算
-notify = "6"  # 文件系统监视
+# 定时任务
+tokio-cron-scheduler = "0.15.1"
+uuid ={version = "1",features = ["v4"]}
+notify = "6"         # 文件系统监视
 scopeguard = "1.2.0"
 [dev-dependencies]
 cargo-nextest = "0.9"
-
-

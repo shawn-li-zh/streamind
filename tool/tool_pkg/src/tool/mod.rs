@@ -2,7 +2,7 @@ pub use self::tool::build_package;
 use tool_macro::package;
 #[package("tool管理器")]
 pub mod tool {
-    use kernel::tool::{ToolCallContext, core::ToolReturn};
+    use kernel::tool::{ToolCallContext, core::ToolReturn, engine::ToolEngineContext};
 
     #[tool(
         anno = "列出指定区间内的工具包的基础信息",
@@ -15,8 +15,8 @@ pub mod tool {
         #[arg("关键字")] key: Option<String>,
         #[ctx] ctx: ToolCallContext,
     ) -> anyhow::Result<ToolReturn> {
-        let agent_context = ctx.agent.context();
-        let tool_engine_context = &agent_context.tool_engine_context;
+        let agent_context = ctx.agent_context;
+        let tool_engine_context = agent_context.get::<ToolEngineContext>().unwrap();
         let tool_packages = &tool_engine_context.tool_packages;
         let total = tool_packages.len();
         if start >= total {
@@ -51,8 +51,8 @@ pub mod tool {
         #[arg("tool关键词")] tool_key: Option<String>,
         #[ctx] ctx: ToolCallContext,
     ) -> anyhow::Result<ToolReturn> {
-        let agent_context = ctx.agent.context();
-        let tool_engine_context = &agent_context.tool_engine_context;
+        let agent_context = ctx.agent_context;
+        let tool_engine_context = agent_context.get::<ToolEngineContext>().unwrap();
         let pkg = match tool_engine_context.get_package(&pkg_name) {
             Some(e) => e,
             None => return Err(anyhow::anyhow!("工具包不存在:{}", pkg_name)),
@@ -79,8 +79,8 @@ pub mod tool {
         #[arg("工具name")] tool_name: String,
         #[ctx] ctx: ToolCallContext,
     ) -> anyhow::Result<ToolReturn> {
-        let agent_context = ctx.agent.context();
-        let tool_engine_context = &agent_context.tool_engine_context;
+        let agent_context = ctx.agent_context;
+        let tool_engine_context = agent_context.get::<ToolEngineContext>().unwrap();
         let pkg = match tool_engine_context.get_package(&pkg_name) {
             Some(e) => e,
             None => return Err(anyhow::anyhow!("工具包不存在:{}", pkg_name)),
@@ -99,8 +99,8 @@ pub mod tool {
         #[arg("类型name")] type_name: String,
         #[ctx] ctx: ToolCallContext,
     ) -> anyhow::Result<ToolReturn> {
-        let agent_context = ctx.agent.context();
-        let tool_engine_context = &agent_context.tool_engine_context;
+        let agent_context = ctx.agent_context;
+        let tool_engine_context = agent_context.get::<ToolEngineContext>().unwrap();
         let pkg = match tool_engine_context.get_package(&pkg_name) {
             Some(e) => e,
             None => return Err(anyhow::anyhow!("工具包不存在:{}", pkg_name)),

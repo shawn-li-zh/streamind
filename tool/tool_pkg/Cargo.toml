@@ -9,7 +9,6 @@ tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 regex = "1"
-anyhow = "1"
 chrono = "0.4.44"
 dashmap = "6.1.0"
 futures = "0.3"
@@ -18,7 +17,8 @@ rand = "0.8"
 
 
 tracing = "0.1"
-
+# 错误处理
+anyhow = { version = "1", features = ["std"] }
 reqwest = { version = "0.12", features = ["json", "rustls-tls","stream","multipart"] }
 mime_guess = "2.0.5"
 nanoid = "0.5.0"
@@ -34,6 +34,7 @@ encoding_rs = "0.8.35"
 tool_macro = { path = "../tool_macro" }
 kernel = { path = "../../kernel" }
 entity = { path = "../../entity" }
+runtime = { path = "../../runtime" }
 entity_service = { path = "../../entity_service" }
 # 浏览器控制
 chromiumoxide = "0.9.1"

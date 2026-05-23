@@ -1,14 +1,9 @@
 use chrono::Local;
 use entity::{
-    agent,
     event::{EnvEventStatus, EnvEventType},
     format::date_time,
 };
-use kernel::{
-    agent::context::{AgentEvent, AgentInfo},
-    event::{EnvEvent, ToolCallDetailItem},
-    section::Section,
-};
+use kernel::section::Section;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, EntityOrSelect, EntityTrait,
     FromJsonQueryResult, FromQueryResult, QueryFilter, QueryOrder, QuerySelect,
@@ -16,98 +11,6 @@ use sea_orm::{
 use serde::Serialize;
 
 use crate::DB;
-
-pub mod convert {
-    use std::collections::HashMap;
-
-    use entity::event::EnvEventType;
-    use kernel::{
-        agent::context::AgentEvent,
-        event::{EnvEvent, UserMessage},
-    };
-    use serde_json::json;
-
-    pub fn from_entity(event: entity::event::Model) -> AgentEvent {
-        AgentEvent {
-            id: event.id,
-            data: from_json(event.event_type, event.data),
-            force: event.force,
-            time: event.time,
-        }
-    }
-    pub fn to_json(event: EnvEvent) -> serde_json::Value {
-        match event {
-            EnvEvent::AgentResponse(sections) => json!(sections),
-            EnvEvent::Heartbeat => json!(()),
-            EnvEvent::UserRequest(msg) => {
-                json!(msg)
-            }
-            EnvEvent::Timer(data) => {
-                json!(data)
-            }
-            EnvEvent::ToolResponse(results) => {
-                json!(results)
-            }
-            EnvEvent::Error(info) => {
-                json!({
-                    "info":info.clone()
-                })
-            }
-            EnvEvent::Interrupt(reason) => {
-                json!({
-                    "reason":reason.clone()
-                })
-            }
-            EnvEvent::Interaction(data) => {
-                json!(data)
-            }
-        }
-    }
-
-    pub fn from_json(type_name: EnvEventType, payload: serde_json::Value) -> EnvEvent {
-        match type_name {
-            EnvEventType::AgentResponse => {
-                EnvEvent::AgentResponse(serde_json::from_value(payload).unwrap())
-            }
-
-            EnvEventType::UserRequest => {
-                let msg: UserMessage = serde_json::from_value(payload).unwrap();
-                EnvEvent::UserRequest(msg)
-            }
-            EnvEventType::Heartbeat => EnvEvent::Heartbeat,
-            EnvEventType::ToolResponse => {
-                EnvEvent::ToolResponse(serde_json::from_value(payload).unwrap())
-            }
-            EnvEventType::Error => {
-                let mut map: HashMap<String, String> = serde_json::from_value(payload).unwrap();
-                let info = map.remove("info").unwrap_or_default();
-                EnvEvent::Error(info)
-            }
-            EnvEventType::Timer => EnvEvent::Timer(serde_json::from_value(payload).unwrap()),
-            EnvEventType::Interrupt => {
-                let mut map: HashMap<String, String> = serde_json::from_value(payload).unwrap();
-                let reason = map.remove("reason").unwrap_or_default();
-                EnvEvent::Interrupt(reason)
-            }
-            EnvEventType::Interaction => {
-                EnvEvent::Interaction(serde_json::from_value(payload).unwrap())
-            }
-        }
-    }
-
-    pub fn to_type_enum(event: &EnvEvent) -> EnvEventType {
-        match event {
-            EnvEvent::AgentResponse(_) => EnvEventType::AgentResponse,
-            EnvEvent::Heartbeat => EnvEventType::Heartbeat,
-            EnvEvent::UserRequest(_) => EnvEventType::UserRequest,
-            EnvEvent::Timer { .. } => EnvEventType::Timer,
-            EnvEvent::ToolResponse(_) => EnvEventType::ToolResponse,
-            EnvEvent::Error(_) => EnvEventType::Error,
-            EnvEvent::Interrupt(_) => EnvEventType::Interrupt,
-            EnvEvent::Interaction(_) => EnvEventType::Interaction,
-        }
-    }
-}
 
 pub async fn get_by_id(agent_id: u32, id: i64) -> anyhow::Result<Option<entity::event::Model>> {
     let db = DB.get().unwrap();
@@ -178,32 +81,23 @@ pub async fn save(
     db: &impl ConnectionTrait,
     agent_id: u32,
     state_id: i64,
-    event_data: EnvEvent,
+    event_type: EnvEventType,
+    event: serde_json::Value,
     force: bool,
-) -> anyhow::Result<(AgentEvent, entity::event::Model)> {
-    //保存数据库
-    let mut event = AgentEvent {
-        id: 0,
-        data: event_data.clone(),
-        force,
-        time: Local::now(),
-    };
-    let event_type = convert::to_type_enum(&event_data);
-    let json = convert::to_json(event_data);
+) -> anyhow::Result<entity::event::Model> {
     let event_model = entity::event::ActiveModel {
         agent_id: Set(agent_id),
         state_id: Set(state_id),
         step: Set(0),
         event_type: Set(event_type),
-        force: Set(event.force),
-        time: Set(event.time),
-        data: Set(json),
+        force: Set(force),
+        time: Set(Local::now()),
+        data: Set(event),
         status: Set(EnvEventStatus::Pending),
         ..Default::default()
     };
     let model: entity::event::Model = event_model.insert(db).await?;
-    event.id = model.id;
-    Ok((event, model))
+    Ok(model)
 }
 
 // pub async fn update_tool_call_result(

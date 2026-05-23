@@ -1,3 +1,17 @@
+use async_trait::async_trait;
+
+// pub struct Hook {
+//     pub name: &'static str,
+//     pub func: Box<dyn Fn(&[&str]) -> String + Send + Sync + 'static>,
+// }
+// #[async_trait]
+// pub trait RuleHook {
+//     async fn execute(&self, args: Vec<serde_json::Value>) -> String;
+// }
+
+
+
+
 pub struct HookRegistry {
     hooks: std::collections::HashMap<String, fn(&[&str]) -> String>,
 }

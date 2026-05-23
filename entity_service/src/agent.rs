@@ -3,13 +3,12 @@ use std::{collections::HashMap, time::Duration};
 use chrono::{DateTime, Local};
 
 use entity::{agent::AgentStatus, types::array::StringArray};
+use kernel::simple_id;
 use sea_orm::{
     ActiveModelTrait,
     ActiveValue::{self, Set},
     ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder,
 };
-
-use kernel::simple_id;
 
 use crate::DB;
 
@@ -23,7 +22,7 @@ pub async fn save(
     persona: String,
     tool_packages: Vec<String>,
 ) -> anyhow::Result<entity::agent::Model> {
-    let code = simple_id(9);
+    let code = simple_id(6);
     //
     let agent = entity::agent::ActiveModel {
         name: Set(name),

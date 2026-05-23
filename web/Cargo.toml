@@ -7,6 +7,7 @@ edition = "2024"
 entity = { path = "../entity" }
 entity_service = { path = "../entity_service" }
 kernel = { path = "../kernel" }
+runtime = { path = "../runtime" }
 # 异步库
 tokio = { version = "1", features = ["full"] }
 async-trait = "0.1"

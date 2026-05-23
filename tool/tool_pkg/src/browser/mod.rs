@@ -21,7 +21,7 @@ pub mod browser {
     };
     use futures::StreamExt;
     use kernel::{
-        agent::context::{AgentContext, AgentInfo},
+        agent::context::AgentContext,
         simple_id,
         tool::{ContextData, core::ToolReturn},
     };
@@ -73,8 +73,8 @@ pub mod browser {
         }
         Ok(())
     }
-    #[tool(anno = "启动浏览器", example = r#"lunch()"#)]
-    pub async fn lunch(
+    #[tool(anno = "启动浏览器", example = r#"launch()"#)]
+    pub async fn launch(
         #[arg("浏览器启动参数")] args: Option<Vec<String>>,
         #[ctx] ctx: ToolCallContext,
     ) -> anyhow::Result<()> {
@@ -100,8 +100,6 @@ pub mod browser {
             .chrome_executable(chrome_path)
             .no_sandbox() // Windows 有时需要这个
             .with_head()
-            // .port(port)
-            .hide()
             .args(args.unwrap_or_default())
             // .args(vec![
             //     "--disable-extensions",     // 禁用扩展

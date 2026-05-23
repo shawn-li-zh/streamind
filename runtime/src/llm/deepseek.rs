@@ -1,15 +1,17 @@
 use async_openai::{
     Client,
     config::OpenAIConfig,
-    error::OpenAIError,
     types::chat::{ChatChoiceLogprobs, FinishReason, ReasoningEffort},
 };
 use async_trait::async_trait;
 use futures::StreamExt;
-use kernel::message::{Information, Role};
+use kernel::{
+    client::{ChatClient, ChunkStream},
+    message::{Information, Role},
+    model::ModelFamily,
+};
 use serde::{Deserialize, Serialize};
 
-use crate::llm::{client::ChatClient, family::ModelFamily};
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Message {
     pub role: Role,
@@ -130,21 +132,21 @@ impl From<kernel::message::RoleMessage> for Message {
 }
 
 pub struct DeepseekClient {
-    pub model: entity::model::Model,
+    pub model: String,
     pub client: Client<OpenAIConfig>,
 }
 #[async_trait]
 impl ChatClient for DeepseekClient {
     fn model_info(&self) -> (ModelFamily, String) {
-        (ModelFamily::DeepSeek, self.model.name.to_string())
+        (ModelFamily::DeepSeek, self.model.to_string())
     }
     async fn stream(
         &self,
         messages: Vec<kernel::message::RoleMessage>,
-    ) -> Result<super::client::ChunkStream, OpenAIError> {
+    ) -> anyhow::Result<ChunkStream> {
         let messages = messages.into_iter().map(|v| v.into()).collect();
         let request = Request {
-            model: self.model.name.clone(),
+            model: self.model.clone(),
             reasoning_effort: ReasoningEffort::High,
             thinking: Some(Thinking {
                 r#type: "enabled".to_string(),
@@ -160,29 +162,34 @@ impl ChatClient for DeepseekClient {
             .await?;
         let mut in_think = false;
         let stream = stream.map(move |r| {
-            r.map(|mut v| {
-                let text = v.choices[0].delta.content.take();
-                let reasoning = v.choices[0].delta.reasoning_content.take();
-                if let Some(reasoning) = reasoning {
-                    if !in_think {
-                        in_think = true;
-                        return format!("<think>\n{}", reasoning);
-                    } else {
-                        return reasoning;
+            let r = r
+                .map(|mut v| {
+                    let text = v.choices[0].delta.content.take();
+                    let reasoning = v.choices[0].delta.reasoning_content.take();
+                    if let Some(reasoning) = reasoning {
+                        if !in_think {
+                            in_think = true;
+                            return format!("<think>\n{}", reasoning);
+                        } else {
+                            return reasoning;
+                        }
                     }
-                }
-                if let Some(text) = text {
-                    if in_think {
-                        in_think = false;
-                        return format!("\n</think>\n{}", text);
-                    } else {
-                        return text;
+                    if let Some(text) = text {
+                        if in_think {
+                            in_think = false;
+                            return format!("\n</think>\n{}", text);
+                        } else {
+                            return text;
+                        }
                     }
-                }
-                return "".to_string();
-                // println!("{}", v);
-                // "".to_string()
-            })
+                    return "".to_string();
+                    // println!("{}", v);
+                    // "".to_string()
+                })
+                .map(|v| Ok(v))
+                .flatten()
+                .map_err(|e| anyhow::anyhow!(e));
+            r
         });
         return Ok(stream.boxed());
     }

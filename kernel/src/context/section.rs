@@ -1,8 +1,8 @@
+use crate::section::{SectionTag, TAGS};
 use futures::{Stream, StreamExt};
-use kernel::section::{SectionTag, TAGS};
-use std::{mem::take, pin::Pin};
+use std::{convert::Infallible, mem::take, pin::Pin, sync::Arc};
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 pub enum Event {
     Start,
     /// 包含 (标签配置, 完整的标签头文本，例如 `<thought attr="1">`)
@@ -12,6 +12,7 @@ pub enum Event {
     /// 包含 (标签配置, 最后的剩余内容)
     Close(&'static SectionTag, String),
     End,
+    Error(anyhow::Error),
 }
 
 /// 解析器当前所处的状态
@@ -253,8 +254,8 @@ impl SectionParser {
 
 /// 极简的对外宏接口：仅负责做 await 转接
 pub fn section_stream(
-    mut chunk_stream: Pin<Box<dyn Stream<Item = String> + Send>>,
-) -> impl Stream<Item = Event> {
+    mut chunk_stream: Pin<Box<dyn Stream<Item = anyhow::Result<String>> + Send>>,
+) -> impl Stream<Item = Event> + Send {
     // safe_size 设置为 20（需大于等于最长闭合标签长度）
     let mut parser = SectionParser::new(&*TAGS, 20);
 
@@ -262,9 +263,16 @@ pub fn section_stream(
         yield Event::Start;
 
         while let Some(chunk) = chunk_stream.next().await {
-            // 调用纯同步的状态机进行推入，立刻得到产生的事件
-            for event in parser.push(&chunk) {
-                yield event;
+            match chunk {
+                Ok(chunk) => {
+                    // 调用纯同步的状态机进行推入，立刻得到产生的事件
+                    for event in parser.push(&chunk) {
+                        yield event;
+                    }
+                },
+                Err(err) => {
+                    yield Event::Error(err);
+                }
             }
         }
 
@@ -272,73 +280,5 @@ pub fn section_stream(
         for event in parser.finish() {
             yield event;
         }
-    }
-}
-#[cfg(test)]
-
-mod test {
-    use super::Event;
-    use futures::StreamExt;
-    use std::time::Duration;
-
-    use tokio::sync::mpsc;
-
-    use crate::context::{section::section_stream, stack::split_into_chunks};
-
-    #[tokio::test]
-    async fn test() {
-        println!("=== 开始测试 Section Stream ===");
-
-        // 1. 模拟 LLM 异步流式输出的数据块 (Chunks)
-        // 故意将标签切碎，以测试解析器的 buffer 拼接能力
-        let outputs = {
-            if let Ok(test) = std::fs::read_to_string(r"D:\project\rust\streamind\test.xml") {
-                test.split("<end/>")
-                    .map(|item| item.trim())
-                    .filter(|v| !v.is_empty())
-                    .map(|item| split_into_chunks(item))
-                    .collect()
-            } else {
-                vec![]
-            }
-        };
-        let (tx, rx) = mpsc::unbounded_channel();
-        tokio::spawn(async move {
-            for _ in 0..1 {
-                for chunks in &outputs {
-                    for chunk in chunks {
-                        tokio::time::sleep(Duration::from_millis(10)).await;
-                        tx.send(chunk.to_string()).unwrap();
-                    }
-                }
-            }
-        });
-        let chunk_stream = tokio_stream::wrappers::UnboundedReceiverStream::new(rx).boxed();
-        // 3. 调用你的 section_stream 函数
-        let mut event_stream = Box::pin(section_stream(chunk_stream));
-
-        // 4. 消费解析出来的事件
-        while let Some(event) = event_stream.next().await {
-            match event {
-                Event::Start => {
-                    println!("\n[事件] >>> 流开始 <<<");
-                }
-                Event::Open(tag, head) => {
-                    println!("\n[事件] 开启标签: {}", head);
-                }
-                Event::Chunk(tag, chunk) => {
-                    // print!("{}", chunk)
-                }
-                Event::Close(tag, content) => {
-                    println!("[事件] 关闭标签{}，完整段落内容为: {:?}", tag.end, content);
-                }
-                Event::End => {
-                    println!("\n[事件] >>> 流结束 <<<");
-                }
-            }
-        }
-
-        // 给后台异步任务一点时间打印完毕
-        tokio::time::sleep(Duration::from_secs(10)).await;
     }
 }

@@ -1,42 +1,18 @@
+use kernel::{
+    agent::event::EnvEvent,
+    message::{Information, RoleMessage},
+    tool::event::ToolCallDetailItem,
+};
 use std::{collections::HashMap, fmt::Display, time::Duration};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    message::{Binary, Information},
+use kernel::{
+    message::Binary,
     section::{Section, SectionTag},
     tool::core::ToolReturnValue,
 };
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum ToolCallStatus {
-    Undo,
-    Success,
-    Failure,
-}
-impl Display for ToolCallStatus {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let sta = match self {
-            ToolCallStatus::Undo => "Undo",
-            ToolCallStatus::Success => "Success",
-            ToolCallStatus::Failure => "Failure",
-        };
-        f.write_str(sta)
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolCallDetailItem {
-    pub id: i64,
-    pub call_id: String,
-    pub package: String,
-    pub tool: String,
-    pub values: Vec<ToolReturnValue>,
-    pub status: ToolCallStatus,
-    pub args: HashMap<String, serde_json::Value>,
-    pub elapsed: String,
-}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TimerData {
     pub id: i64,
@@ -62,9 +38,19 @@ pub enum Reaction {
 }
 
 #[derive(Debug, Clone)]
-pub enum EnvEvent {
+pub enum SectionEvent {
+    Start,
+    Open(&'static SectionTag),
+    Chunk(&'static SectionTag, String),
+    Close(Section),
+    End,
+}
+
+#[derive(Debug, Clone)]
+pub enum AppEnvEventData {
     //agent响应
     AgentResponse(Vec<Section>),
+    //心跳
     Heartbeat,
     //用户消息
     UserRequest(UserMessage),
@@ -79,13 +65,13 @@ pub enum EnvEvent {
     //中断信号
     Interrupt(String),
 }
-impl EnvEvent {
+impl AppEnvEventData {
     pub fn to_infos(self) -> Vec<Information> {
         match self {
-            EnvEvent::AgentResponse(sections) => {
+            AppEnvEventData::AgentResponse(sections) => {
                 sections.into_iter().map(|s| s.to_string().into()).collect()
             }
-            EnvEvent::UserRequest(content) => {
+            AppEnvEventData::UserRequest(content) => {
                 let mut list: Vec<Information> = content
                     .attachments
                     .into_iter()
@@ -95,11 +81,11 @@ impl EnvEvent {
                 list.insert(0, content.content.into());
                 list
             }
-            EnvEvent::Heartbeat => {
+            AppEnvEventData::Heartbeat => {
                 let one = "Heartbeat".into();
                 vec![one]
             }
-            EnvEvent::Timer(data) => {
+            AppEnvEventData::Timer(data) => {
                 let times = if data.times == 0 {
                     "无限".to_string()
                 } else {
@@ -112,7 +98,7 @@ impl EnvEvent {
                 let one = format!("{}\n附加信息:\n{}", head, data.payload).into();
                 vec![one]
             }
-            EnvEvent::ToolResponse(result) => {
+            AppEnvEventData::ToolResponse(result) => {
                 let mut list: Vec<Information> = vec![];
                 let head = format!(
                     r#"<tool_reponse id="{}" status={} elapsed="{}">"#,
@@ -134,18 +120,18 @@ impl EnvEvent {
                         }
                     }
                 }
-                 list.push(Information::Text("</tool_reponse>".to_string()));
+                list.push(Information::Text("</tool_reponse>".to_string()));
                 list
             }
-            EnvEvent::Error(reason) => {
+            AppEnvEventData::Error(reason) => {
                 let one = format!("{reason}").into();
                 vec![one]
             }
-            EnvEvent::Interrupt(reason) => {
+            AppEnvEventData::Interrupt(reason) => {
                 let one = format!("【中断信号:'{}'】", reason).into();
                 vec![one]
             }
-            EnvEvent::Interaction(data) => {
+            AppEnvEventData::Interaction(data) => {
                 let one = format!("渲染ID:{}, 负载消息:{}", data.section_id, data.message).into();
                 vec![one]
             }
@@ -154,68 +140,79 @@ impl EnvEvent {
 
     pub fn name(&self) -> String {
         let name = match self {
-            EnvEvent::AgentResponse(_) => "agent响应",
-            EnvEvent::Heartbeat => "agent心跳",
-            EnvEvent::UserRequest(_) => "用户消息",
-            EnvEvent::Timer { .. } => "定时器",
-            EnvEvent::ToolResponse(_) => "工具调用结果",
-            EnvEvent::Error(_) => "异常",
-            EnvEvent::Interrupt(_) => "中断信号",
-            EnvEvent::Interaction(_) => "UI交互事件",
+            AppEnvEventData::AgentResponse(_) => "agent响应",
+            AppEnvEventData::Heartbeat => "agent心跳",
+            AppEnvEventData::UserRequest(_) => "用户消息",
+            AppEnvEventData::Timer { .. } => "定时器",
+            AppEnvEventData::ToolResponse(_) => "工具调用结果",
+            AppEnvEventData::Error(_) => "异常",
+            AppEnvEventData::Interrupt(_) => "中断信号",
+            AppEnvEventData::Interaction(_) => "UI交互事件",
         };
         name.to_string()
     }
     pub fn code(&self) -> String {
         let name = match self {
-            EnvEvent::AgentResponse(_) => "agentResponse",
-            EnvEvent::Heartbeat => "heartbeat",
-            EnvEvent::UserRequest(_) => "userRequest",
-            EnvEvent::Timer { .. } => "timer",
-            EnvEvent::ToolResponse(_) => "toolResponse",
-            EnvEvent::Error(_) => "error",
-            EnvEvent::Interrupt(_) => "interrupt",
-            EnvEvent::Interaction(_) => "interaction",
+            AppEnvEventData::AgentResponse(_) => "agentResponse",
+            AppEnvEventData::Heartbeat => "heartbeat",
+            AppEnvEventData::UserRequest(_) => "userRequest",
+            AppEnvEventData::Timer { .. } => "timer",
+            AppEnvEventData::ToolResponse(_) => "toolResponse",
+            AppEnvEventData::Error(_) => "error",
+            AppEnvEventData::Interrupt(_) => "interrupt",
+            AppEnvEventData::Interaction(_) => "interaction",
         };
         name.to_string()
     }
 }
+pub struct AppEnvEvent {
+    pub id: i64,
+    pub data: AppEnvEventData,
+    pub force: bool,
+    pub time: chrono::DateTime<chrono::Local>,
+}
+impl EnvEvent for AppEnvEvent {
+    fn id(&self) -> i64 {
+        self.id
+    }
 
-//======================
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolCallResultItem {
-    pub id: i64,
-    pub values: Vec<ToolReturnValue>,
-    pub status: ToolCallStatus,
-    pub elapsed: String,
+    fn is_force(&self) -> bool {
+        self.force
+    }
+
+    fn to_message(&self) -> RoleMessage {
+        if let AppEnvEventData::AgentResponse(sections) = &self.data {
+            let infos: Vec<Information> = sections
+                .into_iter()
+                .map(|s| {
+                    let full = s.to_string();
+                    Information::Function(s.name.to_string(), full)
+                })
+                .collect();
+            return RoleMessage::Assistant(infos, false);
+        }
+        let infos = self.to_infos();
+        match &self.data {
+            AppEnvEventData::Error(_error) => RoleMessage::System(infos),
+            AppEnvEventData::UserRequest(_user_message) => RoleMessage::User(infos),
+            AppEnvEventData::ToolResponse(detail) => {
+                RoleMessage::Tool(detail.call_id.clone(), infos)
+            }
+            _ => RoleMessage::User(infos),
+        }
+    }
 }
-#[derive(Debug, Clone, Serialize)]
-pub struct CallItem {
-    pub id: i64,
-    pub package: &'static str,
-    pub tool: &'static str,
-    pub args: HashMap<String, serde_json::Value>,
-}
-#[derive(Debug, Clone, Serialize)]
-pub struct ActiveInfo {
-    pub id: i64,
-    pub tip: String,
-}
-#[derive(Debug, Clone)]
-pub enum ToolCallEvent {
-    //调用id组
-    Start(Vec<CallItem>),
-    // section id+工具活动描述
-    Active(i64),
-    // section id+调用结果
-    Success(ToolCallResultItem),
-    Failure(ToolCallResultItem),
-    End,
-}
-#[derive(Debug, Clone)]
-pub enum SectionEvent {
-    Start,
-    Open(&'static SectionTag),
-    Chunk(&'static SectionTag, String),
-    Close(Section),
-    End,
+impl AppEnvEvent {
+    fn to_infos(&self) -> Vec<Information> {
+        let time = self.time.format("%Y-%m-%d %H:%M:%S").to_string();
+        let type_code = self.data.code();
+        let head = format!(
+            "<event id={},type=\"{}\",time=\"{}\">",
+            self.id, type_code, time
+        );
+        let mut infos = self.data.clone().to_infos();
+        infos.insert(0, head.into());
+        infos.push("</event>".into());
+        return infos;
+    }
 }

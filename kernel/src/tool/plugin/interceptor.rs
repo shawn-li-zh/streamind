@@ -12,7 +12,11 @@ use crate::{
 };
 
 pub trait ToolCallnterceptor {
-    fn build(agent: Arc<AgentContext>, pkg: &'static ToolPackage, tool: &'static Tool) -> Option<Self>
+    fn build(
+        agent: Arc<AgentContext>,
+        pkg: &'static ToolPackage,
+        tool: &'static Tool,
+    ) -> Option<Self>
     where
         Self: Sized;
     fn on_call(&self, ctx: &ToolCallContext, call: &ToolCall) -> anyhow::Result<()> {
@@ -131,7 +135,11 @@ fn split_after_folder(path: &Path, marker: &str) -> Option<PathBuf> {
 //权限校验==========
 pub struct PermissonChecker {}
 impl ToolCallnterceptor for PermissonChecker {
-    fn build(agent: Arc<AgentContext>, pkg: &'static ToolPackage, tool: &'static Tool) -> Option<Self>
+    fn build(
+        agent: Arc<AgentContext>,
+        pkg: &'static ToolPackage,
+        tool: &'static Tool,
+    ) -> Option<Self>
     where
         Self: Sized,
     {
@@ -142,14 +150,21 @@ impl ToolCallnterceptor for PermissonChecker {
         if call.tool.permissions.is_empty() {
             return Ok(());
         }
+        let auth = ctx.agent_context.get::<ToolAuthority>().unwrap();
         let valid = call
             .tool
             .permissions
             .iter()
-            .any(|v| ctx.agent.authority().has_permission(*v, None));
+            .any(|v| auth.has_permission(*v, None));
         if !valid {
             return Err(anyhow::anyhow!("权限缺失:{:#?}", &call.tool.permissions));
         }
         Ok(())
+    }
+}
+pub struct ToolAuthority(Box<dyn Fn(&str, Option<&str>) -> bool + Send + Sync>);
+impl ToolAuthority {
+    pub fn has_permission(&self, code: &str, sub_code: Option<&str>) -> bool {
+        (self.0)(code, sub_code)
     }
 }

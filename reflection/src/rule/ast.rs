@@ -1,7 +1,7 @@
 use rayon::prelude::*;
-use regex::Regex;
+
 use std::hash::Hash;
-use std::io::ErrorKind;
+
 use std::result::Result;
 use std::{
     collections::{HashMap, HashSet},
@@ -31,7 +31,6 @@ impl Display for SyntaxError {
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub enum Counter {
     Count(String), // 计数器，代表某个元素出现的次数
-    
 }
 /// 对应语法中的具体函数调用，如 include("xxx") 或 match("regex")
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Ord, PartialOrd)]
@@ -116,7 +115,7 @@ impl Expr {
     pub fn simplify(&self) -> Expr {
         match self {
             Expr::Not(inner) => match inner.simplify() {
-                Expr::Not(e) => *e, // 双重否定
+                Expr::Not(e) => *e,        // 双重否定
                 Expr::True => Expr::False, // !True => False
                 Expr::False => Expr::True, // !False => True
                 e => Expr::Not(Box::new(e)),
@@ -236,31 +235,33 @@ pub fn eval(text: &str, exprs: &Vec<&str>) -> anyhow::Result<Vec<bool>> {
         .collect();
     Ok(results)
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn test() {
+        let text = "hello beautiful rust world，123";
 
-#[test]
-fn test() {
-    let text = "hello beautiful rust world，123";
+        // 一批需要验证的表达式
+        let raw_exprs = vec![
+            r#"include("rust") | match("\d+")"#,
+            r#"!(include("hello") & include("world"))"#,
+            r#"!(include("hello") & include("hello"))"#,
+            r#"match("hello")"#,
+            r#"include("python") | include("go")"#,
+            r#"include("rust") & !!match("rust")"#, // 包含了重合的谓词 include("rust")
+        ];
+        let results = eval(text, &raw_exprs).unwrap();
 
-    // 一批需要验证的表达式
-    let raw_exprs = vec![
-        r#"include("rust") | match("\d+")"#,
-        r#"!(include("hello") & include("world"))"#,
-        r#"!(include("hello") & include("hello"))"#,
-        r#"match("hello")"#,
-        r#"include("python") | include("go")"#,
-        r#"include("rust") & !!match("rust")"#, // 包含了重合的谓词 include("rust")
-    ];
-    let results = eval(text, &raw_exprs).unwrap();
-
-    // 打印缓存结果
-    for (i, res) in results.iter().enumerate() {
-        println!(" > {} = {}", raw_exprs[i], res);
+        // 打印缓存结果
+        for (i, res) in results.iter().enumerate() {
+            println!(" > {} = {}", raw_exprs[i], res);
+        }
+        //打印化简后的表达式
+        raw_exprs.iter().for_each(|raw| {
+            let ast = parse_expr(raw).unwrap();
+            let simplified = ast.simplify();
+            println!("Original: {}, Simplified: {}", raw, simplified);
+        });
     }
-    //打印化简后的表达式
-    raw_exprs.iter().for_each(|raw| {
-        let ast = parse_expr(raw).unwrap();
-        let simplified = ast.simplify();
-        println!("Original: {}, Simplified: {}", raw, simplified);
-    });
-   
 }

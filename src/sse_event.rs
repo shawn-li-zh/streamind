@@ -1,10 +1,12 @@
 use axum::response::sse;
-use kernel::event::{EnvEvent, SectionEvent, ToolCallEvent};
+
+use kernel::tool::event::ToolCallEvent;
+use runtime::agent::event::{AppEnvEventData, SectionEvent};
 use serde::Serialize;
 use serde_json::json;
 
 pub enum WebEvent {
-    Env(EnvEvent, i64),
+    Env(AppEnvEventData, i64),
     Section(SectionEvent, i64),
     ToolCall(ToolCallEvent, i64),
     Connected,
@@ -21,12 +23,16 @@ impl WebEvent {
                     SsePayload::new("section", "open", section_tag.name, bind_event_id)
                         .to_sse_event()
                 }
-                SectionEvent::Chunk(tag, chunk) => {
-                    SsePayload::new("section", "chunk", json!({
+                SectionEvent::Chunk(tag, chunk) => SsePayload::new(
+                    "section",
+                    "chunk",
+                    json!({
                         "tag": tag.name,
                         "chunk": chunk
-                    }), bind_event_id).to_sse_event()
-                }
+                    }),
+                    bind_event_id,
+                )
+                .to_sse_event(),
                 SectionEvent::Close(section) => {
                     // let content = match section.tag_name.as_str() {
                     //     "reply" | "think" => String::new(),
@@ -40,20 +46,20 @@ impl WebEvent {
                 }
             },
             WebEvent::Env(event, bind_event_id) => match event {
-                EnvEvent::AgentResponse(_)
-                | EnvEvent::UserRequest(_)
-                | EnvEvent::Interaction(_)
-                | EnvEvent::Heartbeat
-                | EnvEvent::ToolResponse(_) => {
+                AppEnvEventData::AgentResponse(_)
+                | AppEnvEventData::UserRequest(_)
+                | AppEnvEventData::Interaction(_)
+                | AppEnvEventData::Heartbeat
+                | AppEnvEventData::ToolResponse(_) => {
                     unreachable!("调用出错")
                 }
-                EnvEvent::Timer(timer_data) => {
+                AppEnvEventData::Timer(timer_data) => {
                     SsePayload::new("env", "timer", timer_data, bind_event_id).to_sse_event()
                 }
-                EnvEvent::Error(err) => {
+                AppEnvEventData::Error(err) => {
                     SsePayload::new("env", "error", err, bind_event_id).to_sse_event()
                 }
-                EnvEvent::Interrupt(reason) => {
+                AppEnvEventData::Interrupt(reason) => {
                     SsePayload::new("env", "interrupt", reason, bind_event_id).to_sse_event()
                 }
             },
@@ -78,9 +84,7 @@ impl WebEvent {
                     SsePayload::new("tool_call", "end", (), bind_event_id).to_sse_event()
                 }
             },
-            WebEvent::Connected => {
-                SsePayload::new("server", "connected", (), 0).to_sse_event()
-            }
+            WebEvent::Connected => SsePayload::new("server", "connected", (), 0).to_sse_event(),
         }
     }
 }

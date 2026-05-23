@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 entity = { path = "../entity" }
 kernel = { path = "../kernel" }
+runtime = { path = "../runtime" }
 
 # 异步库
 tokio = { version = "1", features = ["full"] }

@@ -1,26 +1,20 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashSet,
     sync::Arc,
     time::{Duration, Instant},
 };
 
-use anyhow::{Error, Result, anyhow};
-
 use dashmap::DashMap;
-use tokio::{
-    sync::{RwLock, mpsc},
-    task::JoinHandle,
-};
-use tracing::debug;
+use futures::{Stream, StreamExt, stream::FuturesUnordered};
 
 use crate::{
-    agent::{AgentHandler, context::AgentContext},
-    event::{ToolCallEvent, ToolCallResultItem, ToolCallStatus},
+    agent::{AgentIdentity, context::AgentContext},
     tool::{
         ToolPackagePool,
         call::ToolCall,
         context::ToolPackageContext,
         core::{ToolPackage, ToolReturn, ToolReturnValue},
+        event::{CallItem, ToolCallEvent, ToolCallResultItem, ToolCallStatus},
     },
 };
 
@@ -69,27 +63,29 @@ impl ToolEngineContext {
 }
 
 pub struct ToolEngine {
-    agent: Arc<dyn AgentHandler>,
+    agent_identity: Arc<AgentIdentity>,
+    agent_context: Arc<AgentContext>,
     context: Arc<ToolEngineContext>,
 }
 impl ToolEngine {
-    pub fn new(agent: Arc<dyn AgentHandler>, context: Arc<ToolEngineContext>) -> Self {
-        Self { agent, context }
+    pub fn new(
+        agent_identity: Arc<AgentIdentity>,
+        agent_context: Arc<AgentContext>,
+        context: Arc<ToolEngineContext>,
+    ) -> Self {
+        Self {
+            agent_identity,
+            agent_context,
+            context,
+        }
     }
     //code格式  package.tool(..args)
-    pub async fn batch_call(
-        &self,
-        calls: Vec<ToolCall>,
-        sender: mpsc::Sender<ToolCallEvent>,
-    ) -> anyhow::Result<()> {
-        // 执行阶段
-        let mut concurrent_tasks: Vec<JoinHandle<()>> = Vec::new();
-        async fn send(
-            sender: mpsc::Sender<ToolCallEvent>,
+    pub async fn batch_call(&self, calls: Vec<ToolCall>) -> impl Stream<Item = ToolCallEvent> {
+        async fn build(
             id: i64,
             res: anyhow::Result<ToolReturn>,
             elapsed: Duration,
-        ) {
+        ) -> ToolCallEvent {
             let mut item: ToolCallResultItem = ToolCallResultItem {
                 id,
                 values: vec![],
@@ -108,56 +104,44 @@ impl ToolEngine {
                     ToolCallEvent::Failure(item)
                 }
             };
-            sender.send(event).await.unwrap();
+            event
         }
+        // 执行阶段
+        let items: Vec<CallItem> = calls
+            .iter()
+            .map(|v| CallItem {
+                id: v.id,
+                package: v.package.name,
+                tool: v.tool.name,
+                args: v.args.clone(),
+            })
+            .collect();
+        async_stream::stream! {
+            let mut workers = FuturesUnordered::new();
+            yield ToolCallEvent::Start(items);
+            for call in calls {
+                let id = call.id;
+                yield ToolCallEvent::Active(id);
 
-        for call in calls {
-            let id = call.id;
-            debug!("{}.{}(...)", call.package.name, call.tool.name);
-            let start = Instant::now();
-            sender.send(ToolCallEvent::Active(call.id)).await.unwrap();
-            //
-            let sender: mpsc::Sender<ToolCallEvent> = sender.clone();
-            let agent_handler = self.agent.clone();
-            let handle = tokio::spawn(async move {
-                let res = call.exec(agent_handler).await;
-                send(sender, id, res, start.elapsed()).await
-            });
-            concurrent_tasks.push(handle);
+                let agent_identity = self.agent_identity.clone();
+                let agent_context = self.agent_context.clone();
+                let start = Instant::now();
+
+                // 将 Future 放入集合，但不立即 await
+                workers.push(async move {
+                    let res = call.exec(agent_identity, agent_context).await;
+                    build(id, res, start.elapsed()).await
+                });
+            }
+
+            // 循环驱动所有 worker，谁先好谁先出来
+            while let Some(event) = workers.next().await {
+                yield event;
+            }
+            yield ToolCallEvent::End;
         }
-        // 回收并发结果
-        for handle in concurrent_tasks {
-            // handle.await 可能会返回 join 错误（例如 panic 了）
-            handle.await?;
-        }
-        Ok(())
     }
-    // pub fn batch_preprocess(&self, codes: Vec<(i64, String)>) -> PreprocessResult {
-    //     //语法解析
-    //     let mut valid_tasks: Vec<ToolCall> = Vec::with_capacity(codes.len());
-    //     let mut invalid = Vec::with_capacity(codes.len());
-    //     for (id, code) in codes {
-    //         match ToolCall::from(id, code.as_str(), self.context.as_ref()) {
-    //             Ok(d) => {
-    //                 valid_tasks.push(d);
-    //             }
-    //             Err(e) => {
-    //                 invalid.push((id, e));
-    //             }
-    //         }
-    //     }
-    //     if !invalid.is_empty() {
-    //         return PreprocessResult::Invalid(invalid);
-    //     }
-    //     PreprocessResult::Valid(valid_tasks)
-    // }
-
     pub fn preprocess(&self, call_id: String, code: &str) -> anyhow::Result<ToolCall> {
-        ToolCall::from(call_id,code, self.context.as_ref())
+        ToolCall::from(call_id, code, self.context.as_ref())
     }
-}
-
-pub enum PreprocessResult {
-    Valid(Vec<ToolCall>),
-    Invalid(Vec<(i64, Error)>),
 }

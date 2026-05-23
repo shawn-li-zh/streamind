@@ -2,7 +2,7 @@ use axum::{Json, extract::Path};
 
 use entity_service::DB;
 
-use kernel::agent::context::PermissionLife;
+use runtime::agent::authority::PermissionLife;
 use serde::Deserialize;
 
 use crate::wrapper::ApiResponse;

@@ -9,38 +9,12 @@ use async_openai::types::chat::{
 };
 
 use base64::{Engine, engine::general_purpose};
-use kernel::agent::context::AgentContext;
+use kernel::{
+    agent::{AgentIdentity, context::AgentContext},
+    tool::engine::{ToolEngine, ToolEngineContext},
+};
 
-pub static GENERATE_RULE: &str = include_str!("../../../prompts/common/generate_rule.md");
-pub static INPUT_FMT: &str = include_str!("../../../prompts/common/input_fmt.md");
-pub static STACK_CONTEXT_RULE: &str = include_str!("../../../prompts/common/stack_context_rule.md");
-pub static TOOL_CALL_RULE: &str = include_str!("../../../prompts/common/tool_call_rule.md");
-pub static RENDER_RULE: &str = include_str!("../../../prompts/common/render_rule.md");
 
-pub fn build_system_prompt(ctx: &AgentContext, agent_code: &str, agent_name: &str) -> String {
-    let items: Vec<String> = ctx
-        .tool_engine_context
-        .tool_packages
-        .iter()
-        .map(|pkg_name| {
-            let pkg = ctx.tool_engine_context.package_pool.get(pkg_name).unwrap();
-            let tool_size = pkg.tools().len();
-            format!("{}(tools:{tool_size}):{}", pkg_name, pkg.annotation)
-        })
-        .collect();
-    let mut lines = vec![];
-    lines.push(format!(
-        "# 基础信息:\n- 编号:{}\n- 名称:{}",
-        agent_code, agent_name,
-    ));
-    lines.push(GENERATE_RULE.trim().to_string());
-    lines.push(INPUT_FMT.trim().to_string());
-    lines.push(STACK_CONTEXT_RULE.trim().to_string());
-    lines.push(TOOL_CALL_RULE.trim().to_string());
-    lines.push(RENDER_RULE.trim().to_string());
-    lines.push(format!("# 工具包列表(全部)\n{}", items.join("\n"),));
-    lines.join("\n\n")
-}
 pub fn assistant_message(content: String) -> ChatCompletionRequestMessage {
     ChatCompletionRequestAssistantMessageArgs::default()
         .content(content)

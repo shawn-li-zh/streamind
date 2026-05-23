@@ -1,11 +1,17 @@
 pub mod agent;
-pub mod event;
+
 pub mod render;
 pub mod section;
 pub mod tool;
 pub mod message;
 pub mod kits;
 pub mod parser;
+pub mod context;
+pub mod client;
+pub mod model;
+pub mod mind;
+pub mod timer;
+pub mod permission;
 
 pub fn simple_id(digit: usize) -> String {
     const ALPHABET: [char; 36] = [

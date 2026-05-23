@@ -9,11 +9,14 @@ use std::{
 use chrono::Local;
 
 use crate::{
-    agent::{AgentHandler, context::AgentContext},
+    agent::{AgentIdentity, context::AgentContext},
     tool::{
         ContextData, Tool, ToolPackage,
         plugin::{
-            interceptor::{ContentSizeLimiter, PermissonChecker, RateLimiter, ToolCallnterceptor},
+            interceptor::{
+                ContentSizeLimiter, PermissonChecker, RateLimiter, ToolAuthority,
+                ToolCallnterceptor,
+            },
             wrapper::TimeoutWrapper,
         },
     },
@@ -30,7 +33,11 @@ pub struct ToolContext {
     pub interceptors: Vec<Box<dyn ToolCallnterceptor + 'static + Send + Sync>>,
 }
 impl ToolContext {
-    pub fn from(agent_context: Arc<AgentContext>, pkg: &'static ToolPackage, tool: &'static Tool) -> Self {
+    pub fn from(
+        agent_context: Arc<AgentContext>,
+        pkg: &'static ToolPackage,
+        tool: &'static Tool,
+    ) -> Self {
         let mut ctx = ToolContext {
             wrapper: TimeoutWrapper {
                 time: Duration::from_secs(*TIME_OUT),
@@ -85,7 +92,8 @@ impl ToolPackageContext {
 
 pub struct ToolCallContext {
     // pub agent_context: Arc<AgentContext>,
-    pub agent: Arc<dyn AgentHandler>,
+    pub agent_identity: Arc<AgentIdentity>,
+    pub agent_context: Arc<AgentContext>,
     pub context_data: ContextData,
     pub workspace: PathBuf,
     pkg: &'static ToolPackage,
@@ -95,16 +103,17 @@ pub struct ToolCallContext {
 
 impl ToolCallContext {
     pub fn new(
-        agent: Arc<dyn AgentHandler>,
+        agent_identity: Arc<AgentIdentity>,
+        agent_context: Arc<AgentContext>,
         context_data: ContextData,
         pkg: &'static ToolPackage,
         tool: &'static Tool,
         call_id: String,
     ) -> Self {
-        let agent_context = agent.context();
-        let workspace = agent_context.worksapce.clone();
+        let workspace = agent_identity.workspace.clone();
         Self {
-            agent,
+            agent_identity,
+            agent_context,
             context_data,
             workspace,
             pkg,
@@ -157,8 +166,7 @@ impl ToolCallContext {
         self.new_file(&path)
     }
     pub fn has_permission(&self, code: &str, sub_code: Option<&str>) -> bool {
-        self.agent
-            .authority()
-            .has_permission(code, sub_code)
+        let auth = self.agent_context.get::<ToolAuthority>().unwrap();
+        auth.has_permission(code, sub_code)
     }
 }

@@ -4,6 +4,7 @@ pub mod core;
 pub mod engine;
 
 pub mod plugin;
+pub mod event;
 
 pub mod value_type;
 pub use context::ToolCallContext;
