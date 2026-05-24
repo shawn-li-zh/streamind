@@ -27,6 +27,9 @@ sea-orm = { version = "2.0.0-rc.37", features = [
     "schema-sync",
     "entity-registry",
 ] }
+
+# 用于加载 SQLite 向量扩展
+sqlite-vec = "0.1" 
 anyhow = "1"
 
 reqwest = { version = "0.12", features = ["json", "rustls-tls","stream"] }

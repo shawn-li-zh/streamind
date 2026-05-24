@@ -13,6 +13,7 @@ pub mod event;
 pub mod model;
 pub mod section;
 pub mod state;
+pub mod concept;
 
 pub static DB: OnceLock<DatabaseConnection> = OnceLock::new();
 
@@ -27,6 +28,11 @@ pub async fn init() -> anyhow::Result<()> {
 
     let db = Database::connect(opt).await.expect("数据库连接失败");
     db.get_schema_registry("entity::*").sync(&db).await?;
+    sea_orm::ConnectionTrait::execute_unprepared(
+        &db,
+        "SELECT load_extension('sqlite_vec0');", // 确保你的环境下能找到该扩展
+    )
+    .await?;
     DB.set(db).unwrap();
     //重写前端导入映射
     dependence::rewrite_manifest().await?;

@@ -12,6 +12,7 @@ pub mod model;
 pub mod mind;
 pub mod timer;
 pub mod permission;
+pub mod embedding;
 
 pub fn simple_id(digit: usize) -> String {
     const ALPHABET: [char; 36] = [

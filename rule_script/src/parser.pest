@@ -1,0 +1,41 @@
+// 1. 空白符规则
+WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
+
+// 2. 基础数据类型定义
+boolean = { "true" | "false" }
+string  = ${ "\"" ~ inner ~ "\"" }
+inner   = @{ (!"\"" ~ ANY)* }
+// 匹配整数与小数（由于你定义的是 u32，因此不支持负号）
+number  = @{ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? }
+
+// 3. 函数和参数定义
+// 任意合法的函数名，例如: aaa, function_1
+ident = @{ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
+// 参数可以是 字符串、布尔值 或 数字
+arg_value = _{ string | boolean | number }
+args = { (arg_value ~ ("," ~ arg_value)*)? }
+func = { ident ~ "(" ~ args ~ ")" }
+
+// 4. 运算符定义
+not_op = { "!" }
+add_op = { "+" | "-" }
+mul_op = { "*" | "/" | "%" }
+pow_op = { "^" }
+// 注意：双字符比较符要放在单字符前面，否则 >= 会被当作 > 解析而报错
+cmp_op = { ">=" | "<=" | "==" | "!=" | ">" | "<" }
+and_op = { "&" }
+or_op  = { "|" }
+
+// 5. 表达式递归下降 (处理优先级，越靠下的优先级越低)
+primary = _{ func | boolean | number | "(" ~ or_expr ~ ")" }
+
+unary_expr = { not_op* ~ primary }
+pow_expr   = { unary_expr ~ (pow_op ~ unary_expr)* }
+mul_expr   = { pow_expr ~ (mul_op ~ pow_expr)* }
+add_expr   = { mul_expr ~ (add_op ~ mul_expr)* }
+cmp_expr   = { add_expr ~ (cmp_op ~ add_expr)* }
+and_expr   = { cmp_expr ~ (and_op ~ cmp_expr)* }
+or_expr    = { and_expr ~ (or_op ~ and_expr)* }
+
+// 6. 入口点
+main = _{ SOI ~ or_expr ~ EOI }

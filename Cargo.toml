@@ -12,7 +12,7 @@ members = [
     "runtime",
     "entity_service",
     "web",
-    "reflection",
+    "reflection", "rule_script",
 ]
 [dependencies]
 entity = { path = "entity" }
@@ -20,6 +20,7 @@ entity_service = { path = "entity_service" }
 kernel = { path = "kernel" }
 runtime = { path = "runtime" }
 web = { path = "web" }
+reflection = { path = "reflection" }
 # tool_core = { path = "tool/tool_core" }
 tool_pkg = { path = "tool/tool_pkg" }
 

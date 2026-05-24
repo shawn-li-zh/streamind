@@ -5,6 +5,10 @@ edition = "2024"
 
 [dependencies]
 kernel = { path = "../kernel" }
+runtime = { path = "../runtime" }
+entity = { path = "../entity" }
+entity_service = { path = "../entity_service" }
+rule_script = { path = "../rule_script" }
 # 异步库
 tokio = { version = "1", features = ["full"] }
 async-trait = "0.1"
@@ -27,7 +31,7 @@ thiserror = "2.0.18"
 pest = "2.8.6"
 pest_derive = "2.8.6"
 
-
+rust_decimal = { version = "1.34", features = ["serde", "maths"] }
 regex = "1"
 chrono = "0.4.44"
-rayon = "1.8"        # 用于并行计算
+rayon = "1.8"                                                      # 用于并行计算
