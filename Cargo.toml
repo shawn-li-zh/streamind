@@ -12,7 +12,8 @@ members = [
     "runtime",
     "entity_service",
     "web",
-    "reflection", "rule_script",
+    "rule_script",
+    "reflection",
 ]
 [dependencies]
 entity = { path = "entity" }
@@ -53,7 +54,6 @@ axum = { version = "0.8.9", features = ["default"] }
 
 # 工具库
 dashmap = "6.1.0"
-rand = "0.8"
 humantime = "2.1" # 可读时间
 regex = "1"
 chrono = "0.4.44"
@@ -61,8 +61,8 @@ dotenvy = "0.15"
 
 # 定时任务
 tokio-cron-scheduler = "0.15.1"
-uuid ={version = "1",features = ["v4"]}
-notify = "6"         # 文件系统监视
+uuid = { version = "1", features = ["v4"] }
+notify = "6"                                # 文件系统监视
 scopeguard = "1.2.0"
 [dev-dependencies]
 cargo-nextest = "0.9"

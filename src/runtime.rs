@@ -1,8 +1,14 @@
-use std::{backtrace::Backtrace, collections::HashMap, mem::take, sync::Arc, time::{Duration, Instant}};
+use std::{
+    backtrace::Backtrace,
+    collections::HashMap,
+    mem::take,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use anyhow::Context as _;
 use chrono::{DateTime, Local};
-use entity::event::EnvEventStatus;
+use entity::event::{self, EnvEventStatus};
 use entity_service::DB;
 use futures::StreamExt;
 use kernel::{
@@ -35,6 +41,7 @@ use tracing::{error, info, warn};
 
 use crate::{
     agent::{AppAgent, WebSender},
+    logger::AgentLogger,
     plugin::{heartbeat::HeartbeatRunner, scheduler::AgentSchedulerRunner},
     sse_event::{ServerEvent, WebEvent},
 };
@@ -46,12 +53,14 @@ pub struct AgentRuntime {
     heartbeat: HeartbeatRunner,
     scheduler_runner: AgentSchedulerRunner,
     gen_sender: watch::Sender<bool>,
+    logger: Arc<AgentLogger>,
 }
 impl AgentRuntime {
     pub fn new(
         agent: Arc<AppAgent>,
         event_loop: EventLoop,
         agent_outlet: AgentOutlet<AppEnvEvent>,
+        logger: Arc<AgentLogger>,
         heartbeat: HeartbeatRunner,
         scheduler_runner: AgentSchedulerRunner,
         gen_sender: watch::Sender<bool>,
@@ -63,6 +72,7 @@ impl AgentRuntime {
             heartbeat,
             scheduler_runner,
             gen_sender,
+            logger,
         }
     }
     pub fn start(mut self) {
@@ -99,6 +109,7 @@ impl AgentRuntime {
             response_sections: vec![],
             gen_sender: self.gen_sender,
             web_sender: self.agent.web_sender.clone(),
+            logger: self.logger,
             tool_engine: Arc::new(ToolEngine::new(
                 self.agent.identity(),
                 self.agent.context(),
@@ -155,6 +166,7 @@ struct GenerateWorker {
     response_sections: Vec<Section>,
     web_sender: Arc<WebSender>,
     tool_engine: Arc<ToolEngine>,
+    logger: Arc<AgentLogger>,
     gen_sender: watch::Sender<bool>,
 }
 impl GenerateWorker {
@@ -255,17 +267,25 @@ impl GenerateWorker {
                     .await?;
                     //直接追加到上下文里
                     let event_context = self.agent.event_context();
-                    event_context.push_event(AppEnvEvent {
-                        id: self.response_event_id,
-                        data: AppEnvEventData::AgentResponse(sections),
-                        force: false,
-                        time: self.start_time,
-                    });
+                    let event = {
+                        let data = AppEnvEventData::AgentResponse(sections);
+                        let size = data.size();
+                        AppEnvEvent {
+                            id: self.response_event_id,
+                            data: data,
+                            force: false,
+                            time: self.start_time,
+                            size,
+                        }
+                    };
+                    self.logger.log_event(&event).await?;
+                    event_context.push_event(event);
                 }
                 let has_events = events.len() > 0;
                 println!("call end...{}", events.len());
                 for ele in events {
                     let event = self.agent.save_event(ele).await?;
+                    self.logger.log_event(&event).await?;
                     self.agent.send_cmd(CommandEvent::Event(event)).await?;
                 }
                 if has_events {

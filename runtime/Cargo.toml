@@ -15,6 +15,7 @@ async-openai = { version = "0.38.1", features = [
     "chat-completion",
     "assistant",
     "byot",
+    "embedding",
 ] }
 # 锁
 parking_lot = "0.12.5"
@@ -36,6 +37,8 @@ tracing = "0.1"
 axum = { version = "0.8.9", features = ["default"] }
 # 定时任务
 tokio-cron-scheduler = "0.15.1"
+# 网络
+reqwest = { version = "0.12", features = ["json", "rustls-tls","stream","multipart"] }
 # 工具库
 chrono = "0.4.44"
 dashmap = "6.1.0"
@@ -45,3 +48,5 @@ scopeguard = "1.2.0"
 derive_builder = "0.20"
 typed-builder = "0.23.2"
 uuid = { version = "1", features = ["v4"] }
+
+mime_guess = "2.0.5"

@@ -1,9 +1,16 @@
 use async_trait::async_trait;
-
+use futures::future::BoxFuture;
 
 use crate::operator::EventElement;
 use rule_script::*;
-pub struct Similar;
+pub struct Similar(
+    pub  Box<
+        dyn Fn(&str) -> BoxFuture<'static, anyhow::Result<Option<Vec<f32>>>>
+            + Send
+            + Sync
+            + 'static,
+    >,
+);
 #[async_trait]
 impl Predicate<EventElement> for Similar {
     fn name(&self) -> &'static str {
@@ -12,12 +19,17 @@ impl Predicate<EventElement> for Similar {
 
     async fn test(&self, element: &EventElement, args: &[ArgValue]) -> anyhow::Result<TestValue> {
         let concept_key = args[0].clone().must_string()?;
-        let res = entity_service::concept::find_by_name(&concept_key, true)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("Concept not found"))?;
-        let vec = res.embedding.unwrap_or_default();
-        let cos=cosine_similarity(&vec.0, &element.embedding);
-        Ok(TestValue::Number(rust_decimal::Decimal::from_f64_retain(cos).unwrap_or_default()))
+        let res = (&self.0)(&concept_key).await?;
+        let vec = match res {
+            Some(v) => v,
+            None => {
+                anyhow::bail!("No embedding found for {}", concept_key)
+            }
+        };
+        let cos = cosine_similarity(&vec, &element.embedding);
+        Ok(TestValue::Number(
+            rust_decimal::Decimal::from_f64_retain(cos).unwrap_or_default(),
+        ))
     }
 }
 

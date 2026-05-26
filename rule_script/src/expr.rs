@@ -106,8 +106,6 @@ pub enum Expr {
     //函数 名称 参数
     Func(String, Vec<ArgValue>),
     Not(Box<Expr>),
-    // And(Box<Expr>, Box<Expr>),
-    // Or(Box<Expr>, Box<Expr>),
     Binary {
         left: Box<Expr>,
         op: BinOperator,

@@ -15,6 +15,9 @@ mod event;
 mod status;
 mod event_context;
 mod runtime;
+mod logger;
+mod task;
+
 // mod web;
 
 #[tokio::main]

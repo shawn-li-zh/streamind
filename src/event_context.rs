@@ -45,13 +45,7 @@ pub async fn load_stack(
     }
     //
     let sp = build_system_prompt(identity, ctx);
-    let path = workspace.join("log.txt");
-    let file = File::options()
-        .write(true)
-        .truncate(true)
-        .create(true)
-        .open(path)?;
-    let stack = StackContext::new(client, sp, file);
+    let stack = StackContext::new(client, sp);
     for state in states {
         let node = MindNode {
             node: Node {

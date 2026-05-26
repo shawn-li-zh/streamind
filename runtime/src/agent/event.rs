@@ -13,6 +13,8 @@ use kernel::{
     tool::core::ToolReturnValue,
 };
 
+use crate::agent::reflect::{ReflectData, ReflectEvent};
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TimerData {
     pub id: i64,
@@ -64,12 +66,32 @@ pub enum AppEnvEventData {
     Error(String),
     //中断信号
     Interrupt(String),
+    Reflection(ReflectEvent),
 }
 impl AppEnvEventData {
     pub fn to_infos(self) -> Vec<Information> {
         match self {
             AppEnvEventData::AgentResponse(sections) => {
                 sections.into_iter().map(|s| s.to_string().into()).collect()
+            }
+            AppEnvEventData::Reflection(event) => {
+                let mut infos = vec![];
+                infos.push(
+                    format!(
+                        "<reflect source_event_id={} level={}>",
+                        event.source_event_id, event.level
+                    )
+                    .into(),
+                );
+                let datas: Vec<_> = event
+                    .datas
+                    .into_iter()
+                    .map(|v| v.to_statement())
+                    .map(|s| s.into())
+                    .collect();
+                infos.extend(datas);
+                infos.push(format!("</reflect>",).into());
+                infos
             }
             AppEnvEventData::UserRequest(content) => {
                 let mut list: Vec<Information> = content
@@ -148,6 +170,7 @@ impl AppEnvEventData {
             AppEnvEventData::Error(_) => "异常",
             AppEnvEventData::Interrupt(_) => "中断信号",
             AppEnvEventData::Interaction(_) => "UI交互事件",
+            AppEnvEventData::Reflection(_) => "条件反射",
         };
         name.to_string()
     }
@@ -161,21 +184,55 @@ impl AppEnvEventData {
             AppEnvEventData::Error(_) => "error",
             AppEnvEventData::Interrupt(_) => "interrupt",
             AppEnvEventData::Interaction(_) => "interaction",
+            AppEnvEventData::Reflection(_) => "reflection",
         };
         name.to_string()
     }
+    pub fn size(&self) -> usize {
+        match self {
+            AppEnvEventData::AgentResponse(sections) => sections
+                .iter()
+                .map(|s| s.content.len() + s.header.len())
+                .sum::<usize>(),
+            AppEnvEventData::UserRequest(content) => content.content.len(),
+            AppEnvEventData::Heartbeat => 0,
+            AppEnvEventData::Timer(data) => data.payload.len(),
+            AppEnvEventData::ToolResponse(result) => result
+                .values
+                .iter()
+                .map(|v| match v {
+                    ToolReturnValue::Ignore => 0,
+                    ToolReturnValue::Raw(r) => r.len(),
+                    ToolReturnValue::Json(value) => value.to_string().len(),
+                    ToolReturnValue::Image(binary) => binary.size,
+                })
+                .sum::<usize>(),
+            AppEnvEventData::Interaction(interaction_data) => interaction_data.message.len(),
+            AppEnvEventData::Error(e) => e.len(),
+            AppEnvEventData::Interrupt(r) => r.len(),
+            AppEnvEventData::Reflection(event) => event
+                .datas
+                .iter()
+                .map(|s| s.content.len() + s.name.len())
+                .sum::<usize>(),
+        }
+    }
 }
+#[derive(Debug, Clone)]
 pub struct AppEnvEvent {
     pub id: i64,
     pub data: AppEnvEventData,
     pub force: bool,
+    pub size: usize,
     pub time: chrono::DateTime<chrono::Local>,
 }
 impl EnvEvent for AppEnvEvent {
     fn id(&self) -> i64 {
         self.id
     }
-
+    fn size(&self) -> usize {
+        self.size
+    }
     fn to_message(&self) -> RoleMessage {
         if let AppEnvEventData::AgentResponse(sections) = &self.data {
             let infos: Vec<Information> = sections

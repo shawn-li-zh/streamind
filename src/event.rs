@@ -10,6 +10,7 @@ pub mod convert {
     pub fn to_json(event: &AppEnvEventData) -> serde_json::Value {
         match event {
             AppEnvEventData::AgentResponse(sections) => json!(sections),
+            AppEnvEventData::Reflection(event) => json!(event),
             AppEnvEventData::Heartbeat => json!(()),
             AppEnvEventData::UserRequest(msg) => {
                 json!(msg)
@@ -41,7 +42,9 @@ pub mod convert {
             EnvEventType::AgentResponse => {
                 AppEnvEventData::AgentResponse(serde_json::from_value(payload).unwrap())
             }
-
+            EnvEventType::Reflection => {
+                AppEnvEventData::Reflection(serde_json::from_value(payload).unwrap())
+            }
             EnvEventType::UserRequest => {
                 let msg: UserMessage = serde_json::from_value(payload).unwrap();
                 AppEnvEventData::UserRequest(msg)
@@ -72,6 +75,7 @@ pub mod convert {
             data: from_json(event.event_type, event.data),
             force: event.force,
             time: event.time,
+            size: event.size as _,
         }
     }
     pub fn to_type_enum(event: &AppEnvEventData) -> EnvEventType {
@@ -84,6 +88,7 @@ pub mod convert {
             AppEnvEventData::Error(_) => EnvEventType::Error,
             AppEnvEventData::Interrupt(_) => EnvEventType::Interrupt,
             AppEnvEventData::Interaction(_) => EnvEventType::Interaction,
+            AppEnvEventData::Reflection(_) => EnvEventType::Reflection,
         }
     }
 }

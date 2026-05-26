@@ -4,7 +4,9 @@ pub mod engine;
 
 #[cfg(test)]
 mod tests {
-    use async_trait::async_trait;
+    use std::sync::Arc;
+
+use async_trait::async_trait;
 
     use crate::{core::engine::ScriptEngine, expr::{ArgValue, BinOperator, Expr}, pred::{Predicate, TestValue}};
 
@@ -155,24 +157,24 @@ mod tests {
     }
     #[tokio::test]
     async fn test_parse_rule() {
-        let engine = init_engine();
-        let element = init_element();
+        let engine = Arc::new(init_engine());
+        let element = Arc::new(init_element());
         {
             let expr = r#"contains("f")"#;
-            let res = engine.evaluate(&vec![expr], &element).await;
+            let res = engine.clone().evaluate(&vec![expr], element.clone()).await;
             assert!(res.is_ok());
             assert_eq!(res.unwrap()[0], TestValue::Bool(true));
         }
 
         {
             let expr = r#"contains("f") & contains("o") | !contains("bar")"#;
-            let res = engine.evaluate(&vec![expr], &element).await;
+            let res = engine.clone().evaluate(&vec![expr],  element.clone()).await;
             assert!(res.is_ok());
             assert_eq!(res.unwrap()[0], TestValue::Bool(true));
         }
         {
             let expr = r#"age()<10 & contains("o")"#;
-            let res = engine.evaluate(&vec![expr], &element).await;
+            let res = engine.clone().evaluate(&vec![expr],  element.clone()).await;
             assert!(res.is_ok());
             assert_eq!(res.unwrap()[0], TestValue::Bool(false));
         }

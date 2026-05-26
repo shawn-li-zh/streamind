@@ -23,6 +23,8 @@ pub struct Model {
     pub status: EnvEventStatus,
     #[sea_orm(not_null)]
     pub force: bool,
+    #[sea_orm(not_null)]
+    pub size: i64,
     #[sea_orm(column_type = "Text", not_null)]
     pub data: serde_json::Value,
     #[sea_orm(default_value = "0")]
@@ -51,6 +53,7 @@ pub enum EnvEventType {
     Timer,
     Interrupt,
     Interaction,
+    Reflection,
 }
 impl Display for EnvEventType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

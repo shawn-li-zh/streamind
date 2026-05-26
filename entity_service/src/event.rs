@@ -84,6 +84,7 @@ pub async fn save(
     event_type: EnvEventType,
     event: serde_json::Value,
     force: bool,
+    size: usize,
 ) -> anyhow::Result<entity::event::Model> {
     let event_model = entity::event::ActiveModel {
         agent_id: Set(agent_id),
@@ -94,6 +95,7 @@ pub async fn save(
         time: Set(Local::now()),
         data: Set(event),
         status: Set(EnvEventStatus::Pending),
+        size: Set(size as _),
         ..Default::default()
     };
     let model: entity::event::Model = event_model.insert(db).await?;

@@ -14,6 +14,7 @@ pub mod model;
 pub mod section;
 pub mod state;
 pub mod concept;
+pub mod rule;
 
 pub static DB: OnceLock<DatabaseConnection> = OnceLock::new();
 

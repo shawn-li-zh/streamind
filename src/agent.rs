@@ -13,23 +13,28 @@ use futures::FutureExt as _;
 use kernel::{
     agent::{
         context::{AgentContext, AgentStatus},
+        event::EnvEvent,
         port::AgentOutlet,
         AgentIdentity, AgentOutfit,
     },
+    message::Information,
     mind::port::CommandEvent,
     tool::engine::ToolEngineContext,
 };
 use parking_lot::RwLock;
+use reflection::{engine::engine::RuleEngine, operator::EventElement};
 use runtime::agent::{
     authority::{AgentAuthorityContext, AgentPermission, PermissionLife},
     event::{AppEnvEvent, AppEnvEventData},
     event_context::StackContext,
     instance::{build_agent_instance, AgentInstance, EventLoop},
+    reflect::{ReflectData, ReflectEvent},
     scheduler::{AgentSchedulerContext, AgentTimer},
 };
 
 use tokio::sync::{
-    Mutex, mpsc::{self, Receiver}, watch
+    mpsc::{self, Receiver},
+    watch, Mutex,
 };
 use tool_pkg::timer::TimerInjected;
 use tracing::{error, info, warn};
@@ -37,10 +42,12 @@ use tracing::{error, info, warn};
 use crate::{
     event::convert,
     event_context::load_stack,
-    global::{AGENT_POOL, ENGINE_POOL, TOOL_PACKAGE_TOOL},
+    global::{AGENT_POOL, EMBEDDING_CLIENT, ENGINE_POOL, TOOL_PACKAGE_TOOL},
+    logger::{self, AgentLogger},
     plugin::{
         authority::AgentAuthority,
         heartbeat::{Heartbeat, HeartbeatRunner},
+        reflect,
         scheduler::{AgentScheduler, AgentSchedulerRunner},
     },
     runtime::AgentRuntime,
@@ -51,13 +58,22 @@ pub struct AppAgent {
     pub(crate) heartbeat: Arc<Heartbeat>,
     pub(crate) web_sender: Arc<WebSender>,
     gen_watcher: Mutex<watch::Receiver<bool>>,
+    logger: Arc<AgentLogger>,
+    pub(crate) reflect_engine: Arc<RuleEngine<ReflectData>>,
 }
 impl AppAgent {
     pub async fn new(model: entity::agent::Model) -> (Arc<Self>, AgentRuntime) {
-        let (instance, event_loop, outlet, timer_rx) = build_instance(model).await;
+        let (instance, event_loop, outlet, timer_rx) = build_instance(&model).await;
         let instance = Arc::new(instance);
         let heartbeat = Arc::new(Heartbeat::new());
         let gen = watch::channel(false);
+        let reflect_engine: RuleEngine<ReflectData> =
+            reflect::load_reflection_engine(&model).await.unwrap();
+        //日志
+        let logger = AgentLogger::new(&instance.identity().workspace)
+            .await
+            .unwrap();
+        let logger = Arc::new(logger);
         let agent = AppAgent {
             instance: instance.clone(),
             heartbeat: heartbeat.clone(),
@@ -65,8 +81,12 @@ impl AppAgent {
                 inner: RwLock::new(None),
             }),
             gen_watcher: Mutex::new(gen.1),
+            logger: logger.clone(),
+            reflect_engine: Arc::new(reflect_engine),
         };
+
         let agent = Arc::new(agent);
+
         //
         let heartbeat_runner = HeartbeatRunner::new(heartbeat, agent.clone());
         let runner = AgentSchedulerRunner::new(agent.clone(), timer_rx);
@@ -74,6 +94,7 @@ impl AppAgent {
             agent.clone(),
             event_loop,
             outlet,
+            logger,
             heartbeat_runner,
             runner,
             gen.0,
@@ -83,7 +104,7 @@ impl AppAgent {
     }
 }
 #[async_trait]
-impl AgentOutfit<AppEnvEvent, StackContext<AppEnvEvent>, ()> for AppAgent {
+impl AgentOutfit<AppEnvEvent, StackContext<AppEnvEvent>> for AppAgent {
     async fn send_cmd(&self, cmd: CommandEvent<AppEnvEvent>) -> anyhow::Result<()> {
         //发送给代理
         self.instance.send_cmd(cmd).await?;
@@ -120,25 +141,39 @@ impl AppAgent {
             }
             AppEnvEventData::ToolResponse(_)
             | AppEnvEventData::Interaction(_)
-            | AppEnvEventData::Heartbeat => {}
+            | AppEnvEventData::Reflection(_)
+            | AppEnvEventData::Heartbeat => {
+                //忽略
+            }
             _ => {
                 self.web_sender
                     .send(WebEvent::Env(env_event.data.clone(), id));
             }
         }
         info!("AgentEvent: {:?}", &env_event.data);
+        //反射
+        let reflection = event_reflect(self.reflect_engine.clone(), &env_event).await?;
+        let reflection = reflection.map(|v| AppEnvEventData::Reflection(v));
         //发送给代理
         if env_event.force {
             self.instance.send_cmd(CommandEvent::Canceled).await?;
         }
-        {
-            //等待生成完成
-            let mut gen = self.gen_watcher.lock().await;
-            gen.wait_for(|v| !*v).await?;
-        }
+        //等待生成完成
+        let mut gen = self.gen_watcher.lock().await;
+        gen.wait_for(|v| !*v).await?;
+        //记录日志
+        self.logger.log_event(&env_event).await?;
         self.instance
             .send_cmd(CommandEvent::Event(env_event))
             .await?;
+        //注入反射事件
+        if let Some(reflection) = reflection {
+            let env_event = self.save_event((reflection, false)).await?;
+            self.logger.log_event(&env_event).await?;
+            self.instance
+                .send_cmd(CommandEvent::Event(env_event))
+                .await?;
+        }
         self.instance.send_cmd(CommandEvent::Generate).await?;
         self.heartbeat.disable();
         Ok(id)
@@ -160,18 +195,64 @@ impl AppAgent {
             };
             let ty = convert::to_type_enum(&data);
             let value = convert::to_json(&data);
-            entity_service::event::save(db, identity.id(), state_id, ty, value, force).await?
+            entity_service::event::save(db, identity.id(), state_id, ty, value, force, data.size())
+                .await?
         };
         let env_event = AppEnvEvent {
             id: model.id,
             data: data,
             force,
             time: model.time,
+            size: model.size as _,
         };
         return Ok(env_event);
     }
 }
+//事件反射
+pub async fn event_reflect(
+    reflect_engine: Arc<RuleEngine<ReflectData>>,
+    event: &AppEnvEvent,
+) -> anyhow::Result<Option<ReflectEvent>> {
+    let mut source_event_id = event.id;
+    let mut level = 1;
+    match &event.data {
+        AppEnvEventData::Reflection(ev) => {
+            level = ev.level + 1;
+            if level > 2 {
+                //最多反射两层
+                return Ok(None);
+            }
+            source_event_id = ev.source_event_id;
+        }
+        _ => {}
+    }
+    //
+    let (text, _paths) = event.to_message().to_tuple();
+    let client = EMBEDDING_CLIENT.get().unwrap().clone();
+    let mut vec = client
+        .batch_embed(vec![Information::Text(text.clone())])
+        .await?;
+    let embedding = vec.remove(0);
+    let element = EventElement {
+        event_type: event.data.code(),
+        time: event.time.format("%Y-%m-%d %H:%M:%S").to_string(),
+        force: event.force,
+        context: text,
+        embedding,
+    };
+    // 触发反射引擎 就会报错
+    let datas = reflect_engine.trigger(element).await?;
+    if datas.is_empty() {
+        return Ok(None);
+    }
 
+    let event = ReflectEvent {
+        source_event_id,
+        level,
+        datas,
+    };
+    Ok(Some(event))
+}
 pub struct WebSender {
     inner: RwLock<Option<mpsc::UnboundedSender<sse::Event>>>,
 }
@@ -197,7 +278,7 @@ impl WebSender {
 }
 
 pub async fn build_instance(
-    agent: entity::agent::Model,
+    agent: &entity::agent::Model,
 ) -> (
     AgentInstance,
     EventLoop,

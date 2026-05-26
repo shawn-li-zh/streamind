@@ -14,4 +14,4 @@ pub mod concept;
 
 pub mod format;
 pub mod rule_group;
-pub mod trigger_rule;
+pub mod rule_item;

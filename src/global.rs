@@ -7,14 +7,18 @@ use async_openai::{config::OpenAIConfig, Client};
 
 use entity::model::ModelStatus;
 
-use kernel::{client::ChatClient, tool::ToolPackagePool};
+use kernel::{
+    client::ChatClient,
+    embedding::{self, EmbeddingClient},
+    tool::ToolPackagePool,
+};
 
 use parking_lot::RwLock;
 use tokio_cron_scheduler::{Job, JobScheduler};
 
-use runtime::llm::deepseek::DeepseekClient;
+use runtime::{embedding::doubao::DoubaoEmbedding, llm::deepseek::DeepseekClient};
 
-use crate::agent::AppAgent;
+use crate::{agent::AppAgent, task};
 //全局agent池
 pub static AGENT_POOL: LazyLock<RwLock<HashMap<u32, Arc<AppAgent>>>> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
@@ -23,7 +27,7 @@ pub static ENGINE_POOL: LazyLock<RwLock<HashMap<u32, Arc<dyn ChatClient + Sync +
     LazyLock::new(|| RwLock::new(HashMap::new()));
 pub static TOOL_PACKAGE_TOOL: LazyLock<ToolPackagePool> = LazyLock::new(|| tool_pkg::tool_pool());
 pub(crate) static SCHEDULER: OnceLock<JobScheduler> = OnceLock::new();
-
+pub static EMBEDDING_CLIENT: OnceLock<Arc<dyn EmbeddingClient>> = OnceLock::new();
 pub async fn init() -> anyhow::Result<()> {
     // 初始化引擎
     let models = entity_service::model::query(None, None, Some(ModelStatus::Active)).await?;
@@ -41,16 +45,31 @@ pub async fn init() -> anyhow::Result<()> {
         };
         p.insert(model.id, Arc::new(engine));
     }
+    //初始化嵌入模型
+    {
+        let api_key = std::env::var("EMBEDDING_API_KEY")?;
+        let api_url = std::env::var("EMBEDDING_API_URL")?;
+        let model = std::env::var("EMBEDDING_MODEL")?;
+        let dim = std::env::var("EMBEDDING_DIM")
+            .map(|v| v.parse::<u32>().map_err(|e| anyhow::anyhow!(e)))
+            .map_err(|e| anyhow::anyhow!(e))
+            .flatten()?;
+        let embedding = DoubaoEmbedding::new(api_key, api_url, model, dim);
+        if let Err(set) = EMBEDDING_CLIENT.set(Arc::new(embedding)) {
+            anyhow::bail!("初始化向量模型失败");
+        }
+    }
     //初始化定时调度器
     {
         let scheduler: JobScheduler = JobScheduler::new().await?;
         if let Err(_) = SCHEDULER.set(scheduler) {
             anyhow::bail!("初始化定时调度器失败");
         }
+        task::init().await;
     }
+
     //初始化agent
     let agents = entity_service::agent::list_by_model_ids(model_ids).await?;
-
     {
         let mut p = AGENT_POOL.write();
         for agent_info in agents {

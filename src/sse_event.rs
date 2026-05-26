@@ -53,6 +53,7 @@ impl WebEvent {
                 AppEnvEventData::AgentResponse(_)
                 | AppEnvEventData::Interaction(_)
                 | AppEnvEventData::Heartbeat
+                | AppEnvEventData::Reflection(_)
                 | AppEnvEventData::ToolResponse(_) => {
                     unreachable!("调用出错")
                 }

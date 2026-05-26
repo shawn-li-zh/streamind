@@ -1,16 +1,18 @@
-use rule_script::{Expr, core::evaluate::Operators};
+use std::sync::Arc;
 
-pub struct Rule {
-    pub id: i64,
+use rule_script::{
+    Expr,
+    evaluate::{self, Operators},
+};
+#[derive(Clone)]
+pub struct Rule<T: Clone> {
     pub expr: Expr,
     //反射内容
-    pub content: String,
-    pub time: chrono::DateTime<chrono::Local>,
+    pub data: T,
 }
-pub struct RuleGroup {
-    pub id: i64,
+pub struct RuleGroup<T: Clone> {
     pub name: String,
-    pub operators: Operators,
-    pub rules: Vec<Rule>,
-    pub exprs: Vec<Expr>,
+    pub operators: Arc<Operators>,
+    pub rules: Vec<Rule<T>>,
+    pub exprs: Arc<Vec<Expr>>,
 }

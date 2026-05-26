@@ -101,15 +101,13 @@ impl<E> StackContextInner<E> {
 
 pub struct StackContext<E> {
     pub system_prompt: RoleMessage,
-    pub log_file: Mutex<File>,
     pub client: Arc<dyn ChatClient>,
     inner: RwLock<StackContextInner<E>>,
 }
 impl<E> StackContext<E> {
-    pub fn new(client: Arc<dyn ChatClient>, system_prompt: String, log_file: File) -> Self {
+    pub fn new(client: Arc<dyn ChatClient>, system_prompt: String) -> Self {
         Self {
             client,
-            log_file: Mutex::new(log_file),
             system_prompt: RoleMessage::System(vec![system_prompt.into()]),
             inner: RwLock::new(StackContextInner::new()),
         }
@@ -184,17 +182,8 @@ impl<E: EnvEvent> StackContext<E> {
         msgs
     }
     pub fn push_event(&self, event: E) {
-        let mut size = 0;
-        {
-            let msg = event.to_message();
-            let role = msg.role();
-            size += msg.size();
-            let (text, _) = msg.to_tuple();
-            let s = format!("\n{:?}:\n{}\n", role, text);
-            let mut log_file = self.log_file.lock();
-            log_file.write(s.as_bytes()).unwrap();
-            log_file.flush().unwrap();
-        }
+        let size = event.size();
+
         let mut inner = self.inner.write();
         inner.content_len += size;
         let node: &mut MindNode<E> = inner.last_mut().unwrap();
@@ -202,12 +191,12 @@ impl<E: EnvEvent> StackContext<E> {
     }
 
     pub fn push_node(&self, node: MindNode<E>) {
-        {
-            let s = format!("\n{:?}:\n{}\n", Role::Assistant, &node.statement());
-            let mut log_file = self.log_file.lock();
-            log_file.write(s.as_bytes()).unwrap();
-            log_file.flush().unwrap();
-        }
+        // {
+        //     let s = format!("\n{:?}:\n{}\n", Role::Assistant, &node.statement());
+        //     let mut log_file = self.log_file.lock();
+        //     log_file.write(s.as_bytes()).unwrap();
+        //     log_file.flush().unwrap();
+        // }
         let mut inner = self.inner.write();
 
         //

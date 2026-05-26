@@ -1,6 +1,9 @@
 use async_trait::async_trait;
 
-use crate::operator::EventElement;
+use crate::{
+ 
+    operator::EventElement,
+};
 use rule_script::*;
 pub struct EventTypeIs;
 #[async_trait]

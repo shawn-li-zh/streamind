@@ -46,8 +46,8 @@ impl AgentIdentity {
     }
 }
 #[async_trait]
-pub trait AgentOutfit<E, C, ER> {
-    async fn send_cmd(&self, cmd: CommandEvent<E>) -> anyhow::Result<ER>;
+pub trait AgentOutfit<E, C>: Send + Sync + 'static {
+    async fn send_cmd(&self, cmd: CommandEvent<E>) -> anyhow::Result<()>;
 
     fn event_context(&self) -> Arc<C>;
     fn context(&self) -> Arc<AgentContext>;
@@ -92,7 +92,7 @@ impl<E: EnvEvent, C: EventContext<E>> Agent<E, C> {
 }
 
 #[async_trait]
-impl<E: EnvEvent, C: EventContext<E>> AgentOutfit<E, C, ()> for Agent<E, C> {
+impl<E: EnvEvent, C: EventContext<E>> AgentOutfit<E, C> for Agent<E, C> {
     async fn send_cmd(&self, cmd: CommandEvent<E>) -> anyhow::Result<()> {
         self.mind_inlet.send(cmd).await?;
         Ok(())

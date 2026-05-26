@@ -25,6 +25,8 @@ pub struct Model {
     pub avatar: String,
     #[sea_orm(column_type = "Text", default_value = "[]")]
     pub tool_packages: StringArray,
+    #[sea_orm(column_type = "Text", default_value = "[]")]
+    pub rule_groups: StringArray,
     pub status: AgentStatus,
     #[sea_orm(column_type = "Timestamp")]
     #[serde(with = "date_time_option")]
