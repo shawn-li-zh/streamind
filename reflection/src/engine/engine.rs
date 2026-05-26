@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::HashSet, sync::Arc};
 
 use dashmap::DashMap;
 use futures::future::join_all;
@@ -31,6 +31,12 @@ impl<R: Clone + Send + Sync + 'static> RuleEngine<R> {
             script_engine: Arc::new(engine),
             rule_groups: DashMap::new(),
         }
+    }
+    pub fn group_names(&self) -> HashSet<String> {
+        self.rule_groups.iter().map(|v| v.key().clone()).collect()
+    }
+    pub fn clear_groups(&self) {
+        self.rule_groups.clear();
     }
     pub fn remove_rule_group(&self, name: &str) {
         self.rule_groups.remove(name);

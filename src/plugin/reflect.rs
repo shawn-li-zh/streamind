@@ -13,15 +13,8 @@ pub async fn load_reflection_engine(
     agent: &entity::agent::Model,
 ) -> anyhow::Result<RuleEngine<ReflectData>> {
     let groups = &agent.rule_groups.0;
-    let group_models = entity_service::rule::list_groups_by_names(groups).await?;
-    let mut map: HashMap<i64, Vec<entity::rule_item::Model>> = HashMap::new();
-    {
-        let rules = entity_service::rule::list_rules_by_group_names(groups).await?;
-        for ele in rules {
-            map.entry(ele.group_id).or_default().push(ele);
-        }
-    }
-    let sim = Similar(Box::new(move|name: &str| {
+
+    let sim = Similar(Box::new(move |name: &str| {
         let name = name.to_string();
         Box::pin(async move {
             let res = entity_service::concept::find_by_name(&name, true).await?;
@@ -30,7 +23,27 @@ pub async fn load_reflection_engine(
         })
     }));
     let engine: RuleEngine<ReflectData> = RuleEngine::new(sim);
+    let groups = load_rule_groups(&engine, groups).await?;
+    for group in groups {
+        engine.add_rule_group(group);
+    }
+    Ok(engine)
+}
 
+pub async fn load_rule_groups(
+    engine: &RuleEngine<ReflectData>,
+    group_names: &Vec<String>,
+) -> anyhow::Result<Vec<RuleGroup<ReflectData>>> {
+    let group_models = entity_service::rule::list_groups_by_names(group_names).await?;
+    let mut map: HashMap<i64, Vec<entity::rule_item::Model>> = HashMap::new();
+    {
+        let rules = entity_service::rule::list_rules_by_group_names(group_names).await?;
+        for ele in rules {
+            map.entry(ele.group_id).or_default().push(ele);
+        }
+    }
+
+    let mut groups: Vec<RuleGroup<ReflectData>> = vec![];
     for group in group_models {
         let rules = map.remove(&group.id).unwrap_or_default();
         let exprs: Vec<&str> = rules.iter().map(|v| v.expr.as_str()).collect();
@@ -53,8 +66,7 @@ pub async fn load_reflection_engine(
             exprs: Arc::new(exprs),
             rules,
         };
-        engine.add_rule_group(group);
+        groups.push(group);
     }
-
-    Ok(engine)
+    Ok(groups)
 }

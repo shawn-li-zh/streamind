@@ -8,5 +8,5 @@ CREATE TABLE "concept" (
 );
 CREATE VIRTUAL TABLE vec_concept USING vec0(
   id INTEGER PRIMARY KEY,
-  embedding FLOAT[1536] -- 这里的维度必须固定
+  embedding FLOAT[1024] -- 这里的维度必须固定
 );

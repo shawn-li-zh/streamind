@@ -265,8 +265,7 @@ impl GenerateWorker {
                         sections.clone(),
                     )
                     .await?;
-                    //直接追加到上下文里
-                    let event_context = self.agent.event_context();
+
                     let event = {
                         let data = AppEnvEventData::AgentResponse(sections);
                         let size = data.size();
@@ -278,15 +277,19 @@ impl GenerateWorker {
                             size,
                         }
                     };
-                    self.logger.log_event(&event).await?;
-                    event_context.push_event(event);
+                    let reflection = self.agent.event_reflect(&event).await?;
+                    self.agent
+                        .inject_event_to_context(event, reflection)
+                        .await?;
                 }
                 let has_events = events.len() > 0;
                 println!("call end...{}", events.len());
                 for ele in events {
                     let event = self.agent.save_event(ele).await?;
-                    self.logger.log_event(&event).await?;
-                    self.agent.send_cmd(CommandEvent::Event(event)).await?;
+                    let reflection = self.agent.event_reflect(&event).await?;
+                    self.agent
+                        .inject_event_to_context(event, reflection)
+                        .await?;
                 }
                 if has_events {
                     self.agent.send_cmd(CommandEvent::Generate).await?;

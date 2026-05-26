@@ -7,6 +7,7 @@ pub mod editor;
 pub mod event;
 pub mod file;
 pub mod http;
+pub mod reflect;
 pub mod render;
 pub mod timer;
 pub mod tool;
@@ -37,13 +38,16 @@ pub fn tool_pool() -> ToolPackagePool {
     //定时器
     let pkg = timer::build_package();
     pool.insert(pkg.name, pkg);
+    //条件反射规则管理器
+    let pkg = reflect::build_package();
+    pool.insert(pkg.name, pkg);
     //
-    for (key, pkg) in &pool {
-        println!("{}:{}", pkg.name, pkg.annotation);
-        for (key, tool) in pkg.tools() {
-            println!("{}\n\n", tool.to_doc());
-        }
-        println!("---")
-    }
+    // for (key, pkg) in &pool {
+    //     println!("{}:{}", pkg.name, pkg.annotation);
+    //     for (key, tool) in pkg.tools() {
+    //         println!("{}\n\n", tool.to_doc());
+    //     }
+    //     println!("---")
+    // }
     pool
 }

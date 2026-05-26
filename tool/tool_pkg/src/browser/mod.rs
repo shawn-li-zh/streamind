@@ -88,17 +88,18 @@ pub mod browser {
         if !user_dir.exists() {
             std::fs::create_dir_all(&user_dir)?;
         }
-
+        let cur = std::env::current_dir().unwrap();
+        let user_dir = cur.join(user_dir);
         let mut ctx = ctx.context_data.write().await;
         let ctx = ctx.downcast_mut::<Context>().unwrap();
         if ctx.is_runing {
             anyhow::bail!("浏览器已启动");
         }
         // let port = get_available_port().unwrap_or(19999);
-        let config = BrowserConfig::builder()
+        let config: BrowserConfig = BrowserConfig::builder()
             .user_data_dir(user_dir)
             .chrome_executable(chrome_path)
-            .no_sandbox() // Windows 有时需要这个
+            .no_sandbox()
             .with_head()
             .args(args.unwrap_or_default())
             // .args(vec![

@@ -4,6 +4,7 @@ use std::{
     sync::{atomic::AtomicU32, Arc},
 };
 
+use anyhow::Ok;
 use async_trait::async_trait;
 use axum::response::sse;
 
@@ -36,7 +37,7 @@ use tokio::sync::{
     mpsc::{self, Receiver},
     watch, Mutex,
 };
-use tool_pkg::timer::TimerInjected;
+use tool_pkg::{reflect::ReflectInjected, timer::TimerInjected};
 use tracing::{error, info, warn};
 
 use crate::{
@@ -47,7 +48,7 @@ use crate::{
     plugin::{
         authority::AgentAuthority,
         heartbeat::{Heartbeat, HeartbeatRunner},
-        reflect,
+        reflect::{self, load_rule_groups},
         scheduler::{AgentScheduler, AgentSchedulerRunner},
     },
     runtime::AgentRuntime,
@@ -105,7 +106,7 @@ impl AppAgent {
 }
 #[async_trait]
 impl AgentOutfit<AppEnvEvent, StackContext<AppEnvEvent>> for AppAgent {
-    async fn send_cmd(&self, cmd: CommandEvent<AppEnvEvent>) -> anyhow::Result<()> {
+    async fn send_cmd(&self, cmd: CommandEvent) -> anyhow::Result<()> {
         //发送给代理
         self.instance.send_cmd(cmd).await?;
         Ok(())
@@ -152,8 +153,8 @@ impl AppAgent {
         }
         info!("AgentEvent: {:?}", &env_event.data);
         //反射
-        let reflection = event_reflect(self.reflect_engine.clone(), &env_event).await?;
-        let reflection = reflection.map(|v| AppEnvEventData::Reflection(v));
+        let reflection = self.event_reflect(&env_event).await?;
+        // let reflection = reflection.map(|v| AppEnvEventData::Reflection(v));
         //发送给代理
         if env_event.force {
             self.instance.send_cmd(CommandEvent::Canceled).await?;
@@ -161,19 +162,8 @@ impl AppAgent {
         //等待生成完成
         let mut gen = self.gen_watcher.lock().await;
         gen.wait_for(|v| !*v).await?;
-        //记录日志
-        self.logger.log_event(&env_event).await?;
-        self.instance
-            .send_cmd(CommandEvent::Event(env_event))
-            .await?;
-        //注入反射事件
-        if let Some(reflection) = reflection {
-            let env_event = self.save_event((reflection, false)).await?;
-            self.logger.log_event(&env_event).await?;
-            self.instance
-                .send_cmd(CommandEvent::Event(env_event))
-                .await?;
-        }
+        //发送事件给上下文
+        self.inject_event_to_context(env_event, reflection).await?;
         self.instance.send_cmd(CommandEvent::Generate).await?;
         self.heartbeat.disable();
         Ok(id)
@@ -207,52 +197,70 @@ impl AppAgent {
         };
         return Ok(env_event);
     }
-}
-//事件反射
-pub async fn event_reflect(
-    reflect_engine: Arc<RuleEngine<ReflectData>>,
-    event: &AppEnvEvent,
-) -> anyhow::Result<Option<ReflectEvent>> {
-    let mut source_event_id = event.id;
-    let mut level = 1;
-    match &event.data {
-        AppEnvEventData::Reflection(ev) => {
-            level = ev.level + 1;
-            if level > 2 {
-                //最多反射两层
-                return Ok(None);
-            }
-            source_event_id = ev.source_event_id;
+    pub(crate) async fn inject_event_to_context(
+        &self,
+        env_event: AppEnvEvent,
+        reflection: Option<ReflectEvent>,
+    ) -> anyhow::Result<()> {
+        //
+        self.logger.log_event(&env_event).await?;
+        let event_context = self.instance.event_context();
+        event_context.push_event(env_event);
+        //按顺序注入反射事件
+        if let Some(reflection) = reflection {
+            let reflection = AppEnvEventData::Reflection(reflection);
+            let env_event = self.save_event((reflection, false)).await?;
+            self.logger.log_event(&env_event).await?;
+            event_context.push_event(env_event);
         }
-        _ => {}
+        Ok(())
     }
-    //
-    let (text, _paths) = event.to_message().to_tuple();
-    let client = EMBEDDING_CLIENT.get().unwrap().clone();
-    let mut vec = client
-        .batch_embed(vec![Information::Text(text.clone())])
-        .await?;
-    let embedding = vec.remove(0);
-    let element = EventElement {
-        event_type: event.data.code(),
-        time: event.time.format("%Y-%m-%d %H:%M:%S").to_string(),
-        force: event.force,
-        context: text,
-        embedding,
-    };
-    // 触发反射引擎 就会报错
-    let datas = reflect_engine.trigger(element).await?;
-    if datas.is_empty() {
-        return Ok(None);
-    }
+    //事件反射
+    pub(crate) async fn event_reflect(
+        &self,
+        event: &AppEnvEvent,
+    ) -> anyhow::Result<Option<ReflectEvent>> {
+        let mut source_event_id = event.id;
+        let mut level = 1;
+        match &event.data {
+            AppEnvEventData::Reflection(ev) => {
+                level = ev.level + 1;
+                if level > 2 {
+                    //最多反射两层
+                    return Ok(None);
+                }
+                source_event_id = ev.source_event_id;
+            }
+            _ => {}
+        }
+        //
+        let (text, _paths) = event.to_message().to_tuple();
+        let client = EMBEDDING_CLIENT.get().unwrap();
+        let embedding = client
+            .union_embed(vec![Information::Text(text.clone())])
+            .await?;
 
-    let event = ReflectEvent {
-        source_event_id,
-        level,
-        datas,
-    };
-    Ok(Some(event))
+        let element = EventElement {
+            event_type: event.data.code(),
+            time: event.time.format("%Y-%m-%d %H:%M:%S").to_string(),
+            force: event.force,
+            context: text,
+            embedding,
+        };
+
+        let datas = self.reflect_engine.trigger(element).await?;
+        if datas.is_empty() {
+            return Ok(None);
+        }
+        let event = ReflectEvent {
+            source_event_id,
+            level,
+            datas,
+        };
+        Ok(Some(event))
+    }
 }
+
 pub struct WebSender {
     inner: RwLock<Option<mpsc::UnboundedSender<sse::Event>>>,
 }
@@ -437,6 +445,60 @@ async fn build_agent_context(identity: &AgentIdentity) -> Arc<AgentContext> {
                             println!("Wake up...");
                         });
                         return Ok(());
+                    }
+                    anyhow::bail!("Agent not found")
+                }
+                .boxed()
+            }),
+        };
+        context.insert(injected);
+        let injected = ReflectInjected {
+            load_groups: Box::new(move |group_names| {
+                let agent = {
+                    let p = AGENT_POOL.read();
+                    p.get(&agent_id).map(|v| v.clone())
+                };
+
+                async move {
+                    if let Some(agent) = agent {
+                        let rule_engine = agent.reflect_engine.clone();
+                        let groups = load_rule_groups(&rule_engine, &group_names).await?;
+                        rule_engine.clear_groups();
+                        for group in groups {
+                            rule_engine.add_rule_group(group);
+                        }
+                    }
+                    anyhow::bail!("Agent not found")
+                }
+                .boxed()
+            }),
+            unload_groups: Box::new(move |group_names| {
+                let agent = {
+                    let p = AGENT_POOL.read();
+                    p.get(&agent_id).map(|v| v.clone())
+                };
+
+                async move {
+                    if let Some(agent) = agent {
+                        let rule_engine = agent.reflect_engine.clone();
+                        for group in group_names {
+                            rule_engine.remove_rule_group(&group);
+                        }
+                    }
+                    anyhow::bail!("Agent not found")
+                }
+                .boxed()
+            }),
+            current_group_names: Box::new(move || {
+                let agent = {
+                    let p = AGENT_POOL.read();
+                    p.get(&agent_id).map(|v| v.clone())
+                };
+
+                async move {
+                    if let Some(agent) = agent {
+                        let rule_engine = agent.reflect_engine.clone();
+                        return Ok(rule_engine.group_names());
                     }
                     anyhow::bail!("Agent not found")
                 }

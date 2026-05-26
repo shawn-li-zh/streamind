@@ -19,7 +19,7 @@ pub struct AgentInstance {
 
 #[async_trait]
 impl AgentOutfit<AppEnvEvent, StackContext<AppEnvEvent>> for AgentInstance {
-    async fn send_cmd(&self, cmd: CommandEvent<AppEnvEvent>) -> anyhow::Result<()> {
+    async fn send_cmd(&self, cmd: CommandEvent) -> anyhow::Result<()> {
         self.agent.send_cmd(cmd).await
     }
     fn event_context(&self) -> Arc<StackContext<AppEnvEvent>> {

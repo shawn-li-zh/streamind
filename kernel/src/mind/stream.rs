@@ -23,13 +23,13 @@ pub enum MindFlag {
 pub struct StreamMind<E: EnvEvent, C: EventContext<E>> {
     context: Arc<C>,
     event_buffer: Vec<E>,
-    cmd_receiver: mpsc::Receiver<CommandEvent<E>>,
+    cmd_receiver: mpsc::Receiver<CommandEvent>,
     generate_sender: mpsc::Sender<GenerateEvent>,
 }
 
 impl<E: EnvEvent, C: EventContext<E>> StreamMind<E, C> {
-    pub fn new(context: Arc<C>) -> (Self, MindInlet<E>, MindOutlet) {
-        let event = mpsc::channel::<CommandEvent<E>>(100);
+    pub fn new(context: Arc<C>) -> (Self, MindInlet, MindOutlet) {
+        let event = mpsc::channel::<CommandEvent>(50);
         let inlet = MindInlet::new(event.0);
         let mind_event = mpsc::channel::<GenerateEvent>(100);
         let outlet = MindOutlet::new(mind_event.1);
@@ -46,9 +46,9 @@ impl<E: EnvEvent, C: EventContext<E>> StreamMind<E, C> {
     fn drain_events(&mut self) -> bool {
         while let Ok(cmd) = self.cmd_receiver.try_recv() {
             match cmd {
-                CommandEvent::Event(e) => {
-                    self.event_buffer.push(e);
-                }
+                // CommandEvent::Event(e) => {
+                //     self.event_buffer.push(e);
+                // }
                 CommandEvent::Generate => {
                     //跳出事件监听开始
                     return true;
@@ -70,9 +70,9 @@ impl<E: EnvEvent, C: EventContext<E>> StreamMind<E, C> {
             if !has_generate {
                 while let Some(cmd) = self.cmd_receiver.recv().await {
                     match cmd {
-                        CommandEvent::Event(e) => {
-                            self.event_buffer.push(e);
-                        }
+                        // CommandEvent::Event(e) => {
+                        //     self.event_buffer.push(e);
+                        // }
                         CommandEvent::Generate => {
                             //跳出事件监听开始
                             break;
@@ -195,9 +195,9 @@ impl<E: EnvEvent, C: EventContext<E>> StreamMind<E, C> {
                 // 分支 B：在生成过程中，收到了新事件
                 Some(cmd) = self.cmd_receiver.recv() => {
                      match cmd {
-                    CommandEvent::Event(e) => {
-                        self.event_buffer.push(e);
-                    }
+                    // CommandEvent::Event(e) => {
+                    //     self.event_buffer.push(e);
+                    // }
                     CommandEvent::Generate => {
                        //已经在生成中忽略
                         break;

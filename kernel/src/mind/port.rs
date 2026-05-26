@@ -1,6 +1,5 @@
 #[derive(Debug, Clone)]
-pub enum CommandEvent<E> {
-    Event(E),
+pub enum CommandEvent {
     Generate,
     Canceled,
 }
@@ -17,14 +16,14 @@ use tokio::sync::mpsc::{self, error::SendError};
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::section::SectionTag;
-pub struct MindInlet<E> {
-    inner: mpsc::Sender<CommandEvent<E>>,
+pub struct MindInlet {
+    inner: mpsc::Sender<CommandEvent>,
 }
-impl<E> MindInlet<E> {
-    pub(crate) fn new(inner: mpsc::Sender<CommandEvent<E>>) -> Self {
+impl MindInlet {
+    pub(crate) fn new(inner: mpsc::Sender<CommandEvent>) -> Self {
         Self { inner: inner }
     }
-    pub async fn send(&self, event: CommandEvent<E>) -> Result<(), SendError<CommandEvent<E>>> {
+    pub async fn send(&self, event: CommandEvent) -> Result<(), SendError<CommandEvent>> {
         self.inner.send(event).await
     }
 }

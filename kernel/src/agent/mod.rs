@@ -4,7 +4,7 @@ pub mod event;
 
 pub mod port;
 
-use std::{path::PathBuf, sync::Arc};
+use std::{marker::PhantomData, path::PathBuf, sync::Arc};
 
 use crate::{
     agent::{
@@ -47,7 +47,7 @@ impl AgentIdentity {
 }
 #[async_trait]
 pub trait AgentOutfit<E, C>: Send + Sync + 'static {
-    async fn send_cmd(&self, cmd: CommandEvent<E>) -> anyhow::Result<()>;
+    async fn send_cmd(&self, cmd: CommandEvent) -> anyhow::Result<()>;
 
     fn event_context(&self) -> Arc<C>;
     fn context(&self) -> Arc<AgentContext>;
@@ -59,8 +59,8 @@ pub struct Agent<E: EnvEvent, C: EventContext<E>> {
     identity: Arc<AgentIdentity>,
     context: Arc<AgentContext>,
     event_context: Arc<C>,
-    mind_inlet: MindInlet<E>,
-    event_sender: mpsc::Sender<AgentEvent<E>>,
+    mind_inlet: MindInlet,
+    __phantom: PhantomData<E>,
 }
 
 impl<E: EnvEvent, C: EventContext<E>> Agent<E, C> {
@@ -79,7 +79,7 @@ impl<E: EnvEvent, C: EventContext<E>> Agent<E, C> {
             event_context: event_context.clone(),
             context: context.clone(),
             mind_inlet,
-            event_sender: agent_event.0.clone(),
+            __phantom: PhantomData,
         };
         let event_loop = EventLoop {
             stream_mind,
@@ -93,7 +93,7 @@ impl<E: EnvEvent, C: EventContext<E>> Agent<E, C> {
 
 #[async_trait]
 impl<E: EnvEvent, C: EventContext<E>> AgentOutfit<E, C> for Agent<E, C> {
-    async fn send_cmd(&self, cmd: CommandEvent<E>) -> anyhow::Result<()> {
+    async fn send_cmd(&self, cmd: CommandEvent) -> anyhow::Result<()> {
         self.mind_inlet.send(cmd).await?;
         Ok(())
     }

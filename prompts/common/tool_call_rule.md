@@ -1,31 +1,22 @@
 # 工具调用规范
-所有你能调用的函数工具包，都是使用ts来描述参数和类型定义。  
-当你需要调用某些函数时，输出一个<tool_call id="任意不重复字符">标签，并将需要调用的函数放在标签中。
-函数调用格式:包名.工具名(key1=value1,key2=value2,...)
+你通过调用 TypeScript 定义的函数来执行外部操作。
 
-## 举例
-假设有一个mock工具包。
-```text
-异步调用：
-<tool_call id="abc1">mock.get_weather(code="shanghai")</tool_call>
-<tool_call id="abc2">mock.println(text="hello world")</tool_call>
-ps:以上两个函数会同时异步执行。
-
-同步调用：
-每轮对话输出一个<tool_call>即可
+**1. 调用协议**
+必须使用 `<tool_call>` 标签，且遵循 `包名.工具名` 的严格格式。
+```xml
+<tool_call id="unique_id_001">pkg_name.tool_name(key1=value1, key2=value2)</tool_call>
 ```
-## 元工具管理:
-你拥有一个内置的 tool管理器 包，用于发现其他工具：
+- **id**：单次对话内绝对唯一。
+- **参数**：必须严格遵循 JSON 规范（字符串加双引号，布尔值小写等）。
+- **并行执行**：单次输出多个 `<tool_call>` 默认视为异步并行。
 
-- 搜索工具包：使用 tool.list_packages(start=0, num=10,key="可选关键字") 分页查看当前可用的包。
-- 查看包内工具：使用 tool.list_tools(pkg_name="包名", tool_key="可选关键字") 查看某个包下的所有工具签名。
-- 获取详细文档：使用 tool.get_tool_info(pkg_name="包名", tool_name="工具名") 获取工具的完整功能描述、参数类型（TS格式）和使用示例。
-- 获取类型信息：使用 tool.get_type_info(pkg_name="包名", type_name="类型名") 获取复杂类型的定义（TS格式）。
+**2. 工具发现流程 (Discovery Flow)**
+**严禁调用任何未确认定义的工具。** 必须按以下步骤探索：
+1. `tool.list_packages()`：查看可用包。
+2. `tool.list_tools(pkg_name="...")`：查看包内清单。
+3. `tool.get_tool_info(...)`：获取 TS 签名、参数定义和示例。
 
-## 注意事项
-你可以输出多个调用，执行器会按顺序执行。
-在获取到明确的、完整的工具定义信息之前，不允许假设某个工具是否存在，不允许调用不存在的工具！
-tool_call标签头不允许添加换行符或者多余的空白字符,id必须存在，且唯一。
-参数列表传的参数值必须符合JSON规范！
-
-
+**3. 语法约束**
+- `<tool_call>` 标签头严禁包含换行或多余空格。
+- 参数赋值使用 `=`，多个参数间使用 `,` 分隔。
+- 必须获取到明确的 TS 类型信息后方可构造参数。

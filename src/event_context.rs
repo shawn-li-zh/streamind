@@ -69,9 +69,9 @@ pub async fn load_stack(
     //
     Ok(stack)
 }
-
+pub static EVENT_DRIVEN: &str = include_str!("../prompts/common/event_driven.md");
 pub static GENERATE_RULE: &str = include_str!("../prompts/common/generate_rule.md");
-pub static INPUT_FMT: &str = include_str!("../prompts/common/input_fmt.md");
+
 pub static STACK_CONTEXT_RULE: &str = include_str!("../prompts/common/stack_context_rule.md");
 pub static TOOL_CALL_RULE: &str = include_str!("../prompts/common/tool_call_rule.md");
 pub static RENDER_RULE: &str = include_str!("../prompts/common/render_rule.md");
@@ -93,8 +93,8 @@ pub fn build_system_prompt(identity: &AgentIdentity, ctx: &AgentContext) -> Stri
         identity.code(),
         identity.name(),
     ));
+    lines.push(EVENT_DRIVEN.trim().to_string());
     lines.push(GENERATE_RULE.trim().to_string());
-    lines.push(INPUT_FMT.trim().to_string());
     lines.push(STACK_CONTEXT_RULE.trim().to_string());
     lines.push(TOOL_CALL_RULE.trim().to_string());
     lines.push(RENDER_RULE.trim().to_string());

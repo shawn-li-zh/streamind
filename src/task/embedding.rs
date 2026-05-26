@@ -21,20 +21,19 @@ pub async fn init() {
                         .collect();
                     let clinet = EMBEDDING_CLIENT.get().unwrap();
                     let db = DB.get().unwrap();
-                    match clinet.batch_embed(texts).await {
-                        Ok(v) => {
-                            for (concept, embedding) in concepts.into_iter().zip(v) {
-                                let id = concept.id;
-
-                                if let Err(e) =
-                                    entity_service::concept::update_vector(db, id, embedding).await
-                                {
-                                    error!("更新向量失败: {},{}", id, e);
-                                }
+                    for (text, concept) in texts.into_iter().zip(concepts) {
+                        let embedding = match clinet.union_embed(vec![text]).await {
+                            Ok(v) => v,
+                            Err(e) => {
+                                error!("{}", e);
+                                continue;
                             }
-                        }
-                        Err(e) => {
-                            error!("{}", e)
+                        };
+                        let id= concept.id;
+                        if let Err(e) =
+                            entity_service::concept::update_vector(db, id, embedding).await
+                        {
+                            error!("更新向量失败: {},{}", id, e);
                         }
                     }
                 })
