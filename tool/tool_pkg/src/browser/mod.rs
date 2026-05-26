@@ -1,3 +1,13 @@
+#[cfg(test)]
+mod tests;
+
+pub(crate) static JS: LazyLock<String> = LazyLock::new(|| {
+    let path = Path::new(r"./public/browser.inject.js");
+    let content = std::fs::read_to_string(path).expect("Failed to read file");
+    content
+});
+use std::{path::Path, sync::LazyLock};
+
 pub use self::browser::build_package;
 use tool_macro::package;
 #[package("浏览器操作工具包")]
@@ -5,9 +15,9 @@ pub mod browser {
     use std::{
         collections::HashMap,
         io::Write,
-        path::{self, PathBuf},
+        path::{self, Path, PathBuf},
         str::FromStr,
-        sync::Arc,
+        sync::{Arc, LazyLock},
         time::Duration,
     };
 
@@ -34,7 +44,10 @@ pub mod browser {
     use tokio::sync::RwLock;
     use tracing::error;
 
-    use crate::browser::utils::{self, BrowserAction, get_available_port};
+    use crate::browser::{
+        JS,
+        utils::{self, BrowserAction, get_available_port},
+    };
 
     pub struct Context {
         pub is_runing: bool,
@@ -102,6 +115,7 @@ pub mod browser {
             .no_sandbox()
             .with_head()
             .args(args.unwrap_or_default())
+            .window_size(1920, 1080)
             // .args(vec![
             //     "--disable-extensions",     // 禁用扩展
             //     "--disable-popup-blocking", // 禁用弹窗拦截
@@ -116,10 +130,10 @@ pub mod browser {
             // ])
             .arg("--start-maximized") // 最大化
             // // 隐藏“正受自动测试软件控制”提示条
-            // .arg("--exclude-switches=enable-automation")
+            .arg("--exclude-switches=enable-automation")
             // // 屏蔽其他干扰弹窗
-            // .arg("--no-first-run") // 跳过首次运行设置
-            // .arg("--no-default-browser-check") // 不检查是否为默认浏览器
+            .arg("--no-first-run") // 跳过首次运行设置
+            .arg("--no-default-browser-check") // 不检查是否为默认浏览器
             .launch_timeout(Duration::from_secs(10))
             .build()
             .map_err(|e| anyhow::anyhow!("Browser Cdp:{e}"))?;
@@ -144,8 +158,9 @@ pub mod browser {
         if !ctx.is_runing {
             anyhow::bail!("浏览器未启动");
         }
-        let browser = ctx.browser.as_mut().unwrap();
-        browser.close().await?;
+        if let Some(browser) = ctx.browser.as_mut() {
+            browser.close().await?;
+        }
         ctx.is_runing = false;
         ctx.browser = None;
         ctx.tabs.clear();
@@ -155,7 +170,7 @@ pub mod browser {
     #[tool(
         anno = "打开网页,等dom解析完毕,返回tab id",
         example = r#"new_tab(url="https://www.baidu.com")"#,
-        timeout = "10s"
+        timeout = "5s"
         limit = "10s:5"
     )]
     pub async fn new_tab(
@@ -175,6 +190,8 @@ pub mod browser {
             let browser = ctx.browser.as_ref().unwrap();
 
             let page = browser.new_page("about:blank").await?;
+
+            page.evaluate_on_new_document(&*JS).await?;
             // 允许下载
             page.execute(
                 SetDownloadBehaviorParams::builder()
@@ -187,14 +204,13 @@ pub mod browser {
             {
                 let page = page.clone();
                 let url = url.clone();
-                tokio::spawn(async move {
-                    if let Err(page) = page.goto(&url).await {
-                        error!("page goto error:{}", page);
-                    };
-                });
-                tokio::time::sleep(Duration::from_secs(1)).await;
+                page.goto(&url).await?;
             }
-            utils::wait_for_dom(&page, "interactive", 100).await?;
+            tokio::time::timeout(Duration::from_secs(10), async {
+                utils::wait_for_dom(&page, 100).await.unwrap();
+            })
+            .await?;
+
             Tab {
                 id: simple_id(6),
                 title: page.get_title().await?.unwrap_or_default(),
@@ -783,53 +799,18 @@ mod utils {
         });
         Ok(())
     }
-    pub async fn wait_for_dom(page: &Page, status: &str, millis: u64) -> anyhow::Result<()> {
+    pub async fn wait_for_dom(page: &Page, millis: u64) -> anyhow::Result<()> {
         loop {
             let ready_state = page
                 .evaluate("document.readyState")
                 .await?
-                .into_value::<String>()?;
-            if ready_state.as_str() == status {
-                return Ok(());
+                .into_value::<Option<String>>()?;
+            if let Some(ready_state) = ready_state {
+                if !ready_state.is_empty() && &ready_state != "loading" {
+                    return Ok(());
+                }
             }
             tokio::time::sleep(std::time::Duration::from_millis(millis)).await;
         }
-    }
-}
-#[cfg(test)]
-mod test {
-    use std::{path::PathBuf, str::FromStr, time::Duration};
-
-    use chromiumoxide::{Browser, BrowserConfig};
-    use futures::StreamExt as _;
-
-    #[tokio::test]
-    pub async fn test_cdp() -> anyhow::Result<()> {
-        let chrome_path = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
-        let chrome_path = PathBuf::from_str(&chrome_path)?;
-        if !chrome_path.exists() {
-            anyhow::bail!("无效的浏览器执行文件地址");
-        }
-        let config = BrowserConfig::builder()
-            .user_data_dir(r"D:\project\rust\streamind\tempb")
-            .chrome_executable(chrome_path)
-            .no_sandbox() // Windows 有时需要这个
-            .with_head()
-            .launch_timeout(Duration::from_secs(5))
-            .build()
-            .unwrap();
-        let (browser, mut handler) = Browser::launch(config).await?;
-        // 必须在一个单独的任务中运行 handler
-        tokio::task::spawn(async move {
-            while let Some(h) = handler.next().await {
-                if h.is_err() {
-                    break;
-                }
-            }
-        });
-        browser
-            .new_page("https://element.eleme.cn/#/zh-CN/component/card")
-            .await?;
-        Ok(())
     }
 }

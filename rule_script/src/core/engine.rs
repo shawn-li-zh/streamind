@@ -56,7 +56,7 @@ impl<E: Send + Sync + 'static> ScriptEngine<E> {
     }
 
     pub fn simplify(&self, expr: &str) -> anyhow::Result<String> {
-        let expr = parser::parse_expr(expr)?;
+        let expr = parser::parse_expr(expr).map_err(|e|anyhow::anyhow!("表达式解析失败:{e}"))?;
         let expr = simplify::simplify(self, expr)?;
         Ok(format!("{}", expr))
     }

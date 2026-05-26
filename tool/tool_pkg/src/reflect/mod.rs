@@ -122,11 +122,17 @@ pub mod reflect {
     pub async fn save_rule(
         #[arg("组id")] group_id: i64,
         #[arg("规则名")] name: String,
-        #[arg("表达式")] expr: String,
+        #[arg("表达式")] mut expr: String,
         #[arg("反射内容")] content: String,
         #[arg("过期时间,默认一年,格式:'24h 30m 30s'")] expire_dur: Option<String>,
         #[ctx] ctx: ToolCallContext,
     ) -> anyhow::Result<ToolReturn> {
+        if let Some(injected) = ctx.agent_context.get::<ReflectInjected>() {
+            expr = (injected.simplify_expr)(expr.clone()).await?;
+        } else {
+            anyhow::bail!("反射功能未启用")
+        }
+
         let db = DB.get().unwrap();
         let dur = humantime::parse_duration(&expire_dur.unwrap_or("1year".to_string()))?;
         let expire_time = Local::now() + dur;
@@ -134,7 +140,7 @@ pub mod reflect {
             entity_service::rule::save_rule(db, group_id, name, expr, content, expire_time).await?;
         Ok(ToolReturn::raw(format!("id={id}")))
     }
-   #[tool(
+    #[tool(
         anno = "加载规则组,有则覆盖",
         example = r#"load_groups(group_names=['编程','生活','人际关系','股票','法律'])"#,
         limit = "30s:10"
@@ -183,8 +189,12 @@ pub mod reflect {
 }
 
 pub struct ReflectInjected {
-    pub unload_groups: Box<dyn (Fn(Vec<String>) -> BoxFuture<'static, anyhow::Result<()>>) + Send + Sync>,
-    pub load_groups: Box<dyn (Fn(Vec<String>) -> BoxFuture<'static, anyhow::Result<()>>) + Send + Sync>,
+    pub unload_groups:
+        Box<dyn (Fn(Vec<String>) -> BoxFuture<'static, anyhow::Result<()>>) + Send + Sync>,
+    pub load_groups:
+        Box<dyn (Fn(Vec<String>) -> BoxFuture<'static, anyhow::Result<()>>) + Send + Sync>,
     pub current_group_names:
         Box<dyn (Fn() -> BoxFuture<'static, anyhow::Result<HashSet<String>>>) + Send + Sync>,
+    pub simplify_expr:
+        Box<dyn (Fn(String) -> BoxFuture<'static, anyhow::Result<String>>) + Send + Sync>,
 }

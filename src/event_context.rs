@@ -2,9 +2,7 @@ use std::{collections::HashMap, fs::File, sync::Arc};
 
 use entity::event::EnvEventType;
 use kernel::{
-    agent::{context::AgentContext, AgentIdentity},
-    client::ChatClient,
-    tool::engine::ToolEngineContext,
+    agent::{AgentIdentity, context::AgentContext}, client::ChatClient, mind::context::EventContext as _, tool::engine::ToolEngineContext
 };
 use runtime::agent::{
     event::AppEnvEvent,

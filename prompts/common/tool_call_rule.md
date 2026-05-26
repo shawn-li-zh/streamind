@@ -3,7 +3,7 @@
 
 **1. 调用协议**
 必须使用 `<tool_call>` 标签，且遵循 `包名.工具名` 的严格格式。
-```xml
+```text
 <tool_call id="unique_id_001">pkg_name.tool_name(key1=value1, key2=value2)</tool_call>
 ```
 - **id**：单次对话内绝对唯一。

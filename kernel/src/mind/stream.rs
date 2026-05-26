@@ -22,7 +22,7 @@ pub enum MindFlag {
 
 pub struct StreamMind<E: EnvEvent, C: EventContext<E>> {
     context: Arc<C>,
-    event_buffer: Vec<E>,
+    event_id_buffer: Vec<E>,
     cmd_receiver: mpsc::Receiver<CommandEvent>,
     generate_sender: mpsc::Sender<GenerateEvent>,
 }
@@ -35,7 +35,7 @@ impl<E: EnvEvent, C: EventContext<E>> StreamMind<E, C> {
         let outlet = MindOutlet::new(mind_event.1);
         let mind = StreamMind {
             context,
-            event_buffer: vec![],
+            event_id_buffer: vec![],
             cmd_receiver: event.1,
             generate_sender: mind_event.0,
         };
@@ -60,26 +60,19 @@ impl<E: EnvEvent, C: EventContext<E>> StreamMind<E, C> {
         }
         false
     }
-    pub async fn event_loop(&mut self) -> anyhow::Result<MindFlag> {
-        // let len = std::env::var("CTX_LEN_PER_ROUND")
-        //     .map(|v| usize::from_str_radix(&v, 10).unwrap())
-        //     .unwrap_or(50000);
-
+    pub async fn event_loop(&mut self) {
         loop {
-            let has_generate = self.drain_events();
-            if !has_generate {
-                while let Some(cmd) = self.cmd_receiver.recv().await {
-                    match cmd {
-                        // CommandEvent::Event(e) => {
-                        //     self.event_buffer.push(e);
-                        // }
-                        CommandEvent::Generate => {
-                            //跳出事件监听开始
-                            break;
-                        }
-                        CommandEvent::Canceled => {
-                            //已经停止忽略
-                        }
+            while let Some(cmd) = self.cmd_receiver.recv().await {
+                match cmd {
+                    // CommandEvent::Event(e) => {
+                    //     self.event_buffer.push(e);
+                    // }
+                    CommandEvent::Generate => {
+                        //跳出事件监听开始
+                        break;
+                    }
+                    CommandEvent::Canceled => {
+                        //已经停止忽略
                     }
                 }
             }
@@ -87,7 +80,6 @@ impl<E: EnvEvent, C: EventContext<E>> StreamMind<E, C> {
                 generate_sender: self.generate_sender.clone(),
                 last_tag: None,
                 chunk_buffer: String::new(),
-                event_ids: vec![],
             };
             let resaon = self
                 .event_stream(&mut worker)
@@ -95,29 +87,17 @@ impl<E: EnvEvent, C: EventContext<E>> StreamMind<E, C> {
                 .unwrap_or(EndReason::Error);
 
             worker.end(resaon).await;
-            // //检查上下文长度是否超过配置
-            // let stack = self.stack.read().await;
-            // if stack.content_len >= len {
-            //     return Ok(MindFlag::Overflow);
-            // }
+            self.drain_events();
         }
     }
     async fn event_stream(&mut self, worker: &mut ListeningWorker) -> anyhow::Result<EndReason> {
-        worker.event_ids = self.event_buffer.iter().map(|e| e.id()).collect();
         let proxy: (
             mpsc::UnboundedSender<String>,
             mpsc::UnboundedReceiver<String>,
         ) = mpsc::unbounded_channel();
         // 3. 准备当前要处理的上下文
         // 提取出当前所有的任务，清空 pending 准备接收新的
-        let mut chunk_stream = {
-            {
-                let events = std::mem::take(&mut self.event_buffer);
-                self.context.push_events(events);
-            }
-            // 4. 创建生成流
-            self.context.chunk_stream().await
-        };
+        let mut chunk_stream = self.context.chunk_stream().await;
         // 3. 将 Rx 转换为 Stream 并与 LLM 流合并
         let mut inject_stream =
             tokio_stream::wrappers::UnboundedReceiverStream::new(proxy.1).boxed();
@@ -163,7 +143,7 @@ impl<E: EnvEvent, C: EventContext<E>> StreamMind<E, C> {
 
                    let event= match section_event {
                         section::Event::Start => {
-                            GenerateEvent::Start(worker.event_ids.clone())
+                            GenerateEvent::Start
                         }
                         section::Event::End => {
                             //必须由外部确认是否真的结束,所以不发送事件
@@ -221,7 +201,6 @@ struct ListeningWorker {
     generate_sender: mpsc::Sender<GenerateEvent>,
     last_tag: Option<&'static SectionTag>,
     chunk_buffer: String,
-    event_ids: Vec<i64>,
 }
 impl ListeningWorker {
     async fn end(self, reson: EndReason) {
@@ -233,7 +212,7 @@ impl ListeningWorker {
                 .expect("section_sender");
         }
         self.generate_sender
-            .send(GenerateEvent::End(self.event_ids, reson))
+            .send(GenerateEvent::End(reson))
             .await
             .expect("section_sender"); //输出结束
     }

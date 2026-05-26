@@ -88,8 +88,14 @@ pub async fn ui_interaction(
         message: req.message,
     });
     if let Some(agent_arc) = agent_arc {
-        agent_arc.send_event((event, false)).await.unwrap();
-        ApiResponse::ok()
+        match agent_arc.send_event((event, false)).await {
+            Ok(_) => {
+                return ApiResponse::ok();
+            }
+            Err(e) => {
+                return ApiResponse::error(e);
+            }
+        }
     } else {
         ApiResponse::error("agent不存在！")
     }
@@ -103,8 +109,14 @@ pub async fn user_interrupt(Path(agent_id): Path<u32>) -> ApiResponse<()> {
     let event = AppEnvEventData::Interrupt("用户发起中断指令".to_string());
 
     if let Some(agent_arc) = agent_arc {
-        agent_arc.send_event((event, false)).await.unwrap();
-        ApiResponse::ok()
+        match agent_arc.send_event((event, false)).await {
+            Ok(_) => {
+                return ApiResponse::ok();
+            }
+            Err(e) => {
+                return ApiResponse::error(e);
+            }
+        }
     } else {
         ApiResponse::error("agent不存在！")
     }
@@ -117,18 +129,21 @@ pub async fn chat(Path(agent_id): Path<u32>, Json(msg): Json<UserMessageReq>) ->
     };
 
     if let Some(agent_arc) = agent_arc {
-        let _ = agent_arc
-            .send_event((
-                AppEnvEventData::UserRequest(UserMessage {
-                    content: msg.content.trim().to_string(),
-                    attachments: vec![],
-                }),
-                false,
-            ))
-            .await
-            .unwrap();
-
-        ApiResponse::ok()
+        let event = (
+            AppEnvEventData::UserRequest(UserMessage {
+                content: msg.content.trim().to_string(),
+                attachments: vec![],
+            }),
+            false,
+        );
+        match agent_arc.send_event(event).await {
+            Ok(_) => {
+                return ApiResponse::ok();
+            }
+            Err(e) => {
+                return ApiResponse::error(e);
+            }
+        }
     } else {
         ApiResponse::error("agent不存在！")
     }

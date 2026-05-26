@@ -18,7 +18,10 @@ use kernel::{
         port::AgentOutlet,
         AgentOutfit,
     },
-    mind::port::{CommandEvent, EndReason, GenerateEvent},
+    mind::{
+        context::EventContext,
+        port::{CommandEvent, EndReason, GenerateEvent, MindOutlet},
+    },
     parser,
     render::RenderContext,
     section::{Section, SectionTag},
@@ -41,26 +44,23 @@ use tracing::{error, info, warn};
 
 use crate::{
     agent::{AppAgent, WebSender},
-    logger::AgentLogger,
     plugin::{heartbeat::HeartbeatRunner, scheduler::AgentSchedulerRunner},
     sse_event::{ServerEvent, WebEvent},
 };
 
 pub struct AgentRuntime {
     agent: Arc<AppAgent>,
-    agent_outlet: AgentOutlet<AppEnvEvent>,
+    mind_outlet: MindOutlet,
     event_loop: EventLoop,
     heartbeat: HeartbeatRunner,
     scheduler_runner: AgentSchedulerRunner,
     gen_sender: watch::Sender<bool>,
-    logger: Arc<AgentLogger>,
 }
 impl AgentRuntime {
     pub fn new(
         agent: Arc<AppAgent>,
         event_loop: EventLoop,
-        agent_outlet: AgentOutlet<AppEnvEvent>,
-        logger: Arc<AgentLogger>,
+        mind_outlet: MindOutlet,
         heartbeat: HeartbeatRunner,
         scheduler_runner: AgentSchedulerRunner,
         gen_sender: watch::Sender<bool>,
@@ -68,11 +68,10 @@ impl AgentRuntime {
         Self {
             agent,
             event_loop,
-            agent_outlet,
+            mind_outlet,
             heartbeat,
             scheduler_runner,
             gen_sender,
-            logger,
         }
     }
     pub fn start(mut self) {
@@ -101,6 +100,7 @@ impl AgentRuntime {
         let ctx: Arc<AgentContext> = self.agent.context();
         let tool_engine_context = ctx.get::<ToolEngineContext>().unwrap();
         let mut generate_worker = GenerateWorker {
+            agent_id: self.agent.identity().id(),
             agent: self.agent.clone(),
             start_time: Local::now(),
             last_tag_open: None,
@@ -109,7 +109,7 @@ impl AgentRuntime {
             response_sections: vec![],
             gen_sender: self.gen_sender,
             web_sender: self.agent.web_sender.clone(),
-            logger: self.logger,
+
             tool_engine: Arc::new(ToolEngine::new(
                 self.agent.identity(),
                 self.agent.context(),
@@ -125,40 +125,40 @@ impl AgentRuntime {
                     .await
                     .unwrap();
             }
-            while let Some(c) = self.agent_outlet.next().await {
-                match c {
-                    AgentEvent::Env(event) => {
-                        //日志
-                        info!("AgentEvent: {:?}", event.data);
-                    }
-                    AgentEvent::Generate(event) => {
-                        if let Err(e) = generate_worker.handle(event).await {
-                            error!("GenerateWorker failed to handle event: {:?}", e);
-                            // 可选：通知前端或改变 Agent 状态为 Error
-                        }
-                    }
-                    AgentEvent::Status(agent_status) => {
-                        self.agent.heartbeat.reset();
-                    }
-                    AgentEvent::Overflow => {
-                        if let Err(send_event) = agent
-                            .send_event((
-                                AppEnvEventData::Interrupt("上下文溢出,请执行栈重组".to_string()),
-                                true,
-                            ))
-                            .await
-                        {
-                            error!("Failed to send Interrupt event: {:?}", send_event);
-                            // return;
-                        }
-                    }
+            while let Some(event) = self.mind_outlet.next().await {
+                if let Err(e) = generate_worker.handle(event).await {
+                    error!("GenerateWorker failed to handle event: {:?}", e);
+                    // 可选：通知前端或改变 Agent 状态为 Error
                 }
+                // match c {
+                //     AgentEvent::Env(event) => {
+                //         //日志
+                //         info!("AgentEvent: {:?}", event.data);
+                //     }
+                //     AgentEvent::Generate(event) => {}
+                //     AgentEvent::Status(agent_status) => {
+                //         self.agent.heartbeat.reset();
+                //     }
+                //     AgentEvent::Overflow => {
+                //         if let Err(send_event) = agent
+                //             .send_event((
+                //                 AppEnvEventData::Interrupt("上下文溢出,请执行栈重组".to_string()),
+                //                 true,
+                //             ))
+                //             .await
+                //         {
+                //             error!("Failed to send Interrupt event: {:?}", send_event);
+                //             // return;
+                //         }
+                //     }
+                // }
             }
         });
     }
 }
 
 struct GenerateWorker {
+    agent_id: u32,
     agent: Arc<AppAgent>,
     start_time: DateTime<Local>,
     last_tag_open: Option<(&'static SectionTag, String, Instant)>,
@@ -166,27 +166,24 @@ struct GenerateWorker {
     response_sections: Vec<Section>,
     web_sender: Arc<WebSender>,
     tool_engine: Arc<ToolEngine>,
-    logger: Arc<AgentLogger>,
     gen_sender: watch::Sender<bool>,
 }
 impl GenerateWorker {
+    fn reset(&mut self) {
+        self.start_time = Local::now();
+        self.last_tag_open = None;
+        self.response_event_id = 0;
+        self.response_sections.clear();
+    }
     async fn handle(&mut self, event: GenerateEvent) -> anyhow::Result<()> {
         let db = DB.get().unwrap();
-        let agent_id = self.agent.identity().id();
+        let agent_id = self.agent_id;
         match event {
-            GenerateEvent::Start(event_ids) => {
+            GenerateEvent::Start => {
                 println!("start...");
                 self.gen_sender.send(true)?;
-                self.response_sections.clear(); // 增加清理
-                self.last_tag_open = None;
-                self.start_time = Local::now();
-                entity_service::event::update_event_status(
-                    db,
-                    event_ids,
-                    EnvEventStatus::Processing,
-                )
-                .await
-                .unwrap();
+                self.reset(); // 增加清理
+                entity_service::event::processing(db, agent_id).await?;
                 {
                     //
                     let event = AppEnvEventData::AgentResponse(vec![]);
@@ -250,10 +247,10 @@ impl GenerateWorker {
                     WebEvent::Section(SectionEvent::Close(section), self.response_event_id);
                 self.web_sender.send(web_event);
             }
-            GenerateEvent::End(event_ids, reason) => {
+            GenerateEvent::End(reason) => {
                 //加入临时阻塞事件接收机制，防止期间有事件触发执行其他任务去了
                 println!("call start...");
-                let events = self.handle_end(event_ids, reason).await;
+                let mut events = self.handle_end(reason).await;
 
                 //处理响应
                 {
@@ -282,6 +279,18 @@ impl GenerateWorker {
                         .inject_event_to_context(event, reflection)
                         .await?;
                 }
+                {
+                    let limit = std::env::var("CONTEXT_SIZE_LIMIT")
+                        .map(|v| usize::from_str_radix(&v, 10).unwrap())
+                        .unwrap_or(50000);
+                    let len = self.agent.event_context().len();
+                    if len > limit {
+                        events.push((
+                            AppEnvEventData::Interrupt("上下文溢出,请执行栈重组".to_string()),
+                            false,
+                        ));
+                    }
+                }
                 let has_events = events.len() > 0;
                 println!("call end...{}", events.len());
                 for ele in events {
@@ -305,18 +314,13 @@ impl GenerateWorker {
         }
         Ok(())
     }
-    async fn handle_end(
-        &mut self,
-        event_ids: Vec<i64>,
-        resaon: EndReason,
-    ) -> Vec<(AppEnvEventData, bool)> {
+    async fn handle_end(&mut self, resaon: EndReason) -> Vec<(AppEnvEventData, bool)> {
         let mut events: Vec<(AppEnvEventData, bool)> = vec![];
         let db = DB.get().unwrap();
+        let agent_id = self.agent_id;
         {
             //修改事件状态为完成
-            entity_service::event::update_event_status(db, event_ids, EnvEventStatus::Done)
-                .await
-                .unwrap();
+            entity_service::event::done(db, agent_id).await.unwrap();
             let web_event: WebEvent = WebEvent::Section(SectionEvent::End, self.response_event_id);
             self.web_sender.send(web_event);
         }

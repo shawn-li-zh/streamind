@@ -36,5 +36,6 @@ kernel = { path = "../../kernel" }
 entity = { path = "../../entity" }
 runtime = { path = "../../runtime" }
 entity_service = { path = "../../entity_service" }
+rule_script = { path = "../../rule_script" }
 # 浏览器控制
 chromiumoxide = "0.9.1"

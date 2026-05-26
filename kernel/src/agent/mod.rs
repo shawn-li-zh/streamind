@@ -68,9 +68,8 @@ impl<E: EnvEvent, C: EventContext<E>> Agent<E, C> {
         identity: Arc<AgentIdentity>,
         context: Arc<AgentContext>,
         event_context: Arc<C>,
-    ) -> (Agent<E, C>, EventLoop<E, C>, AgentOutlet<E>) {
+    ) -> (Agent<E, C>, EventLoop<E, C>, MindOutlet) {
         //通道
-        let agent_event = mpsc::channel(100);
         //mind
         let (stream_mind, mind_inlet, mind_outlet) = StreamMind::new(event_context.clone());
         //创建代理实例
@@ -81,13 +80,9 @@ impl<E: EnvEvent, C: EventContext<E>> Agent<E, C> {
             mind_inlet,
             __phantom: PhantomData,
         };
-        let event_loop = EventLoop {
-            stream_mind,
-            mind_outlet,
-            event_sender: agent_event.0,
-        };
-        let agent_outlet = AgentOutlet::new(agent_event.1);
-        (agent, event_loop, agent_outlet)
+        let event_loop = EventLoop { stream_mind };
+
+        (agent, event_loop, mind_outlet)
     }
 }
 
@@ -117,32 +112,9 @@ impl<E: EnvEvent, C: EventContext<E>> AgentOutfit<E, C> for Agent<E, C> {
 
 pub struct EventLoop<E: EnvEvent, C: EventContext<E>> {
     stream_mind: StreamMind<E, C>,
-    mind_outlet: MindOutlet,
-    event_sender: mpsc::Sender<AgentEvent<E>>,
 }
 impl<E: EnvEvent, C: EventContext<E>> EventLoop<E, C> {
     pub fn start(mut self) {
-        let sender = self.event_sender.clone();
-        tokio::spawn(async move {
-            loop {
-                match self.stream_mind.event_loop().await.unwrap() {
-                    MindFlag::Closed => return,
-                    MindFlag::Overflow => {
-                        //让agent退栈
-                        // 发送失败说明 Agent 已销毁，直接退出即可
-                        if self.event_sender.send(AgentEvent::Overflow).await.is_err() {
-                            return;
-                        }
-                    }
-                }
-            }
-        });
-        tokio::spawn(async move {
-            while let Some(e) = self.mind_outlet.next().await {
-                if sender.send(AgentEvent::Generate(e)).await.is_err() {
-                    break; // 接收端已关闭，优雅退出
-                }
-            }
-        });
+        tokio::spawn(async move { self.stream_mind.event_loop().await });
     }
 }

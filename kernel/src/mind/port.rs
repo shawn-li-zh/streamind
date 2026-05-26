@@ -30,11 +30,11 @@ impl MindInlet {
 
 #[derive(Debug, Clone)]
 pub enum GenerateEvent {
-    Start(Vec<i64>),
+    Start,
     Open(&'static SectionTag, String),
     Chunk(&'static SectionTag, String),
     Close(&'static SectionTag, String),
-    End(Vec<i64>, EndReason),
+    End(EndReason),
     Error(Arc<anyhow::Error>),
 }
 #[derive(Debug, Clone)]

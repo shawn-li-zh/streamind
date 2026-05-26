@@ -19,7 +19,10 @@ use kernel::{
         AgentIdentity, AgentOutfit,
     },
     message::Information,
-    mind::port::CommandEvent,
+    mind::{
+        context::EventContext as _,
+        port::{CommandEvent, MindOutlet},
+    },
     tool::engine::ToolEngineContext,
 };
 use parking_lot::RwLock;
@@ -95,7 +98,6 @@ impl AppAgent {
             agent.clone(),
             event_loop,
             outlet,
-            logger,
             heartbeat_runner,
             runner,
             gen.0,
@@ -154,7 +156,6 @@ impl AppAgent {
         info!("AgentEvent: {:?}", &env_event.data);
         //反射
         let reflection = self.event_reflect(&env_event).await?;
-        // let reflection = reflection.map(|v| AppEnvEventData::Reflection(v));
         //发送给代理
         if env_event.force {
             self.instance.send_cmd(CommandEvent::Canceled).await?;
@@ -290,7 +291,7 @@ pub async fn build_instance(
 ) -> (
     AgentInstance,
     EventLoop,
-    AgentOutlet<AppEnvEvent>,
+    MindOutlet,
     Receiver<(Arc<AgentTimer>, bool)>,
 ) {
     let model_id = agent.model_id;
@@ -499,6 +500,22 @@ async fn build_agent_context(identity: &AgentIdentity) -> Arc<AgentContext> {
                     if let Some(agent) = agent {
                         let rule_engine = agent.reflect_engine.clone();
                         return Ok(rule_engine.group_names());
+                    }
+                    anyhow::bail!("Agent not found")
+                }
+                .boxed()
+            }),
+            simplify_expr: Box::new(move |expr| {
+                let agent = {
+                    let p = AGENT_POOL.read();
+                    p.get(&agent_id).map(|v| v.clone())
+                };
+
+                async move {
+                    if let Some(agent) = agent {
+                        let rule_engine = agent.reflect_engine.clone();
+                        let expr = rule_engine.simplify(&expr)?;
+                        return Ok(expr);
                     }
                     anyhow::bail!("Agent not found")
                 }

@@ -3,7 +3,7 @@ use entity::{
     event::{EnvEventStatus, EnvEventType},
     format::date_time,
 };
-use kernel::section::Section;
+use kernel::{agent::Agent, section::Section};
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, EntityOrSelect, EntityTrait,
     FromJsonQueryResult, FromQueryResult, QueryFilter, QueryOrder, QuerySelect,
@@ -102,34 +102,6 @@ pub async fn save(
     Ok(model)
 }
 
-// pub async fn update_tool_call_result(
-//     db: &impl ConnectionTrait,
-//     event_id: i64,
-//     details: Vec<ToolCallDetailItem>,
-// ) -> anyhow::Result<()> {
-//     //更新section
-//     for ele in &details {
-//         crate::section::update_value(db, ele.id, ele.clone()).await?;
-//     }
-//     //
-//     let data = serde_json::to_value(details)?;
-//     let model = entity::event::ActiveModel {
-//         data: Set(data),
-//         status: Set(EnvEventStatus::Pending),
-//         ..Default::default()
-//     };
-
-//     let result = entity::event::Entity::update_many()
-//         .set(model)
-//         .filter(entity::event::Column::Id.eq(event_id))
-//         .filter(entity::event::Column::EventType.eq(EnvEventType::ToolCallResult))
-//         .exec(db)
-//         .await?;
-//     if result.rows_affected != 1 {
-//         return Err(anyhow::anyhow!("更新失败"));
-//     }
-//     Ok(())
-// }
 
 pub async fn update_agent_response(
     db: &impl ConnectionTrait,
@@ -166,22 +138,51 @@ pub async fn update_agent_response(
     }
     Ok(())
 }
-pub async fn update_event_status(
-    db: &impl ConnectionTrait,
-    event_ids: Vec<i64>,
-    status: EnvEventStatus,
-) -> anyhow::Result<()> {
+// pub async fn update_event_status(
+//     db: &impl ConnectionTrait,
+//     event_ids: Vec<i64>,
+//     status: EnvEventStatus,
+// ) -> anyhow::Result<()> {
+//     let model = entity::event::ActiveModel {
+//         status: Set(status),
+//         ..Default::default()
+//     };
+//     entity::event::Entity::update_many()
+//         .filter(entity::event::Column::Id.is_in(event_ids))
+//         .set(model)
+//         .exec(db)
+//         .await?;
+//     Ok(())
+// }
+
+pub async fn processing(db: &impl ConnectionTrait, agent_id: u32) -> anyhow::Result<()> {
     let model = entity::event::ActiveModel {
-        status: Set(status),
+        status: Set(EnvEventStatus::Processing),
         ..Default::default()
     };
     entity::event::Entity::update_many()
-        .filter(entity::event::Column::Id.is_in(event_ids))
+        .filter(entity::event::Column::AgentId.eq(agent_id))
+        .filter(entity::event::Column::Status.eq(EnvEventStatus::Pending))
         .set(model)
         .exec(db)
         .await?;
     Ok(())
 }
+
+pub async fn done(db: &impl ConnectionTrait, agent_id: u32) -> anyhow::Result<()> {
+    let model = entity::event::ActiveModel {
+        status: Set(EnvEventStatus::Done),
+        ..Default::default()
+    };
+    entity::event::Entity::update_many()
+        .filter(entity::event::Column::AgentId.eq(agent_id))
+        .filter(entity::event::Column::Status.eq(EnvEventStatus::Processing))
+        .set(model)
+        .exec(db)
+        .await?;
+    Ok(())
+}
+
 pub async fn list(agent_id: u32, state_id: i64) -> anyhow::Result<Vec<entity::event::Model>> {
     let db = DB.get().unwrap();
     let events = entity::event::Entity::find()

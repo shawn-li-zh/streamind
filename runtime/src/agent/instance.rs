@@ -3,7 +3,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use kernel::{
     agent::{AgentIdentity, AgentOutfit, context::AgentContext, port::AgentOutlet},
-    mind::port::CommandEvent,
+    mind::port::{CommandEvent, MindOutlet},
 };
 
 use crate::agent::{
@@ -42,7 +42,7 @@ pub fn build_agent_instance(
     event_context: Arc<StackContext<AppEnvEvent>>,
     scheduler: Arc<dyn AgentSchedulerHandler>,
     authority: Arc<dyn AgentAuthorityHandler>,
-) -> (AgentInstance, EventLoop, AgentOutlet<AppEnvEvent>) {
+) -> (AgentInstance, EventLoop, MindOutlet) {
     let (agent, event_loop, outlet) = kernel::agent::Agent::build(identity, context, event_context);
     // let context = agent.context();
     let ins = AgentInstance {

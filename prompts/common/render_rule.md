@@ -9,7 +9,7 @@
 - **class / style**：可选。用于定义容器的 Tailwind 类名或 CSS 样式。
 
 **2. 示例：授权请求**
-```xml
+```text
 <render>
   <AuthRequest 
     title="文件操作授权" 

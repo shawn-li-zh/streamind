@@ -53,6 +53,9 @@ impl<R: Clone + Send + Sync + 'static> RuleEngine<R> {
         let operators = evaluate::extract_operators(&asts);
         return Ok((asts, operators));
     }
+    pub fn simplify(&self, expr: &str) -> anyhow::Result<String> {
+        self.script_engine.simplify(expr)
+    }
     pub async fn trigger(&self, element: EventElement) -> anyhow::Result<Vec<R>> {
         let element = Arc::new(element);
         let groups_data: Vec<_> = {

@@ -13,7 +13,7 @@ pub struct AgentLogger {
 }
 impl AgentLogger {
     pub async fn new(worksapce: &PathBuf) -> io::Result<Self> {
-        let time = Local::now().format("%Y-%m-%d %H:%M").to_string();
+        let time = Local::now().format("%Y-%m-%d %H_%M").to_string();
         let path = worksapce.join(format!("log/{}.txt", &time));
         if let Some(parent) = path.parent() {
             if !parent.exists() {
@@ -36,7 +36,7 @@ impl AgentLogger {
         let msg = event.to_message();
         let role = msg.role();
         let (text, _) = msg.to_tuple();
-        let s = format!("\n{:?}:\n{}\n", role, text);
+        let s: String = format!("\n{:?}:\n{}\n", role, text);
         {
             let mut log_file = self.log_file.lock().await;
             log_file.write(s.as_bytes()).await?;

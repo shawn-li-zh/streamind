@@ -1,8 +1,4 @@
-use std::{
-    fs::File,
-    io::Write,
-    sync::{Arc, LazyLock},
-};
+use std::sync::{Arc, LazyLock};
 
 use async_trait::async_trait;
 use futures::{Stream, StreamExt};
@@ -151,13 +147,17 @@ impl<E: EnvEvent> MindNode<E> {
 }
 #[async_trait]
 impl<E: EnvEvent> EventContext<E> for StackContext<E> {
-    fn push_events(&self, events: Vec<E>) {
-        info!("received events [{}]", events.len());
-        for event in events {
-            self.push_event(event);
-        }
+    fn push_event(&self, event: E) {
+        let size = event.size();
+        let mut inner = self.inner.write();
+        inner.content_len += size;
+        let node: &mut MindNode<E> = inner.last_mut().unwrap();
+        node.push(event);
     }
-
+    fn len(&self) -> usize {
+        let inner = self.inner.read();
+        inner.content_len
+    }
     async fn chunk_stream(
         &self,
     ) -> std::pin::Pin<Box<dyn Stream<Item = anyhow::Result<String>> + Send>> {
@@ -181,24 +181,9 @@ impl<E: EnvEvent> StackContext<E> {
         }
         msgs
     }
-    pub fn push_event(&self, event: E) {
-        let size = event.size();
-
-        let mut inner = self.inner.write();
-        inner.content_len += size;
-        let node: &mut MindNode<E> = inner.last_mut().unwrap();
-        node.push(event);
-    }
 
     pub fn push_node(&self, node: MindNode<E>) {
-        // {
-        //     let s = format!("\n{:?}:\n{}\n", Role::Assistant, &node.statement());
-        //     let mut log_file = self.log_file.lock();
-        //     log_file.write(s.as_bytes()).unwrap();
-        //     log_file.flush().unwrap();
-        // }
         let mut inner = self.inner.write();
-
         //
         inner.back_to(node.node.pos);
         inner.nodes.push(node);

@@ -6,6 +6,7 @@ use std::{
 
 use dashmap::DashMap;
 use futures::{Stream, StreamExt, stream::FuturesUnordered};
+use tracing::warn;
 
 use crate::{
     agent::{AgentIdentity, context::AgentContext},
@@ -99,6 +100,7 @@ impl ToolEngine {
                     ToolCallEvent::Success(item)
                 }
                 Err(e) => {
+                    warn!("Call failed: {}", &e);
                     item.values.push(ToolReturnValue::Raw(e.to_string()));
                     item.status = ToolCallStatus::Failure;
                     ToolCallEvent::Failure(item)
