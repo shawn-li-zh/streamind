@@ -8,23 +8,18 @@ use std::{
 
 use anyhow::Context as _;
 use chrono::{DateTime, Local};
-use entity::event::{self, EnvEventStatus};
+
 use entity_service::DB;
 use futures::StreamExt;
 use kernel::{
-    agent::{
-        context::{AgentContext, AgentStatus},
-        event::AgentEvent,
-        port::AgentOutlet,
-        AgentOutfit,
-    },
+    agent::{context::AgentContext, AgentOutfit},
     mind::{
         context::EventContext,
         port::{CommandEvent, EndReason, GenerateEvent, MindOutlet},
+        section::{Section, SectionTag},
     },
     parser,
     render::RenderContext,
-    section::{Section, SectionTag},
     tool::{
         call::ToolCall,
         core::ToolReturnValue,
@@ -79,7 +74,7 @@ impl AgentRuntime {
             let var = std::env::var("HEARTBEAT_INTERVAL").unwrap_or("10".to_string());
             let secs = var.parse::<u64>().unwrap();
             let interval = std::time::Duration::from_secs(secs);
-            // self.heartbeat.start(interval);
+            self.heartbeat.start(interval);
             //
             self.scheduler_runner.start();
             self.event_loop.start();
@@ -116,7 +111,7 @@ impl AgentRuntime {
                 tool_engine_context,
             )),
         };
-        let agent = self.agent.clone();
+
         tokio::spawn(async move {
             {
                 let identity = self.agent.identity();
@@ -130,28 +125,6 @@ impl AgentRuntime {
                     error!("GenerateWorker failed to handle event: {:?}", e);
                     // 可选：通知前端或改变 Agent 状态为 Error
                 }
-                // match c {
-                //     AgentEvent::Env(event) => {
-                //         //日志
-                //         info!("AgentEvent: {:?}", event.data);
-                //     }
-                //     AgentEvent::Generate(event) => {}
-                //     AgentEvent::Status(agent_status) => {
-                //         self.agent.heartbeat.reset();
-                //     }
-                //     AgentEvent::Overflow => {
-                //         if let Err(send_event) = agent
-                //             .send_event((
-                //                 AppEnvEventData::Interrupt("上下文溢出,请执行栈重组".to_string()),
-                //                 true,
-                //             ))
-                //             .await
-                //         {
-                //             error!("Failed to send Interrupt event: {:?}", send_event);
-                //             // return;
-                //         }
-                //     }
-                // }
             }
         });
     }
@@ -182,6 +155,7 @@ impl GenerateWorker {
             GenerateEvent::Start => {
                 println!("start...");
                 self.gen_sender.send(true)?;
+
                 self.reset(); // 增加清理
                 entity_service::event::processing(db, agent_id).await?;
                 {
@@ -274,7 +248,7 @@ impl GenerateWorker {
                             size,
                         }
                     };
-                    let reflection = self.agent.event_reflect(&event).await?;
+                    let reflection = self.agent.cond_reflection.event_reflect(&event).await?;
                     self.agent
                         .inject_event_to_context(event, reflection)
                         .await?;
@@ -282,11 +256,11 @@ impl GenerateWorker {
                 {
                     let limit = std::env::var("CONTEXT_SIZE_LIMIT")
                         .map(|v| usize::from_str_radix(&v, 10).unwrap())
-                        .unwrap_or(50000);
+                        .unwrap_or(1024 * 1024);
                     let len = self.agent.event_context().len();
                     if len > limit {
                         events.push((
-                            AppEnvEventData::Interrupt("上下文溢出,请执行栈重组".to_string()),
+                            AppEnvEventData::Interrupt("上下文溢出,请重编上下文".to_string()),
                             false,
                         ));
                     }
@@ -295,17 +269,19 @@ impl GenerateWorker {
                 println!("call end...{}", events.len());
                 for ele in events {
                     let event = self.agent.save_event(ele).await?;
-                    let reflection = self.agent.event_reflect(&event).await?;
+                    let reflection = self.agent.cond_reflection.event_reflect(&event).await?;
                     self.agent
                         .inject_event_to_context(event, reflection)
                         .await?;
                 }
+                self.agent.cond_reflection.refresh_triggered_rules();
                 if has_events {
                     self.agent.send_cmd(CommandEvent::Generate).await?;
+                } else {
+                    //释放状态
+                    self.agent.heartbeat.reset();
+                    self.gen_sender.send(false)?;
                 }
-                //释放状态
-                self.agent.heartbeat.enable();
-                self.gen_sender.send(false)?;
             }
             GenerateEvent::Error(e) => {
                 error!("generate event error: {:?}", e);
@@ -543,9 +519,9 @@ async fn push_state(agent: Arc<AppAgent>, pushs: Vec<Node>) -> anyhow::Result<()
     let agent_id = agent.identity().id();
     let stack = agent.event_context();
     for mut push in pushs {
-        if push.pos == 0 {
-            anyhow::bail!("核心栈状态不能重置")
-        }
+        // if push.pos == 0 {
+        //     anyhow::bail!("核心栈状态不能重置")
+        // }
         let stack = stack.clone();
         let model = entity_service::state::push(
             db,

@@ -1,9 +1,6 @@
 use async_openai::types::chat::ChatCompletionRequestMessage;
 
-use kernel::{
-    message::{Information, RoleMessage},
-    section::Section,
-};
+use kernel::message::{Information, RoleMessage};
 
 use crate::kit::prompt_kit;
 
@@ -44,12 +41,12 @@ pub fn to_sdk_message(value: RoleMessage) -> ChatCompletionRequestMessage {
 //     }
 // }
 
-pub fn to_assistant_ouput(sections: Vec<Section>) -> Vec<Information> {
-    sections
-        .into_iter()
-        .map(|s| {
-            let full = s.to_string();
-            Information::Function(s.name, full)
-        })
-        .collect()
-}
+// pub fn to_assistant_ouput(sections: Vec<Section>) -> Vec<Information> {
+//     sections
+//         .into_iter()
+//         .map(|s| {
+//             let full = s.to_string();
+//             Information::Function(s.name, full)
+//         })
+//         .collect()
+// }

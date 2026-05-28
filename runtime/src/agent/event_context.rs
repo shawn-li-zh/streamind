@@ -74,7 +74,7 @@ impl<E> StackContextInner<E> {
     fn back_to(&mut self, pos: usize) -> Vec<MindNode<E>> {
         let removed = self.nodes.split_off(pos);
         for ele in &removed {
-            self.content_len -= ele.content_len;
+            self.content_len = self.content_len.saturating_sub(ele.content_len)
         }
         return removed;
     }
@@ -108,6 +108,15 @@ impl<E> StackContext<E> {
             inner: RwLock::new(StackContextInner::new()),
         }
     }
+    pub fn nodes(&self) -> Vec<(Node, Vec<Arc<E>>)> {
+        let inner = self.inner.read();
+
+        let mut events = vec![];
+        for node in &inner.nodes {
+            events.push((node.node.clone(), node.events.clone()));
+        }
+        events
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -119,11 +128,18 @@ pub struct Node {
 }
 pub struct MindNode<E> {
     pub node: Node,
-    pub events: Vec<E>,
+    events: Vec<Arc<E>>,
     //上下文长度
-    pub content_len: usize,
+    content_len: usize,
 }
 impl<E: EnvEvent> MindNode<E> {
+    pub fn new(node: Node) -> Self {
+        Self {
+            node,
+            events: vec![],
+            content_len: 0,
+        }
+    }
     pub fn statement(&self) -> String {
         format!(
             "<push pos={}>{}\n\n{}\n</push>",
@@ -141,8 +157,11 @@ impl<E: EnvEvent> MindNode<E> {
     }
 
     pub fn push(&mut self, event: E) {
-        // self.content_len += msg.size();
-        self.events.push(event);
+        self.content_len += event.size();
+        self.events.push(Arc::new(event));
+    }
+    pub fn len(&self) -> usize {
+        self.events.len()
     }
 }
 #[async_trait]

@@ -25,8 +25,11 @@ pub mod timer {
         let identity = ctx.agent_identity;
         let agent_id = identity.id();
         let agent_timers = entity_service::agent_timer::range(agent_id, start, num, key).await?;
+          if agent_timers.is_empty() {
+            return Ok(ToolReturn::raw("查询结果为空"));
+        }
         let mut res = vec![];
-        res.push(format!("结果总数:{}\n---", agent_timers.len()));
+   
         for timer in agent_timers {
             let info = format!(
                 "ID={},周期={},次数限制={},已触发次数={}\n附加信息:\n{}",

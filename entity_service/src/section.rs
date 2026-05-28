@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use kernel::section::Section;
+use kernel::mind::section::Section;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter,
 };

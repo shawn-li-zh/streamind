@@ -1,8 +1,8 @@
 use std::{io::Write, path::PathBuf};
 
 use chrono::Local;
-use kernel::{agent::event::EnvEvent, message::Role, section::Section};
-use runtime::agent::{event::AppEnvEvent, event_context::MindNode};
+use kernel::agent::event::EnvEvent;
+use runtime::agent::event::AppEnvEvent;
 use tokio::{
     fs::{self, File},
     io::{self, AsyncWriteExt as _},
@@ -13,7 +13,7 @@ pub struct AgentLogger {
 }
 impl AgentLogger {
     pub async fn new(worksapce: &PathBuf) -> io::Result<Self> {
-        let time = Local::now().format("%Y-%m-%d %H_%M").to_string();
+        let time = Local::now().format("%Y-%m-%d %H_%M_%S").to_string();
         let path = worksapce.join(format!("log/{}.txt", &time));
         if let Some(parent) = path.parent() {
             if !parent.exists() {

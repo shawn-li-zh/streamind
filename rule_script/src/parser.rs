@@ -131,7 +131,7 @@ mod tests {
     #[test]
     fn test_parse_complex_expr() {
         // 测试复合运算、函数调用、小数补齐和逻辑组合
-        let input = r#" aaa("bbb", 1.2, true) > 3.1415926 & (10 + 5 * 2 == 20) | !false "#;
+        let input = r#" aaa("bbb", 1.2, true) > 3.1415926 & (10 + 5 * 2 == 20) | !false &test('中文') |str(`sdsds`)"#;
         let expr = parse_expr(input).unwrap();
         println!("{:#?}", expr);
     }

@@ -1,19 +1,13 @@
 use kernel::{
-    agent::event::EnvEvent,
-    message::{Information, RoleMessage},
-    tool::event::ToolCallDetailItem,
+    agent::event::EnvEvent, message::{Information, RoleMessage}, mind::section::{Section, SectionTag}, tool::event::ToolCallDetailItem
 };
 use std::{collections::HashMap, fmt::Display, time::Duration};
 
 use serde::{Deserialize, Serialize};
 
-use kernel::{
-    message::Binary,
-    section::{Section, SectionTag},
-    tool::core::ToolReturnValue,
-};
+use kernel::{message::Binary, tool::core::ToolReturnValue};
 
-use crate::agent::reflect::{ReflectData, ReflectEvent};
+use crate::agent::reflect::ReflectEvent;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TimerData {
@@ -246,7 +240,7 @@ impl EnvEvent for AppEnvEvent {
         }
         let infos = self.to_infos();
         match &self.data {
-            AppEnvEventData::Error(_error) => RoleMessage::System(infos),
+            // AppEnvEventData::Error(_error) => RoleMessage::System(infos),
             AppEnvEventData::UserRequest(_user_message) => RoleMessage::User(infos),
             AppEnvEventData::ToolResponse(detail) => {
                 RoleMessage::Tool(detail.call_id.clone(), infos)

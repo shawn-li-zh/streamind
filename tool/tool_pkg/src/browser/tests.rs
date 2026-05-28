@@ -5,6 +5,7 @@ use std::{
     time::Duration,
 };
 
+use anyhow::Context as _;
 use chromiumoxide::{
     Browser, BrowserConfig, Page,
     cdp::browser_protocol::browser::{SetDownloadBehaviorBehavior, SetDownloadBehaviorParams},
@@ -12,7 +13,11 @@ use chromiumoxide::{
 use futures::StreamExt as _;
 use tracing::error;
 
-use crate::browser::{self, utils};
+use crate::browser::{
+    self,
+    action::BrowserAction,
+    utils::{self},
+};
 static JS: LazyLock<String> = LazyLock::new(|| {
     let path = Path::new(r"D:\project\rust\streamind\public\browser.inject.js");
     let content = std::fs::read_to_string(path).expect("Failed to read file");
@@ -86,4 +91,23 @@ async fn new_tab(url: String, browser: &Browser) -> anyhow::Result<Page> {
     };
     println!("页面加载完成");
     Ok(page)
+}
+#[test]
+pub fn pipeline() -> anyhow::Result<()> {
+
+    let cmds =
+        r#"node.type(id=14, text='测试账号');  node.type(id=16, text='测试密码');node.click(id=18, x=1161.1, y=486.7)"#;
+    let mut actions = vec![];
+    for (i, s) in cmds.split(";").enumerate() {
+        let s = s.trim();
+        if s.is_empty() {
+            continue;
+        }
+        let action =
+            BrowserAction::from_str(s.trim()).map_err(|e| anyhow::anyhow!("第{}条指令解析错误: {}", i, e))?;
+        actions.push(action);
+    }
+
+    print!("{:?}", actions);
+    Ok(())
 }

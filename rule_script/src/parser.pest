@@ -3,8 +3,9 @@ WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
 
 // 2. 基础数据类型定义
 boolean = { "true" | "false" }
-string  = ${ "\"" ~ inner ~ "\"" }
-inner   = @{ (!"\"" ~ ANY)* }
+quo=_{ "\""|"'"|"`"}
+string  = ${quo ~ inner ~ quo }
+inner   = @{ (!quo ~ ANY)* }
 // 匹配整数与小数（由于你定义的是 u32，因此不支持负号）
 number  = @{ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? }
 

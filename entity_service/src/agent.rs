@@ -114,3 +114,20 @@ pub async fn list_by_model_ids(model_ids: Vec<u32>) -> anyhow::Result<Vec<entity
         .unwrap();
     Ok(agents)
 }
+
+pub async fn update_rule_groups(
+    db: &impl ConnectionTrait,
+    agent_id: u32,
+    rule_groups: Vec<String>,
+) -> anyhow::Result<()> {
+    let agent = entity::agent::ActiveModel {
+        rule_groups: Set(StringArray(rule_groups)),
+        ..Default::default()
+    };
+    entity::agent::Entity::update_many()
+        .set(agent)
+        .filter(entity::agent::Column::Id.eq(agent_id))
+        .exec(db)
+        .await?;
+    Ok(())
+}

@@ -1,15 +1,22 @@
-use std::{collections::HashMap, fs::File, sync::Arc};
+use std::{
+    collections::HashMap,
+    fs::File,
+    sync::{Arc, LazyLock},
+};
 
 use entity::event::EnvEventType;
+use entity_service::event::event_convert;
 use kernel::{
-    agent::{AgentIdentity, context::AgentContext}, client::ChatClient, mind::context::EventContext as _, tool::engine::ToolEngineContext
+    agent::{context::AgentContext, AgentIdentity},
+    client::ChatClient,
+    mind::context::EventContext as _,
+    tool::engine::ToolEngineContext,
 };
 use runtime::agent::{
     event::AppEnvEvent,
     event_context::{MindNode, Node, StackContext},
 };
-
-use crate::event::convert;
+use tracing::info;
 
 pub async fn load_stack(
     identity: &AgentIdentity,
@@ -45,34 +52,43 @@ pub async fn load_stack(
     let sp = build_system_prompt(identity, ctx);
     let stack = StackContext::new(client, sp);
     for state in states {
-        let node = MindNode {
-            node: Node {
-                id: state.id,
-                pos: state.pos as _,
-                title: state.title,
-                content: state.content,
-            },
-            events: vec![],
-            content_len: 0,
-        };
-        stack.push_node(node);
-        //
+        let mut node = MindNode::new(Node {
+            id: state.id,
+            pos: state.pos as _,
+            title: state.title,
+            content: state.content,
+        });
         let events = state_id_map_events.remove(&state.id).unwrap_or_default();
         for event in events {
-            let agent_event = convert::from_entity(event);
-            stack.push_event(agent_event);
+            let agent_event = event_convert::from_entity(event);
+            node.push(agent_event);
         }
+        info!("状态节点:{}，共加载{}个事件", node.node.pos, node.len());
+        stack.push_node(node);
+        //
+
         //
     }
     //
     Ok(stack)
 }
-pub static EVENT_DRIVEN: &str = include_str!("../prompts/common/event_driven.md");
-pub static GENERATE_RULE: &str = include_str!("../prompts/common/generate_rule.md");
 
-pub static STACK_CONTEXT_RULE: &str = include_str!("../prompts/common/stack_context_rule.md");
-pub static TOOL_CALL_RULE: &str = include_str!("../prompts/common/tool_call_rule.md");
-pub static RENDER_RULE: &str = include_str!("../prompts/common/render_rule.md");
+pub static EVENT_DRIVEN: LazyLock<String> =
+    LazyLock::new(|| std::fs::read_to_string("prompts/common/event_driven.md").unwrap_or_default());
+
+pub static GENERATE_RULE: LazyLock<String> = LazyLock::new(|| {
+    std::fs::read_to_string("prompts/common/generate_rule.md").unwrap_or_default()
+});
+pub static STACK_CONTEXT_RULE: LazyLock<String> = LazyLock::new(|| {
+    std::fs::read_to_string("prompts/common/stack_context_rule.md").unwrap_or_default()
+});
+pub static REFLECT_RULE: LazyLock<String> =
+    LazyLock::new(|| std::fs::read_to_string("prompts/common/reflect_rule.md").unwrap_or_default());
+pub static TOOL_CALL_RULE: LazyLock<String> = LazyLock::new(|| {
+    std::fs::read_to_string("prompts/common/tool_call_rule.md").unwrap_or_default()
+});
+pub static RENDER_RULE: LazyLock<String> =
+    LazyLock::new(|| std::fs::read_to_string("prompts/common/render_rule.md").unwrap_or_default());
 
 pub fn build_system_prompt(identity: &AgentIdentity, ctx: &AgentContext) -> String {
     let tool_engine_context = ctx.get::<ToolEngineContext>().unwrap();
@@ -94,6 +110,7 @@ pub fn build_system_prompt(identity: &AgentIdentity, ctx: &AgentContext) -> Stri
     lines.push(EVENT_DRIVEN.trim().to_string());
     lines.push(GENERATE_RULE.trim().to_string());
     lines.push(STACK_CONTEXT_RULE.trim().to_string());
+    lines.push(REFLECT_RULE.trim().to_string());
     lines.push(TOOL_CALL_RULE.trim().to_string());
     lines.push(RENDER_RULE.trim().to_string());
     lines.push(format!("# 工具包列表(全部)\n{}", items.join("\n"),));

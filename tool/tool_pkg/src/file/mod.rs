@@ -102,4 +102,14 @@ pub mod file {
         }
         Ok(())
     }
+
+    #[tool(
+        anno = "当前系统运行路径",
+        example = r#"current_dir()"#,
+        limit = "10s:5"
+    )]
+    pub fn current_dir(#[ctx] ctx: ToolCallContext) -> anyhow::Result<String> {
+        let path = std::env::current_dir()?;
+        Ok(path.display().to_string())
+    }
 }

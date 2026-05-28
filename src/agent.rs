@@ -8,7 +8,8 @@ use anyhow::Ok;
 use async_trait::async_trait;
 use axum::response::sse;
 
-use entity_service::DB;
+use dashmap::DashMap;
+use entity_service::{event::event_convert, DB};
 
 use futures::FutureExt as _;
 use kernel::{
@@ -44,14 +45,13 @@ use tool_pkg::{reflect::ReflectInjected, timer::TimerInjected};
 use tracing::{error, info, warn};
 
 use crate::{
-    event::convert,
     event_context::load_stack,
     global::{AGENT_POOL, EMBEDDING_CLIENT, ENGINE_POOL, TOOL_PACKAGE_TOOL},
-    logger::{self, AgentLogger},
     plugin::{
         authority::AgentAuthority,
         heartbeat::{Heartbeat, HeartbeatRunner},
-        reflect::{self, load_rule_groups},
+        logger::{self, AgentLogger},
+        reflect::{self, load_rule_groups, CondReflection},
         scheduler::{AgentScheduler, AgentSchedulerRunner},
     },
     runtime::AgentRuntime,
@@ -63,7 +63,7 @@ pub struct AppAgent {
     pub(crate) web_sender: Arc<WebSender>,
     gen_watcher: Mutex<watch::Receiver<bool>>,
     logger: Arc<AgentLogger>,
-    pub(crate) reflect_engine: Arc<RuleEngine<ReflectData>>,
+    pub(crate) cond_reflection: CondReflection,
 }
 impl AppAgent {
     pub async fn new(model: entity::agent::Model) -> (Arc<Self>, AgentRuntime) {
@@ -74,7 +74,7 @@ impl AppAgent {
         let reflect_engine: RuleEngine<ReflectData> =
             reflect::load_reflection_engine(&model).await.unwrap();
         //日志
-        let logger = AgentLogger::new(&instance.identity().workspace)
+        let logger: AgentLogger = AgentLogger::new(&instance.identity().workspace)
             .await
             .unwrap();
         let logger = Arc::new(logger);
@@ -86,9 +86,13 @@ impl AppAgent {
             }),
             gen_watcher: Mutex::new(gen.1),
             logger: logger.clone(),
-            reflect_engine: Arc::new(reflect_engine),
+            cond_reflection: CondReflection::new(
+                model.id,
+                instance.event_context(),
+                reflect_engine,
+            ),
         };
-
+        agent.cond_reflection.refresh_triggered_rules();
         let agent = Arc::new(agent);
 
         //
@@ -155,10 +159,10 @@ impl AppAgent {
         }
         info!("AgentEvent: {:?}", &env_event.data);
         //反射
-        let reflection = self.event_reflect(&env_event).await?;
+        let reflection = self.cond_reflection.event_reflect(&env_event).await?;
         //发送给代理
         if env_event.force {
-            self.instance.send_cmd(CommandEvent::Canceled).await?;
+            self.instance.send_cmd(CommandEvent::Cancel).await?;
         }
         //等待生成完成
         let mut gen = self.gen_watcher.lock().await;
@@ -184,8 +188,8 @@ impl AppAgent {
                     anyhow::bail!("没有状态节点");
                 }
             };
-            let ty = convert::to_type_enum(&data);
-            let value = convert::to_json(&data);
+            let ty = event_convert::to_type_enum(&data);
+            let value = event_convert::to_json(&data);
             entity_service::event::save(db, identity.id(), state_id, ty, value, force, data.size())
                 .await?
         };
@@ -215,50 +219,6 @@ impl AppAgent {
             event_context.push_event(env_event);
         }
         Ok(())
-    }
-    //事件反射
-    pub(crate) async fn event_reflect(
-        &self,
-        event: &AppEnvEvent,
-    ) -> anyhow::Result<Option<ReflectEvent>> {
-        let mut source_event_id = event.id;
-        let mut level = 1;
-        match &event.data {
-            AppEnvEventData::Reflection(ev) => {
-                level = ev.level + 1;
-                if level > 2 {
-                    //最多反射两层
-                    return Ok(None);
-                }
-                source_event_id = ev.source_event_id;
-            }
-            _ => {}
-        }
-        //
-        let (text, _paths) = event.to_message().to_tuple();
-        let client = EMBEDDING_CLIENT.get().unwrap();
-        let embedding = client
-            .union_embed(vec![Information::Text(text.clone())])
-            .await?;
-
-        let element = EventElement {
-            event_type: event.data.code(),
-            time: event.time.format("%Y-%m-%d %H:%M:%S").to_string(),
-            force: event.force,
-            context: text,
-            embedding,
-        };
-
-        let datas = self.reflect_engine.trigger(element).await?;
-        if datas.is_empty() {
-            return Ok(None);
-        }
-        let event = ReflectEvent {
-            source_event_id,
-            level,
-            datas,
-        };
-        Ok(Some(event))
     }
 }
 
@@ -399,6 +359,7 @@ async fn build_agent_context(identity: &AgentIdentity) -> Arc<AgentContext> {
     //
     //注入相关工具
     {
+        let db = DB.get().unwrap();
         let injected = TimerInjected {
             add: Box::new(move |timer| {
                 let agent = {
@@ -442,6 +403,7 @@ async fn build_agent_context(identity: &AgentIdentity) -> Arc<AgentContext> {
                         println!("Sleeping...");
                         tokio::spawn(async move {
                             tokio::time::sleep(dur).await;
+                            agent.heartbeat.reset();
                             agent.heartbeat.enable();
                             println!("Wake up...");
                         });
@@ -455,65 +417,57 @@ async fn build_agent_context(identity: &AgentIdentity) -> Arc<AgentContext> {
         context.insert(injected);
         let injected = ReflectInjected {
             load_groups: Box::new(move |group_names| {
-                let agent = {
-                    let p = AGENT_POOL.read();
-                    p.get(&agent_id).map(|v| v.clone())
-                };
-
                 async move {
+                    let agent = {
+                        let p = AGENT_POOL.read();
+                        p.get(&agent_id).map(|v| v.clone())
+                    };
+
                     if let Some(agent) = agent {
-                        let rule_engine = agent.reflect_engine.clone();
-                        let groups = load_rule_groups(&rule_engine, &group_names).await?;
-                        rule_engine.clear_groups();
-                        for group in groups {
-                            rule_engine.add_rule_group(group);
-                        }
+                        agent.cond_reflection.load_groups(&group_names).await?;
+                        return Ok(());
                     }
                     anyhow::bail!("Agent not found")
                 }
                 .boxed()
             }),
             unload_groups: Box::new(move |group_names| {
-                let agent = {
-                    let p = AGENT_POOL.read();
-                    p.get(&agent_id).map(|v| v.clone())
-                };
-
                 async move {
+                    let agent = {
+                        let p = AGENT_POOL.read();
+                        p.get(&agent_id).map(|v| v.clone())
+                    };
                     if let Some(agent) = agent {
-                        let rule_engine = agent.reflect_engine.clone();
-                        for group in group_names {
-                            rule_engine.remove_rule_group(&group);
-                        }
+                        agent.cond_reflection.unload_groups(&group_names).await?;
+                        return Ok(());
                     }
                     anyhow::bail!("Agent not found")
                 }
                 .boxed()
             }),
             current_group_names: Box::new(move || {
-                let agent = {
-                    let p = AGENT_POOL.read();
-                    p.get(&agent_id).map(|v| v.clone())
-                };
-
                 async move {
+                    let agent = {
+                        let p = AGENT_POOL.read();
+                        p.get(&agent_id).map(|v| v.clone())
+                    };
                     if let Some(agent) = agent {
-                        let rule_engine = agent.reflect_engine.clone();
-                        return Ok(rule_engine.group_names());
+                        let names = agent.cond_reflection.group_names();
+                        return Ok(names);
                     }
                     anyhow::bail!("Agent not found")
                 }
                 .boxed()
             }),
             simplify_expr: Box::new(move |expr| {
-                let agent = {
-                    let p = AGENT_POOL.read();
-                    p.get(&agent_id).map(|v| v.clone())
-                };
-
                 async move {
+                    let agent = {
+                        let p = AGENT_POOL.read();
+                        p.get(&agent_id).map(|v| v.clone())
+                    };
+
                     if let Some(agent) = agent {
-                        let rule_engine = agent.reflect_engine.clone();
+                        let rule_engine = agent.cond_reflection.reflect_engine.clone();
                         let expr = rule_engine.simplify(&expr)?;
                         return Ok(expr);
                     }

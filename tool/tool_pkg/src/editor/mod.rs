@@ -54,16 +54,18 @@ fn load_mode_delimiters(dir: &str) -> HashMap<String, Vec<String>> {
     map
 }
 pub use self::editor::build_package;
-#[package("文件编辑器")]
+#[package("文件编辑与阅读")]
 mod editor {
     use std::{
         collections::HashSet,
         fs::{File, OpenOptions},
         io::{BufReader, BufWriter},
         os::windows::fs::{MetadataExt, OpenOptionsExt},
-        path::PathBuf, sync::Arc,
+        path::PathBuf,
+        sync::Arc,
     };
 
+    use anyhow::Context as _;
     use kernel::{
         agent::context::AgentContext,
         tool::{ToolCallContext, core::ToolReturn},
@@ -95,9 +97,17 @@ mod editor {
         let (path, is_safe) = ctx.get_real_path(path.as_str());
         let mut ctx = ctx.context_data.write().await;
         let ctx = ctx.downcast_mut::<Context>().unwrap();
-        let file = OpenOptions::new().read(true).write(true).open(&path)?;
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .map_err(|e| {
+                let path = path.display().to_string();
+                anyhow::anyhow!("打开文件失败: {path}, {e}")
+            })?;
         let content = Rope::from_reader(BufReader::new(file))?;
         //
+        ctx.is_safe = is_safe;
         ctx.path = Some(path);
         ctx.content = Some(content);
         if !is_safe {
@@ -111,6 +121,7 @@ mod editor {
         let ctx = ctx.downcast_mut::<Context>().unwrap();
         ctx.path = None;
         ctx.content = None;
+
         Ok(())
     }
 
@@ -118,7 +129,7 @@ mod editor {
     pub async fn read(
         #[arg("起始字符位置")] pos: usize,
         #[arg("读取数量")] len: usize,
-        #[arg("关注程度 取值范围(0,1],数值越低，读取的内容越稀疏缺失")] focus_level: f32,
+        #[arg("关注程度 取值范围(0,1],数值越低，读取的内容越稀疏缺失，0表示完全忽略")] focus_level: f32,
         #[arg("关注词,英文逗号分隔,会放大相关词被保留下来的概率")] focus_wrods: Option<String>,
         #[arg("阅读模式:中文=zh,英文=en,代码=code,默认为zh")] mode: Option<String>,
         #[ctx] ctx: ToolCallContext,
@@ -131,7 +142,11 @@ mod editor {
             }
             ctx.content.as_ref().unwrap()
         };
-        let slice = content.get_slice(pos..pos + len).unwrap();
+        let slice = match content.get_slice(pos..pos + len) {
+            Some(v) => v,
+            None => content.get_slice(pos..).unwrap(),
+        };
+
         let content = slice.chars().collect();
         //
         let mut focus_word_set = HashSet::new();

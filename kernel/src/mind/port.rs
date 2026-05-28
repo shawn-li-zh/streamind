@@ -1,7 +1,8 @@
 #[derive(Debug, Clone)]
 pub enum CommandEvent {
+    // Inject(String),
     Generate,
-    Canceled,
+    Cancel,
 }
 
 use std::{
@@ -15,7 +16,9 @@ use pin_project::pin_project;
 use tokio::sync::mpsc::{self, error::SendError};
 use tokio_stream::wrappers::ReceiverStream;
 
-use crate::section::SectionTag;
+use crate::mind::section::SectionTag;
+
+
 pub struct MindInlet {
     inner: mpsc::Sender<CommandEvent>,
 }

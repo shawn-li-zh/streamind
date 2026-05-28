@@ -58,8 +58,17 @@ pub fn parse_args(
             "None" | "null" | "undefined" => continue,
             "True" | "true" => serde_json::Value::Bool(true),
             "False" | "false" => serde_json::Value::Bool(false),
-            _ => serde_json::from_str(value_str)
-                .with_context(|| format!("解析键 '{}' 的值时失败: {}", key, value_str))?,
+            _ => {
+                if (value_str.starts_with("'") && value_str.ends_with("'"))
+                    || (value_str.starts_with("`") && value_str.ends_with("`"))
+                    || (value_str.starts_with("\"") && value_str.ends_with("\""))
+                {
+                    serde_json::Value::String(value_str[1..value_str.len() - 1].to_string())
+                } else {
+                    serde_json::from_str(value_str)
+                        .with_context(|| format!("解析键 '{}' 的值时失败: {}", key, value_str))?
+                }
+            }
         };
         // 4. 利用 serde_json 解析值
         result.insert(key, value);
@@ -119,8 +128,6 @@ fn split_top_level(s: &str, delimiter: char) -> anyhow::Result<Vec<String>> {
     parts.push(part);
     Ok(parts)
 }
-
-
 
 /// 专门解析 "key=value key=value" 格式的字符串，输出 KV 键值对
 pub fn parse_attrs(mut s: &str) -> HashMap<String, serde_json::Value> {
@@ -238,6 +245,22 @@ mod test {
     #[test]
     fn test_call() -> anyhow::Result<()> {
         let raw = r#"pkg.tool(a=1,   b={"inner":[1,2,3]},c=[1,2,{"a":{"b":1}}],d="str\"",e=true,f=false,g=1.3)"#;
+
+        match parser::parse_call(raw) {
+            Ok((pkg, func, map)) => {
+                println!("解析成功: {} {func} {:?} ", pkg.unwrap_or_default(), map);
+            }
+            Err(e) => {
+                let bt = Backtrace::capture();
+                eprintln!("错误: {:?}\n{:?}", e, bt)
+            }
+        }
+        Ok(())
+    }
+    #[test]
+    fn test_call2() -> anyhow::Result<()> {
+        let raw = r#"reflect.save_rule(group_id=4, name="ImageList本地图片前缀提醒", expr='similar("ImageList本地图片渲染规则") > 0.7 & event_type_is("userRequest")', content="您正在使用 ImageList 组件渲染本地图片，请记得在 src 路径前加上 public/ 前缀，如 src='/public/photo.png'，否则生产环境将无法加载。")
+"#;
 
         match parser::parse_call(raw) {
             Ok((pkg, func, map)) => {

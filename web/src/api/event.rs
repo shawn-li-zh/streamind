@@ -67,6 +67,7 @@ pub async fn list(
         EnvEventType::Timer,
         EnvEventType::Interrupt,
         EnvEventType::Interaction,
+        EnvEventType::Reflection,
     ];
     match entity_service::event::list_env_events(
         req.agent_id,

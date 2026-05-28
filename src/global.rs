@@ -55,7 +55,7 @@ pub async fn init() -> anyhow::Result<()> {
             .map_err(|e| anyhow::anyhow!(e))
             .flatten()?;
         let embedding = DoubaoEmbedding::new(api_key, api_url, model, dim);
-        if let Err(set) = EMBEDDING_CLIENT.set(Arc::new(embedding)) {
+        if let Err(_) = EMBEDDING_CLIENT.set(Arc::new(embedding)) {
             anyhow::bail!("初始化向量模型失败");
         }
     }

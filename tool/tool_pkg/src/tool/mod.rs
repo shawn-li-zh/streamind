@@ -45,7 +45,7 @@ pub mod tool {
         }
         Ok(ToolReturn::raws(res))
     }
-    #[tool(anno = "列出包内工具的基本信息")]
+    #[tool(anno = "列出包内工具的基本信息,获取tool完整定义需要使用get_tool_info")]
     pub fn list_tools(
         #[arg("工具包name")] pkg_name: String,
         #[arg("tool关键词")] tool_key: Option<String>,

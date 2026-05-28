@@ -1,7 +1,6 @@
 use std::{collections::HashSet, sync::Arc};
 
 use dashmap::DashMap;
-use futures::future::join_all;
 use rule_script::{
     Expr, ScriptEngine,
     evaluate::{self, Operators},

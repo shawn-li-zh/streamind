@@ -1,10 +1,14 @@
+mod action;
 #[cfg(test)]
 mod tests;
+mod utils;
 
 pub(crate) static JS: LazyLock<String> = LazyLock::new(|| {
-    let path = Path::new(r"./public/browser.inject.js");
-    let content = std::fs::read_to_string(path).expect("Failed to read file");
-    content
+    let path = Path::new(r"./public/dom_view.js");
+    let dom_view = std::fs::read_to_string(path).expect("Failed to read file");
+    let path = Path::new(r"./public/fingerprint_cheat.js");
+    let fingerprint_cheat = std::fs::read_to_string(path).expect("Failed to read file");
+    format!("{};{}", dom_view, fingerprint_cheat)
 });
 use std::{path::Path, sync::LazyLock};
 
@@ -27,6 +31,7 @@ pub mod browser {
             browser::{SetDownloadBehaviorBehavior, SetDownloadBehaviorParams},
             page::CaptureScreenshotFormat,
         },
+        handler::viewport::Viewport,
         page::ScreenshotParams,
     };
     use futures::StreamExt;
@@ -41,12 +46,11 @@ pub mod browser {
 
     use kernel::tool::ToolCallContext;
     use serde::Serialize;
-    use tokio::sync::RwLock;
-    use tracing::error;
 
     use crate::browser::{
         JS,
-        utils::{self, BrowserAction, get_available_port},
+        action::BrowserAction,
+        utils::{self},
     };
 
     pub struct Context {
@@ -108,35 +112,33 @@ pub mod browser {
         if ctx.is_runing {
             anyhow::bail!("浏览器已启动");
         }
-        // let port = get_available_port().unwrap_or(19999);
-        let config: BrowserConfig = BrowserConfig::builder()
+        let view = Viewport {
+            width: 1920,
+            height: 1080,
+            device_scale_factor: Some(1.0), // 强制 1.0 比例，防止系统缩放导致偏移
+            emulating_mobile: false,
+            is_landscape: true,
+            has_touch: false,
+        };
+
+        let config = BrowserConfig::builder()
             .user_data_dir(user_dir)
             .chrome_executable(chrome_path)
             .no_sandbox()
-            .with_head()
+            .with_head() // 有头模式
             .args(args.unwrap_or_default())
-            .window_size(1920, 1080)
-            // .args(vec![
-            //     "--disable-extensions",     // 禁用扩展
-            //     "--disable-popup-blocking", // 禁用弹窗拦截
-            //     "--disable-notifications",  // 禁用通知
-            //     "--disable-translate",      // 禁用翻译
-            //     "--disable-infobars",       // 禁用信息栏
-            //                                 // "--disable-dev-shm-usage",         // 禁用共享内存
-            //                                 // "--disable-gpu",                   // 禁用 GPU
-            //                                 // "--disable-software-rasterizer",   // 禁用软件渲染器
-            //                                 // "--disable-default-apps",          // 禁用默认应用
-            //                                 // "--disable-background-networking", // 禁用后台网络
-            // ])
-            .arg("--start-maximized") // 最大化
-            // // 隐藏“正受自动测试软件控制”提示条
-            .arg("--exclude-switches=enable-automation")
-            // // 屏蔽其他干扰弹窗
-            .arg("--no-first-run") // 跳过首次运行设置
-            .arg("--no-default-browser-check") // 不检查是否为默认浏览器
+            // 如果想要固定大小且左上角对齐，建议直接指定位置和大小
+            .arg("--window-position=0,0")
+            .arg("--window-size=1920,1080")
+            // 3. 强制设备缩放比为 1，解决高分屏偏移问题
+            .arg("--force-device-scale-factor=1")
+            // 4. 禁用一些可能改变 UI 布局的参数
+            .arg("--disable-features=ViewsBrowser") // 某些版本下防止 UI 干扰
+            .viewport(view)
             .launch_timeout(Duration::from_secs(10))
             .build()
             .map_err(|e| anyhow::anyhow!("Browser Cdp:{e}"))?;
+
         let (browser, mut handler) = Browser::launch(config).await?;
         // 必须在一个单独的任务中运行 handler
         tokio::task::spawn(async move {
@@ -316,15 +318,21 @@ pub mod browser {
         }
         let tab = ctx.tabs.get_mut(ctx.current_tab.as_ref().unwrap()).unwrap();
         let res = tab.page.evaluate(js.as_str()).await?;
-        let s = res.into_value::<Option<String>>()?;
-        Ok(ToolReturn::raw(format!("{}", s.unwrap_or_default())))
+        let s = res.into_value::<Option<serde_json::Value>>()?;
+        Ok(ToolReturn::json(s.unwrap_or_default())?)
     }
     #[tool(
-        anno = "查看dom,返回精简后的节点树文档(每一行都是一个节点,节点id在头部，格式=[id]),在js中通过node_element(node_id)可以访问对应的元素对象",
-        example = r#"look_dom()"#,
+        anno = "解析dom树，用在每次网页发生交互后，重新解析网页的节点树",
+        example = r#"resolve_dom()"#,
         limit = "10s:5"
     )]
-    pub async fn look_dom(#[ctx] ctx: ToolCallContext) -> anyhow::Result<ToolReturn> {
+    pub async fn resolve_dom(
+        #[arg(
+            "要解析的根元素，默认是document.body,可以传入一段js代码,系统自动调用环境中的resolve_dom(ele?:HTMLElement)"
+        )]
+        element: Option<String>,
+        #[ctx] ctx: ToolCallContext,
+    ) -> anyhow::Result<ToolReturn> {
         let mut ctx = ctx.context_data.write().await;
         let ctx = ctx.downcast_mut::<Context>().unwrap();
         if !ctx.is_runing {
@@ -334,7 +342,34 @@ pub mod browser {
             anyhow::bail!("请先打开标签页");
         }
         let tab = ctx.tabs.get_mut(ctx.current_tab.as_ref().unwrap()).unwrap();
-        let res = tab.page.evaluate("window['STREAMIND'].body()").await?;
+        let js = format!("window['resolve_dom']({})", element.unwrap_or_default());
+        let res = tab.page.evaluate(js.as_str()).await?;
+        let s = res.into_value::<Option<String>>()?;
+        Ok(ToolReturn::raw(format!("{}", s.unwrap_or_default())))
+    }
+    #[tool(
+        anno = "查看dom树,返回精简后的节点树文档(每一行都是一个节点,节点id在头部，格式=[id]),在js中通过node_element(node_id)可以访问对应的元素对象",
+        example = r#"look_dom()"#,
+        limit = "10s:5"
+    )]
+    pub async fn look_dom(
+        #[arg("起始节点id,默认=0,代表body元素")] start: Option<u32>,
+        #[arg("结束节点id")] end: Option<i32>,
+        #[ctx] ctx: ToolCallContext,
+    ) -> anyhow::Result<ToolReturn> {
+        let mut ctx = ctx.context_data.write().await;
+        let ctx = ctx.downcast_mut::<Context>().unwrap();
+        if !ctx.is_runing {
+            anyhow::bail!("浏览器未启动");
+        }
+        if ctx.current_tab.is_none() {
+            anyhow::bail!("请先打开标签页");
+        }
+        let tab = ctx.tabs.get_mut(ctx.current_tab.as_ref().unwrap()).unwrap();
+        let start = start.unwrap_or_default();
+        let end = end.unwrap_or(-1);
+        let js = format!("window['look_dom']({},{})", start, end);
+        let res = tab.page.evaluate(js.as_str()).await?;
         let s = res.into_value::<Option<String>>()?;
         Ok(ToolReturn::raw(format!("{}", s.unwrap_or_default())))
     }
@@ -371,18 +406,24 @@ pub mod browser {
     }
     //指令流水线
     #[tool(
-        anno = "执行指令流水线",
-        example = r#"pipeline(cmds="node.click(x=100,y=100);")"#,
+        anno = "执行指令流水线,使用文档内容较多，请打开./prompts/browser_tool.doc.md 文件查看使用方法",
+        example = r#"pipeline(cmds="node.click(id=1,x=100,y=100);")"#,
         limit = "10s:5"
     )]
     pub async fn pipeline(
         #[arg("指令流水线")] cmds: String,
+        #[arg("指令分割符,默认是';'")] delimiter: Option<String>,
         #[ctx] call_ctx: ToolCallContext,
     ) -> anyhow::Result<()> {
         let mut actions = vec![];
-        for (i, s) in cmds.split(";").enumerate() {
-            let action =
-                BrowserAction::from_str(s).with_context(|| format!("第{}条指令解析错误", i))?;
+        let delimiter = delimiter.unwrap_or_else(|| ";".into());
+        for (i, s) in cmds.split(&delimiter).enumerate() {
+            let s = s.trim();
+            if s.is_empty() {
+                continue;
+            }
+            let action = BrowserAction::from_str(s)
+                .map_err(|e| anyhow::anyhow!("第{}条指令解析错误: {}", i, e))?;
             actions.push(action);
         }
 
@@ -399,418 +440,5 @@ pub mod browser {
             action.execute(&tab.page).await?;
         }
         Ok(())
-    }
-}
-
-mod utils {
-    use std::{collections::HashMap, net::TcpListener, str::FromStr, time::Duration};
-
-    use anyhow::Context;
-    use chromiumoxide::{
-        Element, Page,
-        cdp::browser_protocol::{
-            input::{
-                DispatchKeyEventParams, DispatchKeyEventParamsBuilder, DispatchKeyEventType,
-                DispatchMouseEventParams, DispatchMouseEventType, MouseButton,
-            },
-            page,
-        },
-        error::CdpError,
-        keys,
-        layout::Point,
-    };
-    use kernel::parser::parse_call;
-    use tokio::time::sleep;
-
-    use crate::browser::utils;
-
-    pub fn get_available_port() -> Option<u16> {
-        // 绑定到 127.0.0.1 的 0 端口
-        // 操作系统会自动分配一个空闲端口
-        TcpListener::bind("127.0.0.1:0")
-            .and_then(|listener| listener.local_addr())
-            .map(|addr| addr.port())
-            .ok()
-    }
-
-    pub enum MouseEvent {
-        Click(f64, f64, u32, MouseButton),
-        LongClick(f64, f64, u64, MouseButton),
-        Wheel(f64, f64),
-        Move(f64, f64),
-    }
-    impl MouseEvent {
-        pub async fn execute(self, page: &Page) -> anyhow::Result<()> {
-            match self {
-                MouseEvent::Click(x, y, count, btn) => {
-                    utils::click(page, Point { x, y }, count, btn).await?;
-                }
-                MouseEvent::LongClick(x, y, duration, btn) => {
-                    utils::long_click(page, Point { x, y }, duration, btn).await?;
-                }
-                MouseEvent::Wheel(x, y) => {
-                    utils::scroll(page, x, y).await?;
-                }
-                MouseEvent::Move(x, y) => {
-                    //@todo 优化移动轨迹
-                    page.move_mouse(Point { x, y }).await?;
-                }
-            }
-            Ok(())
-        }
-        //格式：click(x,y,count,btn)
-        pub fn from_str(
-            name: &str,
-            mut args: HashMap<String, serde_json::Value>,
-        ) -> anyhow::Result<MouseEvent> {
-            let x = args
-                .remove("x")
-                .and_then(|v| v.as_f64())
-                .context("x必填且必须是数字")?;
-            let y = args
-                .remove("y")
-                .and_then(|v| v.as_f64())
-                .context("y必填且必须是数字")?;
-            //
-            match name {
-                "click" => {
-                    let count = args.remove("count").and_then(|v| v.as_u64()).unwrap_or(1);
-
-                    let button = args
-                        .remove("button")
-                        .and_then(|v| v.as_str().map(|s| s.to_string()))
-                        .map(|s| {
-                            MouseButton::from_str(&s)
-                                .map_err(|_| anyhow::anyhow!("解析鼠标按钮失败: {}", s))
-                        })
-                        .transpose()?
-                        .unwrap_or(MouseButton::Left);
-                    Ok(MouseEvent::Click(x, y, count as u32, button))
-                }
-                "longClick" => {
-                    let duration = args
-                        .remove("ms")
-                        .and_then(|v| v.as_u64())
-                        .context("长按ms时长必填")?;
-
-                    let button = args
-                        .remove("button")
-                        .and_then(|v| v.as_str().map(|s| s.to_string()))
-                        .map(|s| {
-                            MouseButton::from_str(&s)
-                                .map_err(|_| anyhow::anyhow!("解析鼠标按钮失败: {}", s))
-                        })
-                        .transpose()?
-                        .unwrap_or(MouseButton::Left);
-                    Ok(MouseEvent::LongClick(x, y, duration, button))
-                }
-                "wheel" => Ok(MouseEvent::Wheel(x, y)),
-                "move" => Ok(MouseEvent::Move(x, y)),
-                _ => {
-                    anyhow::bail!("invalid mouse event");
-                }
-            }
-        }
-    }
-    pub enum KeyboardEvent {
-        Press(String),
-        LongPress(String, u64),
-    }
-    impl KeyboardEvent {
-        pub async fn execute(self, page: &Page) -> anyhow::Result<()> {
-            match self {
-                KeyboardEvent::Press(key) => {
-                    utils::press_key(page, key).await?;
-                }
-                KeyboardEvent::LongPress(key, ms) => {
-                    utils::long_press_key(page, &key, ms).await?;
-                }
-            }
-            Ok(())
-        }
-        //格式：press(key)
-        pub fn from_str(
-            name: &str,
-            mut args: HashMap<String, serde_json::Value>,
-        ) -> anyhow::Result<KeyboardEvent> {
-            let code = args
-                .remove("code")
-                .and_then(|v| v.as_str().map(|s| s.to_string()))
-                .context("keyboard code必填")?;
-
-            //
-            match name {
-                "press" => Ok(KeyboardEvent::Press(code)),
-                "longPress" => {
-                    let duration = args
-                        .remove("ms")
-                        .and_then(|v| v.as_u64())
-                        .context("长按ms时长必填")?;
-                    Ok(KeyboardEvent::LongPress(code, duration))
-                }
-                _ => {
-                    anyhow::bail!("invalid keyboard event");
-                }
-            }
-        }
-    }
-    pub enum NodeEvent {
-        Click(u64, u32, MouseButton),
-        Hover(u64),
-        Type(u64, String),
-    }
-    impl NodeEvent {
-        pub async fn execute(self, page: &Page) -> anyhow::Result<()> {
-            match self {
-                NodeEvent::Click(id, count, btn) => {
-                    let ele = utils::node_element(page, id).await?;
-                    let point = ele.scroll_into_view().await?.clickable_point().await?;
-                    utils::click(page, point, count, btn).await?;
-                }
-                NodeEvent::Hover(id) => {
-                    let ele = utils::node_element(page, id).await?;
-                    ele.hover().await?;
-                }
-                NodeEvent::Type(id, text) => {
-                    let ele = utils::node_element(page, id).await?;
-                    ele.type_str(text).await?;
-                }
-            }
-            Ok(())
-        }
-        //格式：click(id,count,btn)
-        pub fn from_str(
-            name: &str,
-            mut args: HashMap<String, serde_json::Value>,
-        ) -> anyhow::Result<NodeEvent> {
-            let id = args
-                .remove("code")
-                .and_then(|v| v.as_u64())
-                .context("node id必填")?;
-            //
-            match name {
-                "click" => {
-                    let count = args.remove("count").and_then(|v| v.as_u64()).unwrap_or(1);
-
-                    let button = args
-                        .remove("button")
-                        .and_then(|v| v.as_str().map(|s| s.to_string()))
-                        .map(|s| {
-                            MouseButton::from_str(&s)
-                                .map_err(|_| anyhow::anyhow!("解析鼠标按钮失败: {}", s))
-                        })
-                        .transpose()?
-                        .unwrap_or(MouseButton::Left);
-                    Ok(NodeEvent::Click(id, count as _, button))
-                }
-                "hover" => Ok(NodeEvent::Hover(id)),
-                "type" => {
-                    let text = args
-                        .remove("text")
-                        .and_then(|v| v.as_str().map(|s| s.to_string()))
-                        .context("text输入内容必填")?;
-
-                    Ok(NodeEvent::Type(id, text))
-                }
-                _ => {
-                    anyhow::bail!("invalid node event");
-                }
-            }
-        }
-    }
-
-    pub enum BrowserAction {
-        Node(NodeEvent),
-        Mouse(MouseEvent),
-        Keyboard(KeyboardEvent),
-        Wait(u64),
-    }
-    impl BrowserAction {
-        pub async fn execute(self, page: &Page) -> anyhow::Result<()> {
-            match self {
-                BrowserAction::Node(node) => node.execute(page).await,
-                BrowserAction::Mouse(browser) => browser.execute(page).await,
-                BrowserAction::Keyboard(keyboard) => keyboard.execute(page).await,
-                BrowserAction::Wait(ms) => {
-                    sleep(Duration::from_millis(ms)).await;
-                    Ok(())
-                }
-            }
-        }
-        //格式：node.click(id,count,btn) 或者 wait(ms)
-        pub fn from_str(s: &str) -> anyhow::Result<BrowserAction> {
-            let (p, f, mut args) = parse_call(s)?;
-            if s.starts_with("node.") {
-                let event = NodeEvent::from_str(f, args)?;
-                Ok(BrowserAction::Node(event))
-            } else if s.starts_with("mouse.") {
-                let event = MouseEvent::from_str(f, args)?;
-                Ok(BrowserAction::Mouse(event))
-            } else if s.starts_with("keyboard.") {
-                let event = KeyboardEvent::from_str(f, args)?;
-                Ok(BrowserAction::Keyboard(event))
-            } else if f == "wait" {
-                let duration = args
-                    .remove("ms")
-                    .and_then(|v| v.as_u64())
-                    .context("长按ms时长必填")?;
-
-                Ok(BrowserAction::Wait(duration))
-            } else {
-                anyhow::bail!("invalid action");
-            }
-        }
-    }
-    pub async fn node_element(page: &Page, id: u64) -> anyhow::Result<Element> {
-        let selector = format!("[streamind-id='{}']", id);
-        let a = page.find_element(selector).await?;
-        Ok(a)
-    }
-    fn press_key_params(key: impl AsRef<str>) -> anyhow::Result<DispatchKeyEventParamsBuilder> {
-        let key = key.as_ref();
-        let key_definition: &keys::KeyDefinition = keys::get_key_definition(key)
-            .ok_or_else(|| CdpError::msg(format!("Key not found: {key}")))?;
-        let mut cmd: DispatchKeyEventParamsBuilder = DispatchKeyEventParams::builder();
-
-        // See https://github.com/GoogleChrome/puppeteer/blob/62da2366c65b335751896afbb0206f23c61436f1/lib/Input.js#L114-L115
-        // And https://github.com/GoogleChrome/puppeteer/blob/62da2366c65b335751896afbb0206f23c61436f1/lib/Input.js#L52
-        let key_down_event_type: DispatchKeyEventType = if let Some(txt) = key_definition.text {
-            cmd = cmd.text(txt);
-            DispatchKeyEventType::KeyDown
-        } else if key_definition.key.len() == 1 {
-            cmd = cmd.text(key_definition.key);
-            DispatchKeyEventType::KeyDown
-        } else {
-            DispatchKeyEventType::RawKeyDown
-        };
-
-        cmd = cmd
-            .r#type(key_down_event_type)
-            .key(key_definition.key)
-            .code(key_definition.code)
-            .windows_virtual_key_code(key_definition.key_code)
-            .native_virtual_key_code(key_definition.key_code);
-        Ok(cmd)
-    }
-
-    pub async fn click(
-        page: &Page,
-        point: Point,
-        count: u32,
-        btn: MouseButton,
-    ) -> anyhow::Result<()> {
-        let cmd = DispatchMouseEventParams::builder()
-            .x(point.x)
-            .y(point.y)
-            .button(btn)
-            .click_count(count);
-
-        page.move_mouse(point)
-            .await?
-            .execute(
-                cmd.clone()
-                    .r#type(DispatchMouseEventType::MousePressed)
-                    .build()
-                    .unwrap(),
-            )
-            .await?;
-        page.execute(
-            cmd.r#type(DispatchMouseEventType::MouseReleased)
-                .build()
-                .unwrap(),
-        )
-        .await?;
-        Ok(())
-    }
-    pub async fn scroll(page: &Page, x: f64, y: f64) -> anyhow::Result<()> {
-        page.execute(
-            DispatchMouseEventParams::builder()
-                .delta_x(x)
-                .delta_y(y)
-                .r#type(DispatchMouseEventType::MouseWheel)
-                .build()
-                .unwrap(),
-        )
-        .await?;
-        Ok(())
-    }
-    pub async fn press_key(page: &Page, key: impl AsRef<str>) -> anyhow::Result<()> {
-        let cmd = press_key_params(key)?;
-
-        page.execute(cmd.clone().build().unwrap()).await?;
-        page.execute(cmd.r#type(DispatchKeyEventType::KeyUp).build().unwrap())
-            .await?;
-        Ok(())
-    }
-    pub async fn long_press_key(
-        page: &Page,
-        key: impl AsRef<str>,
-        duration_ms: u64,
-    ) -> anyhow::Result<()> {
-        let cmd = press_key_params(key)?;
-        page.execute(cmd.clone().build().unwrap()).await?;
-        let page = page.clone();
-        tokio::spawn(async move {
-            // 2. 保持状态 (这就是“长按”的持续时间)
-            sleep(Duration::from_millis(duration_ms)).await;
-
-            // 3. 发送 keyUp (告知浏览器键被松开了)
-            page.execute(cmd.r#type(DispatchKeyEventType::KeyUp).build().unwrap())
-                .await
-                .unwrap();
-        });
-        Ok(())
-    }
-
-    pub async fn long_click(
-        page: &Page,
-        point: Point,
-        duration_ms: u64,
-        btn: MouseButton,
-    ) -> anyhow::Result<()> {
-        let cmd = DispatchMouseEventParams::builder()
-            .x(point.x)
-            .y(point.y)
-            .button(btn)
-            .click_count(1);
-
-        page.move_mouse(point)
-            .await?
-            .execute(
-                cmd.clone()
-                    .r#type(DispatchMouseEventType::MousePressed)
-                    .build()
-                    .unwrap(),
-            )
-            .await?;
-        let page = page.clone();
-        tokio::spawn(async move {
-            // 2. 保持状态 (这就是“长按”的持续时间)
-            tokio::time::sleep(std::time::Duration::from_millis(duration_ms)).await;
-
-            page.execute(
-                cmd.clone()
-                    .r#type(DispatchMouseEventType::MouseReleased)
-                    .build()
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        });
-        Ok(())
-    }
-    pub async fn wait_for_dom(page: &Page, millis: u64) -> anyhow::Result<()> {
-        loop {
-            let ready_state = page
-                .evaluate("document.readyState")
-                .await?
-                .into_value::<Option<String>>()?;
-            if let Some(ready_state) = ready_state {
-                if !ready_state.is_empty() && &ready_state != "loading" {
-                    return Ok(());
-                }
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(millis)).await;
-        }
     }
 }

@@ -9,6 +9,7 @@ pub mod reflect {
     use chrono::{DateTime, Local};
     use entity_service::DB;
     use kernel::tool::{ToolCallContext, core::ToolReturn};
+    use regex::Regex;
 
     use crate::reflect::ReflectInjected;
 
@@ -24,6 +25,9 @@ pub mod reflect {
         #[ctx] ctx: ToolCallContext,
     ) -> anyhow::Result<ToolReturn> {
         let groups = entity_service::rule::page_groups(page as _, size as _, key).await?;
+        if groups.is_empty() {
+            return Ok(ToolReturn::raw("查询结果为空"));
+        }
         let mut res = vec![];
         for group in groups {
             let info = format!(
@@ -50,7 +54,11 @@ pub mod reflect {
     ) -> anyhow::Result<ToolReturn> {
         let rules =
             entity_service::rule::page_rule_in_group(group_id, page as _, size as _, key).await?;
+        if rules.is_empty() {
+            return Ok(ToolReturn::raw("查询结果为空"));
+        }
         let mut res = vec![];
+
         for rule in rules {
             let info = format!(
                 "ID={},名称={},创建时间={}\n表达式={}\n反射内容={}\n",
@@ -77,8 +85,8 @@ pub mod reflect {
     }
 
     #[tool(
-        anno = "创建新概念,不能和现有概念重名",
-        example = r#"new_concept(name="编程",content="对概念的完整定义")"#,
+        anno = "创建新名词概念,不能和现有概念重名",
+        example = r#"new_concept(name="编程",content="对概念的完整定义,你的第一人称自述")"#,
         limit = "30s:10"
     )]
     pub async fn new_concept(
@@ -91,8 +99,8 @@ pub mod reflect {
     }
 
     #[tool(
-        anno = "创建新概念,不能和现有概念重名",
-        example = r#"new_concept(name="编程",content="对概念的完整定义")"#,
+        anno = "分页查询已定义概念",
+        example = r#"page_concepts(page=1,size=10)"#,
         limit = "30s:10"
     )]
     pub async fn page_concepts(
@@ -101,6 +109,9 @@ pub mod reflect {
         #[arg("关键字")] key: Option<String>,
     ) -> anyhow::Result<ToolReturn> {
         let concepts = entity_service::concept::page_concepts(page, size, key).await?;
+        if concepts.is_empty() {
+            return Ok(ToolReturn::raw("查询结果为空"));
+        }
         let mut res = vec![];
         for ele in concepts {
             let info = format!(
@@ -123,10 +134,29 @@ pub mod reflect {
         #[arg("组id")] group_id: i64,
         #[arg("规则名")] name: String,
         #[arg("表达式")] mut expr: String,
-        #[arg("反射内容")] content: String,
+        #[arg("反射内容，你的第一人称自述")] content: String,
         #[arg("过期时间,默认一年,格式:'24h 30m 30s'")] expire_dur: Option<String>,
         #[ctx] ctx: ToolCallContext,
     ) -> anyhow::Result<ToolReturn> {
+        //从expr中提取similar里面的内容
+        {
+            let regex = Regex::new(r#"similar\((['"].*['"])\)"#).unwrap();
+            let mut concept_names = vec![];
+            for cap in regex.captures_iter(&expr) {
+                let inner = cap[1].to_string();
+                concept_names.push(inner);
+            }
+            let concepts = entity_service::concept::find_by_names(&concept_names).await?;
+            for concept in concepts {
+                concept_names.retain(|v| &concept.name != v);
+            }
+            if !concept_names.is_empty() {
+                return Err(anyhow::anyhow!(
+                    "concept not found: {}",
+                    concept_names.join(", ")
+                ));
+            }
+        }
         if let Some(injected) = ctx.agent_context.get::<ReflectInjected>() {
             expr = (injected.simplify_expr)(expr.clone()).await?;
         } else {

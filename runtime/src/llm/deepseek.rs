@@ -147,7 +147,7 @@ impl ChatClient for DeepseekClient {
         let messages = messages.into_iter().map(|v| v.into()).collect();
         let request = Request {
             model: self.model.clone(),
-            reasoning_effort: ReasoningEffort::High,
+            reasoning_effort: ReasoningEffort::Low,
             thinking: Some(Thinking {
                 r#type: "enabled".to_string(),
             }),
