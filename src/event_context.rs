@@ -23,7 +23,7 @@ pub async fn load_stack(
     client: Arc<dyn ChatClient>,
     ctx: &AgentContext,
 ) -> anyhow::Result<StackContext<AppEnvEvent>> {
-    let (agent_id, workspace) = { (identity.id(), identity.workspace()) };
+    let agent_id = identity.id();
     //查状态栈
     let states = entity_service::state::list(agent_id).await?;
     //查事件
@@ -52,7 +52,7 @@ pub async fn load_stack(
     let sp = build_system_prompt(identity, ctx);
     let stack = StackContext::new(client, sp);
     for state in states {
-        let mut node = MindNode::new(Node {
+        let node = stack.push_node(Node {
             id: state.id,
             pos: state.pos as _,
             title: state.title,
@@ -63,11 +63,7 @@ pub async fn load_stack(
             let agent_event = event_convert::from_entity(event);
             node.push(agent_event);
         }
-        info!("状态节点:{}，共加载{}个事件", node.node.pos, node.len());
-        stack.push_node(node);
-        //
-
-        //
+        info!("状态节点:{}，共加载{}个事件", node.pos, node.len());
     }
     //
     Ok(stack)
@@ -101,11 +97,15 @@ pub fn build_system_prompt(identity: &AgentIdentity, ctx: &AgentContext) -> Stri
             format!("{}(tools:{tool_size}):{}", pkg_name, pkg.annotation)
         })
         .collect();
+    let dir = std::env::current_dir().unwrap();
+
     let mut lines = vec![];
+
     lines.push(format!(
-        "# 基础信息:\n- 编号:{}\n- 名称:{}",
+        "# 基础信息:\n- 编号:{}\n- 名称:{}\n- 工作目录(绝对路径):{}",
         identity.code(),
         identity.name(),
+        dir.join(&identity.workspace).to_str().unwrap_or_default()
     ));
     lines.push(EVENT_DRIVEN.trim().to_string());
     lines.push(GENERATE_RULE.trim().to_string());
@@ -114,5 +114,6 @@ pub fn build_system_prompt(identity: &AgentIdentity, ctx: &AgentContext) -> Stri
     lines.push(TOOL_CALL_RULE.trim().to_string());
     lines.push(RENDER_RULE.trim().to_string());
     lines.push(format!("# 工具包列表(全部)\n{}", items.join("\n"),));
+
     lines.join("\n\n")
 }

@@ -2,6 +2,7 @@ use chrono::Local;
 use entity::{
     event::{EnvEventStatus, EnvEventType},
     format::date_time,
+    state,
 };
 
 use kernel::mind::section::Section;
@@ -138,22 +139,18 @@ pub async fn update_agent_response(
     }
     Ok(())
 }
-// pub async fn update_event_status(
-//     db: &impl ConnectionTrait,
-//     event_ids: Vec<i64>,
-//     status: EnvEventStatus,
-// ) -> anyhow::Result<()> {
-//     let model = entity::event::ActiveModel {
-//         status: Set(status),
-//         ..Default::default()
-//     };
-//     entity::event::Entity::update_many()
-//         .filter(entity::event::Column::Id.is_in(event_ids))
-//         .set(model)
-//         .exec(db)
-//         .await?;
-//     Ok(())
-// }
+pub async fn unload_events(db: &impl ConnectionTrait, state_id: i64) -> anyhow::Result<()> {
+    let model = entity::event::ActiveModel {
+        status: Set(EnvEventStatus::Unloaded),
+        ..Default::default()
+    };
+    entity::event::Entity::update_many()
+        .filter(entity::event::Column::StateId.eq(state_id))
+        .set(model)
+        .exec(db)
+        .await?;
+    Ok(())
+}
 
 pub async fn processing(db: &impl ConnectionTrait, agent_id: u32) -> anyhow::Result<()> {
     let model = entity::event::ActiveModel {

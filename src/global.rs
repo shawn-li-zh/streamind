@@ -66,6 +66,7 @@ pub async fn init() -> anyhow::Result<()> {
             anyhow::bail!("初始化定时调度器失败");
         }
         task::init().await;
+        SCHEDULER.get().unwrap().start().await?;
     }
 
     //初始化agent

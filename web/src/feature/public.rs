@@ -2,7 +2,7 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use axum::body::Bytes;
-use axum::{extract::Path, Router};
+use axum::{Router, extract::Path};
 
 use crate::wrapper::ApiResponse;
 
@@ -45,8 +45,81 @@ async fn upload(
     ApiResponse::success(format!("{}/{}", PUBLIC_DIR, path))
 }
 
+use axum::{
+    extract::{ConnectInfo, Query},
+    http::{Response, StatusCode, header},
+    response::IntoResponse,
+    routing::get,
+};
+use serde::Deserialize;
+use std::net::SocketAddr;
+
+use tokio::fs::File;
+use tokio_util::io::ReaderStream;
+
+#[derive(Deserialize)]
+pub struct ImageQuery {
+    path: String, // 本地图片的绝对路径
+}
+
+async fn get_local_image(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    Query(query): Query<ImageQuery>,
+) -> impl IntoResponse {
+    // 1. 安全校验：仅允许本地调用 (IPv4 127.0.0.1 或 IPv6 ::1)
+    let ip = addr.ip();
+    if !ip.is_loopback() {
+        return (StatusCode::FORBIDDEN, "Access denied: Local only").into_response();
+    }
+
+    // 2. 检查文件是否存在
+    let path = PathBuf::from(&query.path);
+    if !path.exists() || !path.is_file() {
+        return (StatusCode::NOT_FOUND, "File not found").into_response();
+    }
+
+    // 3. 打开文件并转换为流
+    let file = match File::open(&path).await {
+        Ok(f) => f,
+        Err(_) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to open file").into_response();
+        }
+    };
+
+    // 4. 猜测 MIME 类型（简单起见根据后缀判断）
+    let ext = path
+        .extension()
+        .and_then(|s| s.to_str().map(|v| v.to_lowercase()))
+        .unwrap_or_default();
+    let content_type = match ext.as_str() {
+        "jpg" | "jpeg" => "image/jpeg",
+        "png" => "image/png",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        _ => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Unsupported image format",
+            )
+                .into_response();
+        }
+    };
+
+    let stream = ReaderStream::new(file);
+    let body = axum::body::Body::from_stream(stream);
+
+    Response::builder()
+        .header(header::CONTENT_TYPE, content_type)
+        .body(body)
+        .unwrap()
+        .into_response()
+}
 pub fn inject_router(mut router: Router) -> Router {
     router = router.route("/upload/{*path}", axum::routing::post(upload));
+    // 新增：本地图片流获取接口
+    // 注意：在 main.rs 中启动 server 时，必须使用 .into_make_service_with_connect_info::<SocketAddr>()
+    router = router.route("/local-image", get(get_local_image));
+
     //映射本地资源
     let serve_dir = tower_http::services::ServeDir::new(PUBLIC_DIR)
         .precompressed_gzip()

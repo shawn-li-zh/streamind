@@ -13,16 +13,6 @@ pub async fn push(
     title: String,
     content: String,
 ) -> anyhow::Result<entity::state::Model> {
-    //卸载后面的节点
-    entity::state::Entity::update_many()
-        .set(entity::state::ActiveModel {
-            dumped: Set(true),
-            ..Default::default()
-        })
-        .filter(entity::state::Column::Pos.gte(pos))
-        .filter(entity::state::Column::AgentId.eq(agent_id))
-        .exec(db)
-        .await?;
     //创建历史状态
     let state = entity::state::ActiveModel {
         agent_id: Set(agent_id),
@@ -62,7 +52,29 @@ pub async fn dumps(
         .await?;
     Ok(())
 }
+pub async fn dump(db: &impl ConnectionTrait, state_id: i64) -> anyhow::Result<()> {
+    entity::state::Entity::update_many()
+        .set(entity::state::ActiveModel {
+            dumped: Set(true),
+            ..Default::default()
+        })
+        .filter(entity::state::Column::Id.eq(state_id))
+        .exec(db)
+        .await?;
+    Ok(())
+}
 
+pub async fn reset(db: &impl ConnectionTrait, state_id: i64,content:String) -> anyhow::Result<()> {
+    entity::state::Entity::update_many()
+        .set(entity::state::ActiveModel {
+            content: Set(content),
+            ..Default::default()
+        })
+        .filter(entity::state::Column::Id.eq(state_id))
+        .exec(db)
+        .await?;
+    Ok(())
+}
 pub async fn list(agent_id: u32) -> anyhow::Result<Vec<entity::state::Model>> {
     let db = DB.get().unwrap();
     let states = entity::state::Entity::find()

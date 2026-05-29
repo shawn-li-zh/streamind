@@ -73,4 +73,5 @@ pub enum EnvEventStatus {
     Pending,
     Processing,
     Done,
+    Unloaded,
 }

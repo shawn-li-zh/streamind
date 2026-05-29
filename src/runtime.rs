@@ -10,7 +10,7 @@ use anyhow::Context as _;
 use chrono::{DateTime, Local};
 
 use entity_service::DB;
-use futures::StreamExt;
+use futures::{FutureExt, StreamExt};
 use kernel::{
     agent::{context::AgentContext, AgentOutfit},
     mind::{
@@ -29,7 +29,7 @@ use kernel::{
 };
 use runtime::agent::{
     event::{AppEnvEvent, AppEnvEventData, SectionEvent},
-    event_context::Node,
+    event_context::{Node, StackCommand},
     instance::EventLoop,
 };
 use serde_json::json;
@@ -257,8 +257,8 @@ impl GenerateWorker {
                     let limit = std::env::var("CONTEXT_SIZE_LIMIT")
                         .map(|v| usize::from_str_radix(&v, 10).unwrap())
                         .unwrap_or(1024 * 1024);
-                    let len = self.agent.event_context().len();
-                    if len > limit {
+                    let size = self.agent.event_context().size();
+                    if size > limit {
                         events.push((
                             AppEnvEventData::Interrupt("上下文溢出,请重编上下文".to_string()),
                             false,
@@ -303,15 +303,20 @@ impl GenerateWorker {
         //解析响应的section
         let mut errors = vec![];
         let mut tool_call_infos: Vec<(ToolCallDetailItem, ToolCall)> = vec![];
-        let mut pushs: Vec<Node> = vec![];
+        let mut stack_cmds: Vec<StackCommand> = vec![];
         {
             let mut counter: HashMap<&String, u32> = HashMap::new();
             for section in &self.response_sections {
                 let value = counter.entry(&section.name).or_default();
                 *value += 1;
                 //
-                match parse_section(&self.tool_engine, section, &mut tool_call_infos, &mut pushs)
-                    .await
+                match parse_section(
+                    &self.tool_engine,
+                    section,
+                    &mut tool_call_infos,
+                    &mut stack_cmds,
+                )
+                .await
                 {
                     Ok(payload) => {
                         if let Err(e) =
@@ -357,8 +362,8 @@ impl GenerateWorker {
             }
         }
         //处理压栈
-        if !pushs.is_empty() {
-            if let Err(e) = push_state(self.agent.clone(), pushs).await {
+        if !stack_cmds.is_empty() {
+            if let Err(e) = handle_stack_commands(self.agent.clone(), stack_cmds).await {
                 events.push((AppEnvEventData::Error(e.to_string()), false));
             };
         }
@@ -370,7 +375,7 @@ async fn parse_section(
     tool_engine: &ToolEngine,
     section: &Section,
     tool_call_infos: &mut Vec<(ToolCallDetailItem, ToolCall)>,
-    pushs: &mut Vec<Node>,
+    stack_cmds: &mut Vec<StackCommand>,
 ) -> anyhow::Result<serde_json::Value> {
     let content = section.content.trim();
     let payload = match section.name.as_str() {
@@ -419,8 +424,16 @@ async fn parse_section(
             let mut push = parse_push(&section.header, content)?;
             push.id = section.id;
             let p = json!(&push);
-            pushs.push(push);
+            stack_cmds.push(StackCommand::Push(push));
             p
+        }
+        "reset" => {
+            stack_cmds.push(StackCommand::Reset(content.to_string()));
+            serde_json::Value::Null
+        }
+        "pop" => {
+            stack_cmds.push(StackCommand::Pop(content.to_string()));
+            serde_json::Value::Null
         }
         _ => serde_json::Value::Null,
     };
@@ -432,22 +445,13 @@ fn parse_push(header: &str, content: &str) -> anyhow::Result<Node> {
         .trim_end_matches(">")
         .trim();
     let mut attrs = parser::parse_attrs(inner);
-    let pos = match attrs.remove("pos") {
-        Some(v) => v
-            .as_u64()
-            .ok_or_else(|| anyhow::anyhow!("push pos is invalid"))?,
-        None => {
-            anyhow::bail!("push pos is required")
-        }
-    };
-
-    let (title, content) = content
-        .split_once("\n")
-        .with_context(|| anyhow::anyhow!("栈格式异常:{content}"))?;
-
+    let title = attrs
+        .remove("title")
+        .map(|v| v.as_str().unwrap_or_default().to_string())
+        .ok_or_else(|| anyhow::anyhow!("push标签缺少title属性"))?;
     Ok(Node {
         id: 0,
-        pos: pos as _,
+        pos: 0,
         title: title.trim().to_string(),
         content: content.trim().to_string(),
     })
@@ -514,25 +518,83 @@ async fn tool_call(
     Ok(())
 }
 
-async fn push_state(agent: Arc<AppAgent>, pushs: Vec<Node>) -> anyhow::Result<()> {
+async fn handle_stack_commands(
+    agent: Arc<AppAgent>,
+    stack_cmds: Vec<StackCommand>,
+) -> anyhow::Result<()> {
     let db = DB.get().unwrap();
     let agent_id = agent.identity().id();
     let stack = agent.event_context();
-    for mut push in pushs {
-        // if push.pos == 0 {
-        //     anyhow::bail!("核心栈状态不能重置")
-        // }
-        let stack = stack.clone();
-        let model = entity_service::state::push(
-            db,
-            agent_id,
-            push.pos as _,
-            push.title.clone(),
-            push.content.clone(),
-        )
-        .await?;
-        push.id = model.id;
-        stack.push(push);
+    for cmd in stack_cmds {
+        match cmd {
+            StackCommand::Push(mut node) => {
+                //设置节点的位置
+                {
+                    let pos = stack.top_node().map(|v| v.pos).unwrap_or_default();
+                    node.pos = pos + 1;
+                }
+                let model = entity_service::state::push(
+                    db,
+                    agent_id,
+                    node.pos as _,
+                    node.title.clone(),
+                    node.content.clone(),
+                )
+                .await?;
+                node.id = model.id;
+                stack.push_node(node);
+                println!("push node to stack");
+            }
+            StackCommand::Reset(content) => {
+                if let Some(top_node) = stack.top_node() {
+                    let node_id = top_node.id;
+                    let c = content.clone();
+                    entity_service::transaction(|db| {
+                        async move {
+                            entity_service::event::unload_events(db, node_id).await?;
+                            entity_service::state::reset(db, node_id, c).await?;
+                            Ok(())
+                        }
+                        .boxed()
+                    })
+                    .await?;
+                    top_node.reset(content);
+                } else {
+                    anyhow::bail!("栈顶不存在")
+                }
+                 println!("reset node");
+            }
+            StackCommand::Pop(result) => {
+                if stack.node_len() <= 1 {
+                    anyhow::bail!("核心栈状态不能弹出")
+                }
+
+                let last_top_node = stack.pop_node().unwrap();
+                let title = &last_top_node.title;
+                let node_id = last_top_node.id;
+                entity_service::transaction(|db| {
+                    async move {
+                        entity_service::event::unload_events(db, node_id).await?;
+                        entity_service::state::dump(db, node_id).await?;
+                        Ok(())
+                    }
+                    .boxed()
+                })
+                .await?;
+
+                if let Some(top_node) = stack.top_node() {
+                    let mut content = top_node.content.write();
+                    let new = format!(
+                        "{}\n子节点[{}]周期结束,返回结果:\n{}",
+                        content, title, result
+                    );
+                    *content = new;
+                } else {
+                    anyhow::bail!("栈顶不存在")
+                }
+                println!("pop node from stack");
+            }
+        }
     }
     Ok(())
 }

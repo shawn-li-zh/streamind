@@ -1,7 +1,7 @@
 use entity_service::DB;
 use kernel::message::Information;
 use tokio_cron_scheduler::Job;
-use tracing::error;
+use tracing::{error, info};
 
 use crate::global::{EMBEDDING_CLIENT, SCHEDULER};
 // 定时嵌入概念向量
@@ -14,6 +14,7 @@ pub async fn init() {
                     let concepts = entity_service::concept::list_not_embedded(30)
                         .await
                         .expect("list_not_embedded error");
+                    info!("embedding concepts: {}", concepts.len());
                     let texts: Vec<_> = concepts
                         .iter()
                         .map(|c| format!("{}:{}", c.name, c.content))

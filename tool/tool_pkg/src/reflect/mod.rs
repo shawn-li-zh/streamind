@@ -125,7 +125,7 @@ pub mod reflect {
 
     #[tool(
         anno = "创建新的规则,如有重复则自动覆盖",
-        example = r#"new_rule(group_id=1,name="配置文件地址",
+        example = r#"save_rule(group_id=1,name="配置文件地址",
         expr="matches("配置|env|环境|config")&similar("编程")>0.6",
         content="文件在xxx路径下,包含xxx,关联事件id有...")"#,
         limit = "30s:10"
@@ -179,6 +179,9 @@ pub mod reflect {
         #[arg("规则名")] group_names: Vec<String>,
         #[ctx] ctx: ToolCallContext,
     ) -> anyhow::Result<ToolReturn> {
+        if group_names.is_empty() {
+            anyhow::bail!("请指定规则名")
+        }
         if let Some(injected) = ctx.agent_context.get::<ReflectInjected>() {
             (injected.load_groups)(group_names).await?;
         } else {
@@ -195,6 +198,9 @@ pub mod reflect {
         #[arg("规则名")] group_names: Vec<String>,
         #[ctx] ctx: ToolCallContext,
     ) -> anyhow::Result<ToolReturn> {
+        if group_names.is_empty() {
+            anyhow::bail!("请指定规则名")
+        }
         if let Some(injected) = ctx.agent_context.get::<ReflectInjected>() {
             (injected.unload_groups)(group_names).await?;
         } else {

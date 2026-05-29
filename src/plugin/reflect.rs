@@ -42,7 +42,8 @@ impl CondReflection {
         }
     }
     pub fn refresh_triggered_rules(&self) {
-        for (_node, events) in self.event_context.nodes() {
+        for  node in self.event_context.nodes() {
+            let events = node.events();
             for event in events {
                 match &event.data {
                     AppEnvEventData::Reflection(reflect_event) => {

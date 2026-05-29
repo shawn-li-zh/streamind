@@ -1,5 +1,8 @@
 use kernel::{
-    agent::event::EnvEvent, message::{Information, RoleMessage}, mind::section::{Section, SectionTag}, tool::event::ToolCallDetailItem
+    agent::event::EnvEvent,
+    message::{Information, RoleMessage},
+    mind::section::{Section, SectionTag},
+    tool::event::ToolCallDetailItem,
 };
 use std::{collections::HashMap, fmt::Display, time::Duration};
 
@@ -65,9 +68,19 @@ pub enum AppEnvEventData {
 impl AppEnvEventData {
     pub fn to_infos(self) -> Vec<Information> {
         match self {
-            AppEnvEventData::AgentResponse(sections) => {
-                sections.into_iter().map(|s| s.to_string().into()).collect()
-            }
+            AppEnvEventData::AgentResponse(sections) => sections
+                .into_iter()
+                .filter(|s| match s.name.as_str() {
+                    "push" | "reset" | "pop" => {
+                        //栈操作标签，不作为消息内容进入上下文
+                        return false;
+                    }
+                    _ => {
+                        return true;
+                    }
+                })
+                .map(|s| s.to_string().into())
+                .collect(),
             AppEnvEventData::Reflection(event) => {
                 let mut infos = vec![];
                 infos.push(
