@@ -7,21 +7,15 @@ pub mod port;
 use std::{marker::PhantomData, path::PathBuf, sync::Arc};
 
 use crate::{
-    agent::{
-        event::{AgentEvent, EnvEvent},
-        port::AgentOutlet,
-    },
-    mind::{
+    agent::event::EnvEvent, mind::{
         context::EventContext,
         port::{CommandEvent, MindInlet, MindOutlet},
-        stream::{MindFlag, StreamMind},
-    },
+        stream::StreamMind,
+    }, model::ModelModal
 };
 
 use async_trait::async_trait;
 use futures::StreamExt;
-
-use tokio::sync::mpsc;
 
 use crate::agent::context::AgentContext;
 pub struct AgentIdentity {
@@ -30,6 +24,7 @@ pub struct AgentIdentity {
     pub name: String,
     pub workspace: PathBuf,
     pub tool_packages: Vec<String>,
+    pub modals: Vec<ModelModal>,
 }
 impl AgentIdentity {
     pub fn id(&self) -> u32 {

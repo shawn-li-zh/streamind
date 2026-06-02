@@ -3,7 +3,7 @@ use std::collections::HashSet;
 pub use self::reflect::build_package;
 use futures::future::BoxFuture;
 use tool_macro::package;
-#[package("条件反射系统,规则管理器")]
+#[package("条件反射记忆系统管理器")]
 pub mod reflect {
 
     use chrono::{DateTime, Local};
@@ -14,46 +14,57 @@ pub mod reflect {
     use crate::reflect::ReflectInjected;
 
     #[tool(
-        anno = "分页查询反射组的基础信息",
-        example = r#"page_groups(page=1,size=10)"#,
+        anno = "分页查询领域的基础信息",
+        example = r#"page_scopes(page=1,size=10)"#,
         limit = "30s:10"
     )]
-    pub async fn page_groups(
+    pub async fn page_scopes(
         #[arg("页码")] page: usize,
         #[arg("数量")] size: usize,
-        #[arg("关键字")] key: Option<String>,
+        #[arg("关键字匹配")] key: Option<String>,
+        #[arg("领域描述，语义检索")] describe: Option<String>,
         #[ctx] ctx: ToolCallContext,
     ) -> anyhow::Result<ToolReturn> {
-        let groups = entity_service::rule::page_groups(page as _, size as _, key).await?;
-        if groups.is_empty() {
+        let describe = match describe {
+            Some(v) => {
+                if let Some(injected) = ctx.agent_context.get::<ReflectInjected>() {
+                    Some((injected.embedding)(v).await?)
+                } else {
+                    anyhow::bail!("反射功能未启用")
+                }
+            }
+            None => None,
+        };
+        let scopes = entity_service::rule::page_scopes(page as _, size as _, key, describe).await?;
+        if scopes.is_empty() {
             return Ok(ToolReturn::raw("查询结果为空"));
         }
         let mut res = vec![];
-        for group in groups {
+        for scope in scopes {
             let info = format!(
                 "ID={},名称={},创建时间={}\n",
-                group.id,
-                group.name,
-                group.create_time.format("%Y-%m-%d %H:%M:%S")
+                scope.id,
+                scope.name,
+                scope.create_time.format("%Y-%m-%d %H:%M:%S")
             );
             res.push(info);
         }
         Ok(ToolReturn::raws(res))
     }
     #[tool(
-        anno = "分页查询组内的反射规则",
-        example = r#"page_rules(group_id=1,page=1,size=10)"#,
+        anno = "分页查询领域内的反射规则",
+        example = r#"page_rules(scope_id=1,page=1,size=10)"#,
         limit = "30s:10"
     )]
     pub async fn page_rules(
-        #[arg("组id")] group_id: i64,
+        #[arg("领域id")] scope_id: i64,
         #[arg("页码")] page: usize,
         #[arg("数量")] size: usize,
         #[arg("关键字")] key: Option<String>,
         #[ctx] ctx: ToolCallContext,
     ) -> anyhow::Result<ToolReturn> {
         let rules =
-            entity_service::rule::page_rule_in_group(group_id, page as _, size as _, key).await?;
+            entity_service::rule::page_rule_in_scope(scope_id, page as _, size as _, key).await?;
         if rules.is_empty() {
             return Ok(ToolReturn::raw("查询结果为空"));
         }
@@ -74,13 +85,17 @@ pub mod reflect {
     }
     //新建分组
     #[tool(
-        anno = "创建新分组,不能和现有分组重名",
-        example = r#"new_group(name="编程")"#,
+        anno = "创建新领域,不能和现有领域重名",
+        example = r#"new_scope(name="编程")"#,
         limit = "30s:10"
     )]
-    pub async fn new_group(#[arg("组名")] name: String) -> anyhow::Result<ToolReturn> {
+    pub async fn new_scope(
+        #[arg("领域名")] name: String,
+        #[arg("领域定义")] content: String,
+        #[arg("激活阈值,只有描述的语义相似度大于此值时才认为是同一个领域")] active_threshold: f32,
+    ) -> anyhow::Result<ToolReturn> {
         let db = DB.get().unwrap();
-        let id = entity_service::rule::new_group(db, name).await?;
+        let id = entity_service::rule::new_scope(db, name, content, active_threshold).await?;
         Ok(ToolReturn::raw(format!("id={id}")))
     }
 
@@ -90,11 +105,12 @@ pub mod reflect {
         limit = "30s:10"
     )]
     pub async fn new_concept(
+        #[arg("领域id")] scope_id: i64,
         #[arg("概念名")] name: String,
         #[arg("内容")] content: String,
     ) -> anyhow::Result<ToolReturn> {
         let db = DB.get().unwrap();
-        let id = entity_service::concept::new_concept(db, name, content).await?;
+        let id = entity_service::concept::create(db, scope_id, name, content).await?;
         Ok(ToolReturn::raw(format!("id={id}")))
     }
 
@@ -225,6 +241,8 @@ pub mod reflect {
 }
 
 pub struct ReflectInjected {
+    pub embedding:
+        Box<dyn (Fn(String) -> BoxFuture<'static, anyhow::Result<Vec<f32>>>) + Send + Sync>,
     pub unload_groups:
         Box<dyn (Fn(Vec<String>) -> BoxFuture<'static, anyhow::Result<()>>) + Send + Sync>,
     pub load_groups:

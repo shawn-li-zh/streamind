@@ -54,3 +54,4 @@ pub enum ModelCost {
     Medium,
     High,
 }
+

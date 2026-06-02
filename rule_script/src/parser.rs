@@ -1,4 +1,4 @@
-use std::str::FromStr as _;
+use std::{collections::HashMap, str::FromStr as _, sync::LazyLock};
 
 use pest::Parser;
 use pest_derive::Parser;
@@ -19,13 +19,17 @@ fn parse_number(s: &str) -> rust_decimal::Decimal {
     );
 }
 
-pub fn parse_expr(input: &str) -> anyhow::Result<Expr> {
+pub fn parse_expr(input: &str, orders: &HashMap<&str, i32>) -> anyhow::Result<Expr> {
     let pairs = LogicParser::parse(Rule::main, input)?;
     let pair = pairs.into_iter().next().unwrap();
-    parse_expr_pair(pair)
+    parse_expr_pair(pair, &orders)
 }
 pub(crate) const DECIMAL_PLACES: u32 = 4;
-fn parse_expr_pair(pair: pest::iterators::Pair<Rule>) -> anyhow::Result<Expr> {
+
+fn parse_expr_pair(
+    pair: pest::iterators::Pair<Rule>,
+    orders: &HashMap<&str, i32>,
+) -> anyhow::Result<Expr> {
     match pair.as_rule() {
         // 使用一个通用的匹配块处理所有左结合的二元运算，极大地精简代码
         Rule::or_expr
@@ -35,7 +39,7 @@ fn parse_expr_pair(pair: pest::iterators::Pair<Rule>) -> anyhow::Result<Expr> {
         | Rule::mul_expr
         | Rule::pow_expr => {
             let mut pairs = pair.into_inner();
-            let mut expr = parse_expr_pair(pairs.next().unwrap())?;
+            let mut expr = parse_expr_pair(pairs.next().unwrap(), orders)?;
 
             while let Some(op_pair) = pairs.next() {
                 let op = match op_pair.as_str() {
@@ -55,7 +59,7 @@ fn parse_expr_pair(pair: pest::iterators::Pair<Rule>) -> anyhow::Result<Expr> {
                     "!=" => BinOperator::Cmp(Compare::Ne),
                     _ => unreachable!("Unknown operator: {}", op_pair.as_str()),
                 };
-                let right = parse_expr_pair(pairs.next().unwrap())?;
+                let right = parse_expr_pair(pairs.next().unwrap(), orders)?;
                 expr = Expr::Binary {
                     left: Box::new(expr),
                     op,
@@ -76,7 +80,7 @@ fn parse_expr_pair(pair: pest::iterators::Pair<Rule>) -> anyhow::Result<Expr> {
                     primary = Some(p);
                 }
             }
-            let mut expr = parse_expr_pair(primary.unwrap())?;
+            let mut expr = parse_expr_pair(primary.unwrap(), orders)?;
             if not_count % 2 != 0 {
                 expr = Expr::Not(Box::new(expr));
             }
@@ -108,7 +112,8 @@ fn parse_expr_pair(pair: pest::iterators::Pair<Rule>) -> anyhow::Result<Expr> {
                     }
                 }
             }
-            Ok(Expr::Func(ident, args))
+            let order = orders.get(ident.as_str()).map(|v| *v).unwrap_or_default();
+            Ok(Expr::Func(order, ident, args))
         }
 
         Rule::number => {
@@ -132,7 +137,12 @@ mod tests {
     fn test_parse_complex_expr() {
         // 测试复合运算、函数调用、小数补齐和逻辑组合
         let input = r#" aaa("bbb", 1.2, true) > 3.1415926 & (10 + 5 * 2 == 20) | !false &test('中文') |str(`sdsds`)"#;
-        let expr = parse_expr(input).unwrap();
+        let orders= HashMap::from([
+            ("aaa", 10),
+            ("test", 20),
+            ("str", 30),
+        ]);
+        let expr = parse_expr(input, &orders).unwrap();
         println!("{:#?}", expr);
     }
 }

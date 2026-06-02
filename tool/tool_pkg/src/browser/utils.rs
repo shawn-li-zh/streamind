@@ -1,4 +1,3 @@
-
 use std::time::Duration;
 
 use anyhow::Context;
@@ -74,11 +73,12 @@ pub async fn click(page: &Page, point: Point, count: u32, btn: MouseButton) -> a
 pub async fn scroll(page: &Page, x: f64, y: f64) -> anyhow::Result<()> {
     page.execute(
         DispatchMouseEventParams::builder()
+            .x(0)
+            .y(0)
             .delta_x(x)
             .delta_y(y)
             .r#type(DispatchMouseEventType::MouseWheel)
-            .build()
-            .unwrap(),
+            .build().map_err(|v|anyhow::anyhow!(v))?,
     )
     .await?;
     Ok(())
@@ -86,8 +86,8 @@ pub async fn scroll(page: &Page, x: f64, y: f64) -> anyhow::Result<()> {
 pub async fn press_key(page: &Page, key: impl AsRef<str>) -> anyhow::Result<()> {
     let cmd = press_key_params(key)?;
 
-    page.execute(cmd.clone().build().unwrap()).await?;
-    page.execute(cmd.r#type(DispatchKeyEventType::KeyUp).build().unwrap())
+    page.execute(cmd.clone().build().map_err(|v|anyhow::anyhow!(v))?).await?;
+    page.execute(cmd.r#type(DispatchKeyEventType::KeyUp).build().map_err(|v|anyhow::anyhow!(v))?)
         .await?;
     Ok(())
 }

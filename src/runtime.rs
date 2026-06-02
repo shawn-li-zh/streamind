@@ -155,7 +155,6 @@ impl GenerateWorker {
             GenerateEvent::Start => {
                 println!("start...");
                 self.gen_sender.send(true)?;
-
                 self.reset(); // 增加清理
                 entity_service::event::processing(db, agent_id).await?;
                 {
@@ -223,8 +222,8 @@ impl GenerateWorker {
             }
             GenerateEvent::End(reason) => {
                 //加入临时阻塞事件接收机制，防止期间有事件触发执行其他任务去了
-                println!("call start...");
-                let mut events = self.handle_end(reason).await;
+                println!("call start...{:?}", &reason);
+                let (mut events, continue_flag) = self.handle_end(reason).await;
 
                 //处理响应
                 {
@@ -265,7 +264,7 @@ impl GenerateWorker {
                         ));
                     }
                 }
-                let has_events = events.len() > 0;
+
                 println!("call end...{}", events.len());
                 for ele in events {
                     let event = self.agent.save_event(ele).await?;
@@ -275,7 +274,7 @@ impl GenerateWorker {
                         .await?;
                 }
                 self.agent.cond_reflection.refresh_triggered_rules();
-                if has_events {
+                if continue_flag {
                     self.agent.send_cmd(CommandEvent::Generate).await?;
                 } else {
                     //释放状态
@@ -290,8 +289,9 @@ impl GenerateWorker {
         }
         Ok(())
     }
-    async fn handle_end(&mut self, resaon: EndReason) -> Vec<(AppEnvEventData, bool)> {
+    async fn handle_end(&mut self, resaon: EndReason) -> (Vec<(AppEnvEventData, bool)>, bool) {
         let mut events: Vec<(AppEnvEventData, bool)> = vec![];
+
         let db = DB.get().unwrap();
         let agent_id = self.agent_id;
         {
@@ -299,6 +299,17 @@ impl GenerateWorker {
             entity_service::event::done(db, agent_id).await.unwrap();
             let web_event: WebEvent = WebEvent::Section(SectionEvent::End, self.response_event_id);
             self.web_sender.send(web_event);
+        }
+        //非正常结束则不处理任何功能调用
+        match resaon {
+            EndReason::Error(e) => {
+                error!("{}", e);
+                return (events, false);
+            }
+            EndReason::Canceled => {
+                return (events, false);
+            }
+            _ => {}
         }
         //解析响应的section
         let mut errors = vec![];
@@ -331,43 +342,41 @@ impl GenerateWorker {
                 }
             }
         }
+
         if !errors.is_empty() {
             //发送事件处理
             events.push((AppEnvEventData::Error(errors.join("\n")), false));
-            return events;
+            return (events, true);
         }
-        //非正常结束则不处理任何功能调用
-        match resaon {
-            EndReason::Error | EndReason::Canceled => {
-                return events;
-            }
-            _ => {}
-        }
+
+        let mut continue_flag = events.len() > 0;
 
         //函数调用
         if !tool_call_infos.is_empty() {
-            if let Err(e) = tool_call(
+            let res = tool_call(
                 self.response_event_id,
                 tool_call_infos,
                 &self.tool_engine,
                 self.web_sender.clone(),
                 &mut events,
             )
-            .await
-            {
+            .await;
+            if let Err(e) = res {
                 let bt = Backtrace::capture();
                 eprintln!("{:?}", bt);
                 //发送事件处理
                 events.push((AppEnvEventData::Error(e.to_string()), false));
             }
+            continue_flag = events.len() > 0;
         }
         //处理压栈
         if !stack_cmds.is_empty() {
+            continue_flag = true;
             if let Err(e) = handle_stack_commands(self.agent.clone(), stack_cmds).await {
                 events.push((AppEnvEventData::Error(e.to_string()), false));
             };
         }
-        events
+        (events, continue_flag)
     }
 }
 
@@ -489,30 +498,18 @@ async fn tool_call(
                 continue;
             }
         };
-        let detial = tool_call_details.get_mut(&item.id).unwrap();
+        let mut detial = tool_call_details.remove(&item.id).unwrap();
         detial.values = item.values;
         detial.status = item.status;
         detial.elapsed = item.elapsed;
         //保存
-        entity_service::section::update_payload(db, detial.id, detial.clone())
-            .await
-            .unwrap();
-        let is_empty = detial
-            .values
-            .iter()
-            .filter(|v| {
-                if let ToolReturnValue::Ignore = v {
-                    return false;
-                }
-                return true;
-            })
-            .count()
-            == 0;
+        entity_service::section::update_payload(db, detial.id, detial.clone()).await?;
+        let is_empty = detial.values.iter().filter(|v| !v.is_empty()).count() == 0;
         if is_empty {
             continue;
         }
         //发送完整事件
-        events.push((AppEnvEventData::ToolResponse(detial.clone()), false));
+        events.push((AppEnvEventData::ToolResponse(detial), false));
     }
     //结束
     Ok(())
@@ -562,7 +559,7 @@ async fn handle_stack_commands(
                 } else {
                     anyhow::bail!("栈顶不存在")
                 }
-                 println!("reset node");
+                println!("reset node");
             }
             StackCommand::Pop(result) => {
                 if stack.node_len() <= 1 {
@@ -583,12 +580,9 @@ async fn handle_stack_commands(
                 .await?;
 
                 if let Some(top_node) = stack.top_node() {
-                    let mut content = top_node.content.write();
-                    let new = format!(
-                        "{}\n子节点[{}]周期结束,返回结果:\n{}",
-                        content, title, result
-                    );
-                    *content = new;
+                    let event = AppEnvEventData::StackPop(title.clone(), result);
+                    let event = agent.save_event((event, false)).await?;
+                    top_node.push(event);
                 } else {
                     anyhow::bail!("栈顶不存在")
                 }

@@ -10,13 +10,17 @@ use entity::model::ModelStatus;
 use kernel::{
     client::ChatClient,
     embedding::{self, EmbeddingClient},
+    model::ModelModal,
     tool::ToolPackagePool,
 };
 
 use parking_lot::RwLock;
 use tokio_cron_scheduler::{Job, JobScheduler};
 
-use runtime::{embedding::doubao::DoubaoEmbedding, llm::deepseek::DeepseekClient};
+use runtime::{
+    embedding::doubao::DoubaoEmbedding,
+    llm::{deepseek::DeepseekClient, openai::OpenaiClient, siliconflow::SiliconflowClient},
+};
 
 use crate::{agent::AppAgent, task};
 //全局agent池
@@ -39,9 +43,13 @@ pub async fn init() -> anyhow::Result<()> {
                 .with_api_base(model.api_url.clone())
                 .with_api_key(model.api_key.clone()),
         );
-        let engine = DeepseekClient {
+        let value = serde_json::to_value(model.input_modals.0)?;
+        let modals = serde_json::from_value::<Vec<ModelModal>>(value)?;
+
+        let engine = SiliconflowClient {
             model: model.name.clone(),
             client,
+            modals: modals,
         };
         p.insert(model.id, Arc::new(engine));
     }
@@ -77,8 +85,6 @@ pub async fn init() -> anyhow::Result<()> {
             let id = agent_info.id;
             let (agent, runtime) = AppAgent::new(agent_info).await;
             runtime.start();
-            // agent.scheduler.clone().start()?;
-            // runtime.start(mind);
             // let agent = Arc::new(agent);
             p.insert(id, agent);
         }

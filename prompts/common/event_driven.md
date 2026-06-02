@@ -19,6 +19,7 @@
 | userRequest  | 用户直接输入的意图或指令                       |
 | toolResponse | 外部工具/函数执行后的返回结果（见下方格式）             |
 | reflection   | 命中条件反射规则后，系统自动注入的经验/提示             |
+| stackPop   | 子栈弹出，返回子任务处理的结果             |
 | heartbeat    | 系统定时发送的保活信号，用于维持长期任务状态             |
 | timer        | 定时器触发信号，通常在你执行 `timer.sleep` 结束后出现 |
 | interaction  | 来自前端 UI 的用户点击或交互操作                 |

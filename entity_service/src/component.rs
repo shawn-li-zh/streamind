@@ -22,19 +22,7 @@ pub async fn get_by_name(name: &str) -> anyhow::Result<Option<entity::render_com
         .await?;
     Ok(model)
 }
-pub async fn range(
-    start: u64,
-    end: u64,
-    key: Option<String>,
-) -> anyhow::Result<Vec<entity::render_component::Model>> {
-    let db = DB.get().unwrap();
-    let mut query = entity::render_component::Entity::find();
-    if let Some(key) = key {
-        query = query.filter(entity::render_component::Column::Name.like(key));
-    }
-    let models = query.offset(start).limit(end).all(db).await?;
-    Ok(models)
-}
+
 pub async fn total(key: Option<String>) -> anyhow::Result<u64> {
     let db = DB.get().unwrap();
     let mut query = entity::render_component::Entity::find();
@@ -58,7 +46,7 @@ pub async fn page(
 ) -> anyhow::Result<Vec<entity::render_component::Model>> {
     let db = DB.get().unwrap();
     let mut query = entity::render_component::Entity::find();
-    if let Some(key) = key {
+    if let Some(key) = key.filter(|v| !v.trim().is_empty()) {
         query = query.filter(
             entity::render_component::Column::Name.like(&key).or(
                 entity::render_component::Column::Doc

@@ -5,7 +5,7 @@ mod parser;
 mod pred;
 pub use {
     core::engine::ScriptEngine,
-    core::evaluate::{self, Operators, TruthValues},
+    core::evaluate::{self},
     expr::{ArgValue, BinOperator, Expr},
     parser::parse_expr,
     pred::{Predicate, TestValue},

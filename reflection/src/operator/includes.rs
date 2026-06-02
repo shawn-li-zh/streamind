@@ -26,7 +26,7 @@ impl Predicate<EventElement> for Includes {
         other: Expr,
     ) -> anyhow::Result<Expr> {
         match &other {
-            Expr::Func(name, other_args) => {
+            Expr::Func(_,name, other_args) => {
                 if let Some(e) = self.handle(args, this.clone(), op.clone(), other.clone())? {
                     return Ok(e);
                 }
@@ -55,7 +55,7 @@ impl Includes {
         other: Expr,
     ) -> anyhow::Result<Option<Expr>> {
         match &other {
-            Expr::Func(name, other_args) => {
+            Expr::Func(_,name, other_args) => {
                 if name == self.name() {
                     let l = args[0].clone().must_string()?;
                     let r = other_args[0].clone().must_string()?;
@@ -94,7 +94,7 @@ impl Includes {
         other: Expr,
     ) -> anyhow::Result<Option<Expr>> {
         match &other {
-            Expr::Func(name, other_args) => {
+            Expr::Func(_,name, other_args) => {
                 if name == self.name() {
                     let l = args[0].clone().must_string()?;
                     let r = other_args[0].clone().must_string()?;

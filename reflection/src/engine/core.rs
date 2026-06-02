@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use rule_script::{
     Expr,
-    evaluate::{self, Operators},
+    evaluate::{self},
 };
 #[derive(Clone)]
 pub struct Rule<T: Clone> {
@@ -12,7 +12,6 @@ pub struct Rule<T: Clone> {
 }
 pub struct RuleGroup<T: Clone> {
     pub name: String,
-    pub operators: Arc<Operators>,
     pub rules: Vec<Rule<T>>,
     pub exprs: Arc<Vec<Expr>>,
 }

@@ -64,6 +64,7 @@ pub enum AppEnvEventData {
     //中断信号
     Interrupt(String),
     Reflection(ReflectEvent),
+    StackPop(String, String),
 }
 impl AppEnvEventData {
     pub fn to_infos(self) -> Vec<Information> {
@@ -164,6 +165,10 @@ impl AppEnvEventData {
                 let one = format!("渲染ID:{}, 负载消息:{}", data.section_id, data.message).into();
                 vec![one]
             }
+            AppEnvEventData::StackPop(title, content) => {
+                let one = format!("子任务[{}]周期结束, 返回信息为:\n{}", title, content).into();
+                vec![one]
+            }
         }
     }
 
@@ -178,6 +183,7 @@ impl AppEnvEventData {
             AppEnvEventData::Interrupt(_) => "中断信号",
             AppEnvEventData::Interaction(_) => "UI交互事件",
             AppEnvEventData::Reflection(_) => "条件反射",
+            AppEnvEventData::StackPop(_, _) => "栈弹出",
         };
         name.to_string()
     }
@@ -192,6 +198,7 @@ impl AppEnvEventData {
             AppEnvEventData::Interrupt(_) => "interrupt",
             AppEnvEventData::Interaction(_) => "interaction",
             AppEnvEventData::Reflection(_) => "reflection",
+            AppEnvEventData::StackPop(_, _) => "stackPop",
         };
         name.to_string()
     }
@@ -222,6 +229,7 @@ impl AppEnvEventData {
                 .iter()
                 .map(|s| s.content.len() + s.name.len())
                 .sum::<usize>(),
+            AppEnvEventData::StackPop(title, content) => title.len() + content.len(),
         }
     }
 }

@@ -10,8 +10,8 @@ pub mod render_state;
 pub mod section;
 pub mod state;
 pub mod types;
-pub mod concept;
+pub mod rule_concept;
 
 pub mod format;
-pub mod rule_group;
+pub mod rule_scope;
 pub mod rule_item;

@@ -18,18 +18,17 @@ pub fn simplify<E: Send + Sync + 'static>(
                 e => Expr::Not(Box::new(e)),
             }
         }
-
         Expr::Binary { left, op, right } => {
             let sl = simplify(engine, *left)?;
             let sr = simplify(engine, *right)?;
             //排序
             let (sl, sr) = if sl < sr { (sl, sr) } else { (sr, sl) };
             match (&sl, &sr) {
-                (Expr::Func(name, args), e) => {
+                (Expr::Func(_,name, args), e) => {
                     let pred = engine.get_predicate(name)?;
                     return Ok(pred.simplify(args, sl.clone(), op, sr)?);
                 }
-                (e, Expr::Func(name, args)) => {
+                (e, Expr::Func(_, name, args)) => {
                     let pred = engine.get_predicate(name)?;
                     return Ok(pred.simplify(args, sr.clone(), op, sl)?);
                 }

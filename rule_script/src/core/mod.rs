@@ -1,14 +1,16 @@
+pub mod engine;
 pub mod evaluate;
 pub mod simplify;
-pub mod engine;
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::{collections::HashMap, sync::Arc};
 
-use async_trait::async_trait;
+    use async_trait::async_trait;
 
-    use crate::{core::engine::ScriptEngine, expr::{ArgValue, BinOperator, Expr}, pred::{Predicate, TestValue}};
+    use crate::{
+        core::engine::ScriptEngine, expr::{ArgValue, BinOperator, Expr}, parser, pred::{Predicate, TestValue}
+    };
 
     use super::*;
     struct Element {
@@ -37,7 +39,7 @@ use async_trait::async_trait;
             other: Expr,
         ) -> anyhow::Result<Expr> {
             match &other {
-                Expr::Func(name, other_args) => {
+                Expr::Func(_, name, other_args) => {
                     if let Some(e) = self.handle(args, this.clone(), op.clone(), other.clone())? {
                         return Ok(e);
                     }
@@ -66,7 +68,7 @@ use async_trait::async_trait;
             other: Expr,
         ) -> anyhow::Result<Option<Expr>> {
             match &other {
-                Expr::Func(name, other_args) => {
+                Expr::Func(_, name, other_args) => {
                     if name == self.name() {
                         let l = args[0].clone().must_string()?;
                         let r = other_args[0].clone().must_string()?;
@@ -105,7 +107,7 @@ use async_trait::async_trait;
             other: Expr,
         ) -> anyhow::Result<Option<Expr>> {
             match &other {
-                Expr::Func(name, other_args) => {
+                Expr::Func(_, name, other_args) => {
                     if name == self.name() {
                         let l = args[0].clone().must_string()?;
                         let r = other_args[0].clone().must_string()?;
@@ -155,26 +157,30 @@ use async_trait::async_trait;
         engine.register_predicate(Age);
         engine
     }
+    fn to_expr(s: &str) -> Expr {
+   
+        parser::parse_expr(s, &HashMap::new()).unwrap()
+    }
     #[tokio::test]
     async fn test_parse_rule() {
         let engine = Arc::new(init_engine());
         let element = Arc::new(init_element());
         {
             let expr = r#"contains("f")"#;
-            let res = engine.clone().evaluate(&vec![expr], element.clone()).await;
+            let res = engine.clone().solves(&vec![to_expr(expr)], element.clone()).await;
             assert!(res.is_ok());
             assert_eq!(res.unwrap()[0], TestValue::Bool(true));
         }
 
         {
             let expr = r#"contains("f") & contains("o") | !contains("bar")"#;
-            let res = engine.clone().evaluate(&vec![expr],  element.clone()).await;
+            let res = engine.clone().solves(&vec![to_expr(expr)], element.clone()).await;
             assert!(res.is_ok());
             assert_eq!(res.unwrap()[0], TestValue::Bool(true));
         }
         {
             let expr = r#"age()<10 & contains("o")"#;
-            let res = engine.clone().evaluate(&vec![expr],  element.clone()).await;
+            let res = engine.clone().solves(&vec![to_expr(expr)], element.clone()).await;
             assert!(res.is_ok());
             assert_eq!(res.unwrap()[0], TestValue::Bool(false));
         }
@@ -183,15 +189,15 @@ use async_trait::async_trait;
     fn test_simplify() {
         let engine = init_engine();
         let expr = r#"contains("foo") & contains("o")"#;
-        let res = engine.simplify(expr).unwrap();
+        let res = engine.simplify(expr, &HashMap::new()).unwrap();
         assert_eq!(&res, r#"contains("foo")"#);
         //
         let expr = r#"contains("foo") & !contains("o")"#;
-        let res = engine.simplify(expr).unwrap();
+        let res = engine.simplify(expr, &HashMap::new()).unwrap();
         assert_eq!(&res, r#"false"#);
         //
         let expr = r#"contains("foo") | !contains("o")"#;
-        let res = engine.simplify(expr).unwrap();
+        let res = engine.simplify(expr, &HashMap::new()).unwrap();
         assert_eq!(&res, r#"true"#);
     }
 }

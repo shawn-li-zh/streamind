@@ -54,6 +54,7 @@ pub enum EnvEventType {
     Interrupt,
     Interaction,
     Reflection,
+    StackPop,
 }
 impl Display for EnvEventType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

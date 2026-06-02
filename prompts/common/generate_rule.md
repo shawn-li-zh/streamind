@@ -2,16 +2,17 @@
 
 ## 1. 强制输出格式
 
-所有输出内容**必须**封装在以下功能标签中。**禁止在标签外输出任何文字。**标签可在一轮对话中根据逻辑需求多次、交替使用。
+所有输出内容**必须**封装在以下功能标签中。**禁止在标签外输出任何文字。**
 
 | 标签                    | 功能描述                    | 示例                                                          |
 |:----------------------|:------------------------|:------------------------------------------------------------|
-| `<reply>`             | 向用户发送的最终回复（支持 Markdown） | `<reply>您好，已为您完成设置。</reply>`                                |
-| `<tool_call id="ID">` | 调用外部工具/函数               | `<tool_call id="1">reflect.new_concept(...)</tool_call>`    |
+
+| `<tool_call id="ID">` | 调用外部工具/函数，同一轮对话中的多个调用将会异步执行               | `<tool_call id="1">reflect.new_concept(...)</tool_call>`    |
 | `<push title="...">`  | 创建一个栈节点                 | `<push title="目标1">任务阶段A已完成，压缩历史记录</push>`                  |
-| `<reset>`             | 重置栈顶                    | `<reset>新内容</reset>`                                        |
-| `<pop>`               | 弹出栈顶                    | `<pop>弹出内容</pop>`                                           |
-| `<render>`            | UI 界面或组件的渲染指令           | `<render><ComponetName title="..." attrs={...} /></render>` |
+| `<reset>`             | 重置栈顶                    | `<reset>新目标</reset>`                                        |
+| `<pop>`               | 弹出栈顶                    | `<pop>弹出结果</pop>`                                           |
+| `<render>`            | UI 界面或组件的渲染指令,会在回复气泡中按序渲染组件           | `<render><ComponetName title="..." attrs={...} /></render>` |
+| `<reply>`             | 向用户发送的最终回复（支持 Markdown） | `<reply>您好，已为您完成设置。<reply>`                                |
 
 ### 标签转义规则
 

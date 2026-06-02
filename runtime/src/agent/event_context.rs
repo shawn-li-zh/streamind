@@ -6,7 +6,7 @@ use kernel::{
     agent::event::{self, EnvEvent},
     client::ChatClient,
     message::{Role, RoleMessage},
-    mind::context::EventContext,
+    mind::context::{ChunkStream, EventContext},
 };
 
 use parking_lot::{Mutex, RwLock};
@@ -239,18 +239,10 @@ impl<E: EnvEvent> EventContext<E> for StackContext<E> {
     fn size(&self) -> usize {
         self.content_size.load(std::sync::atomic::Ordering::Relaxed)
     }
-    async fn chunk_stream(
-        &self,
-    ) -> std::pin::Pin<Box<dyn Stream<Item = anyhow::Result<String>> + Send>> {
+    async fn chunk_stream(&self) -> anyhow::Result<ChunkStream> {
         let messages = self.messages();
-        // println!("{:#?}", &messages);
-        let llm_stream = self
-            .client
-            .stream(messages)
-            .await
-            .expect("Failed to llm stream");
-
-        llm_stream
+        let llm_stream = self.client.stream(messages).await?;
+        Ok(llm_stream)
     }
 }
 impl<E: EnvEvent> StackContext<E> {

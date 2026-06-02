@@ -24,6 +24,7 @@ use kernel::{
         context::EventContext as _,
         port::{CommandEvent, MindOutlet},
     },
+    model::ModelModal,
     tool::engine::ToolEngineContext,
 };
 use parking_lot::RwLock;
@@ -157,20 +158,22 @@ impl AppAgent {
                     .send(WebEvent::Env(env_event.data.clone(), id));
             }
         }
+        self.heartbeat.disable();
         info!("AgentEvent: {:?}", &env_event.data);
         //反射
-        let reflection = self.cond_reflection.event_reflect(&env_event).await?;
+        // let reflection = self.cond_reflection.event_reflect(&env_event).await?;
         //发送给代理
         if env_event.force {
             self.instance.send_cmd(CommandEvent::Cancel).await?;
         }
+
         //等待生成完成
         let mut gen = self.gen_watcher.lock().await;
         gen.wait_for(|v| !*v).await?;
         //发送事件给上下文
-        self.inject_event_to_context(env_event, reflection).await?;
+        self.inject_event_to_context(env_event, None).await?;
+        //开始生成
         self.instance.send_cmd(CommandEvent::Generate).await?;
-        self.heartbeat.disable();
         Ok(id)
     }
 
@@ -255,15 +258,17 @@ pub async fn build_instance(
     Receiver<(Arc<AgentTimer>, bool)>,
 ) {
     let model_id = agent.model_id;
-    //
-    let identity = build_agent_identity(&agent);
-    let context = build_agent_context(&identity).await;
-    //上下文流处理器
+    //chat 客户端
     let client = {
         let p = ENGINE_POOL.read();
         let client = p.get(&model_id).unwrap().clone();
         client
     };
+    let (model_family, model_name, modals) = client.model_info();
+    //
+    let identity = build_agent_identity(&agent, modals);
+    let context = build_agent_context(&identity).await;
+    //事件上下文
     let stack = load_stack(identity.as_ref(), client.clone(), &context)
         .await
         .unwrap();
@@ -416,6 +421,17 @@ async fn build_agent_context(identity: &AgentIdentity) -> Arc<AgentContext> {
         };
         context.insert(injected);
         let injected = ReflectInjected {
+            embedding: Box::new(move |query| {
+                async move {
+                    let client = EMBEDDING_CLIENT.get().unwrap();
+                    let embedding = client.union_embed(vec![query.into()]).await.map_err(|e| {
+                        error!("embedding error: {}", e);
+                        anyhow::anyhow!("embedding error")
+                    })?;
+                    Ok(embedding)
+                }
+                .boxed()
+            }),
             load_groups: Box::new(move |group_names| {
                 async move {
                     let agent = {
@@ -481,12 +497,16 @@ async fn build_agent_context(identity: &AgentIdentity) -> Arc<AgentContext> {
     Arc::new(context)
 }
 
-fn build_agent_identity(agent: &entity::agent::Model) -> Arc<AgentIdentity> {
+fn build_agent_identity(
+    agent: &entity::agent::Model,
+    modas: Vec<ModelModal>,
+) -> Arc<AgentIdentity> {
     let identity = AgentIdentity {
         id: agent.id,
         code: agent.code.to_string(),
         name: agent.name.to_string(),
         workspace: PathBuf::from(&agent.workspace),
+        modals: modas,
         tool_packages: agent.tool_packages.0.clone(),
     };
     Arc::new(identity)

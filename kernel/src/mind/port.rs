@@ -43,7 +43,7 @@ pub enum GenerateEvent {
 #[derive(Debug, Clone)]
 pub enum EndReason {
     Normal,
-    Error,
+    Error(Arc<anyhow::Error>),
     Canceled,
 }
 #[pin_project] // 1. 在结构体上标注

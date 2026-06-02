@@ -1,8 +1,6 @@
 use chrono::Local;
 use entity::{
-    event::{EnvEventStatus, EnvEventType},
-    format::date_time,
-    state,
+    agent::AgentStatusEnum, event::{EnvEventStatus, EnvEventType}, format::date_time, state
 };
 
 use kernel::mind::section::Section;
@@ -199,6 +197,7 @@ pub async fn list_by_state_ids(
     let events = entity::event::Entity::find()
         .filter(entity::event::Column::AgentId.eq(agent_id))
         .filter(entity::event::Column::StateId.is_in(state_ids))
+        .filter(entity::event::Column::Status.ne(EnvEventStatus::Unloaded))
         .order_by_asc(entity::event::Column::Step)
         .all(db)
         .await?;
@@ -337,6 +336,12 @@ pub mod event_convert {
             AppEnvEventData::Interaction(data) => {
                 json!(data)
             }
+            AppEnvEventData::StackPop(title, content) => {
+                json!({
+                    "title": title,
+                    "content": content
+                })
+            }
         }
     }
 
@@ -370,6 +375,12 @@ pub mod event_convert {
             EnvEventType::Interaction => {
                 AppEnvEventData::Interaction(serde_json::from_value(payload).unwrap())
             }
+            EnvEventType::StackPop => {
+                let mut map: HashMap<String, String> = serde_json::from_value(payload).unwrap();
+                let title = map.remove("title").unwrap_or_default();
+                let content = map.remove("content").unwrap_or_default();
+                AppEnvEventData::StackPop(title, content)
+            }
         }
     }
     pub fn from_entity(event: entity::event::Model) -> AppEnvEvent {
@@ -392,6 +403,7 @@ pub mod event_convert {
             AppEnvEventData::Interrupt(_) => EnvEventType::Interrupt,
             AppEnvEventData::Interaction(_) => EnvEventType::Interaction,
             AppEnvEventData::Reflection(_) => EnvEventType::Reflection,
+            AppEnvEventData::StackPop(_, _) => EnvEventType::StackPop,
         }
     }
 }

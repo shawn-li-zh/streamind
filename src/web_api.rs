@@ -129,7 +129,7 @@ pub async fn chat(Path(agent_id): Path<u32>, Json(msg): Json<UserMessageReq>) ->
     };
 
     if let Some(agent_arc) = agent_arc {
-        let event = (
+        let event: (AppEnvEventData, bool) = (
             AppEnvEventData::UserRequest(UserMessage {
                 content: msg.content.trim().to_string(),
                 attachments: vec![],

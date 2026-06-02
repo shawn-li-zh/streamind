@@ -6,16 +6,16 @@ pub mod render {
 
     #[tool(
         anno = "列出指定区间内的组件信息",
-        example = r#"list_components(start=0,num=10,key="图片")"#,
+        example = r#"page_components(page=1,size=10,key="图片")"#,
         limit = "30s:10"
     )]
-    pub async fn list_components(
-        #[arg("起始位置")] start: u64,
-        #[arg("数量")] num: u64,
+    pub async fn page_components(
+        #[arg("页码")] page: u64,
+        #[arg("每页数量")] size: u64,
         #[arg("关键字")] key: Option<String>,
         #[ctx] ctx: ToolCallContext,
     ) -> anyhow::Result<ToolReturn> {
-        let models = entity_service::component::range(start, num, key).await?;
+        let models = entity_service::component::page(page, size, key).await?;
         let mut res = vec![];
         res.push(format!("结果总数:{}\n---",models.len()));
         for comp in models {

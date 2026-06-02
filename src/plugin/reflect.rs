@@ -42,7 +42,7 @@ impl CondReflection {
         }
     }
     pub fn refresh_triggered_rules(&self) {
-        for  node in self.event_context.nodes() {
+        for node in self.event_context.nodes() {
             let events = node.events();
             for event in events {
                 match &event.data {
@@ -147,7 +147,8 @@ impl CondReflection {
 pub async fn load_reflection_engine(
     agent: &entity::agent::Model,
 ) -> anyhow::Result<RuleEngine<ReflectData>> {
-    let groups = &agent.rule_groups.0;
+    let mut groups = agent.rule_groups.0.clone();
+    groups.push("meta".into());
     info!("加载规则组:{:?}", groups);
     let sim = Similar(Box::new(move |name: &str| {
         let name = name.to_string();
@@ -158,7 +159,7 @@ pub async fn load_reflection_engine(
         })
     }));
     let engine: RuleEngine<ReflectData> = RuleEngine::new(sim);
-    let groups = load_rule_groups(&engine, groups).await?;
+    let groups = load_rule_groups(&engine, &groups).await?;
 
     for group in groups {
         engine.add_rule_group(group);
@@ -175,7 +176,7 @@ pub async fn load_rule_groups(
     {
         let rules = entity_service::rule::list_rules_by_group_names(group_names).await?;
         for ele in rules {
-            map.entry(ele.group_id).or_default().push(ele);
+            map.entry(ele.scope_id).or_default().push(ele);
         }
     }
 
@@ -183,7 +184,7 @@ pub async fn load_rule_groups(
     for group in group_models {
         let rules = map.remove(&group.id).unwrap_or_default();
         let exprs: Vec<&str> = rules.iter().map(|v| v.expr.as_str()).collect();
-        let (exprs, operators) = engine.extract_operators(&exprs)?;
+        let exprs = engine.parse(&exprs)?;
         let rules: Vec<Rule<_>> = rules
             .into_iter()
             .zip(exprs.clone())
@@ -198,11 +199,92 @@ pub async fn load_rule_groups(
             .collect();
         let group = RuleGroup {
             name: group.name,
-            operators: Arc::new(operators),
+
             exprs: Arc::new(exprs),
             rules,
         };
         groups.push(group);
     }
     Ok(groups)
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::{DateTime, Datelike, Local};
+    use dotenvy::dotenv;
+    use serde::Deserialize;
+
+    use super::*;
+    use std::{collections::HashMap, fs};
+    #[tokio::test]
+    pub async fn init() -> anyhow::Result<()> {
+        dotenv().ok();
+        entity_service::init().await.unwrap();
+        #[derive(Deserialize)]
+        struct Scope {
+            name: String,
+            content: String,
+            active_threshold: f32,
+            rules: Vec<Rule>,
+        }
+        #[derive(Deserialize)]
+        struct Rule {
+            name: String,
+            expr: String,
+            content: String,
+        }
+        let json = fs::read_to_string(r"D:\project\rust\streamind\prompts\rule_scope.json")?;
+        let scopes = serde_json::from_str::<Vec<Scope>>(&json)?;
+        //
+        let sim = Similar(Box::new(move |name: &str| {
+            let name = name.to_string();
+            Box::pin(async move {
+                let res = entity_service::concept::find_by_name(&name, true).await?;
+                let vec = res.map(|v| v.embedding.unwrap_or_default().0);
+                Ok(vec)
+            })
+        }));
+        let engine: RuleEngine<ReflectData> = RuleEngine::new(sim);
+        //
+        let db = DB.get().unwrap();
+        for scope in scopes {
+            let scope_id = entity_service::rule::new_scope(
+                db,
+                scope.name,
+                scope.content,
+                scope.active_threshold,
+            )
+            .await?;
+            for rule in scope.rules {
+                let expr = engine.simplify(&rule.expr).unwrap();
+                println!("simplify: Raw:{}\n New:{}", &rule.expr, &expr);
+                entity_service::rule::save_rule(
+                    db,
+                    scope_id,
+                    rule.name,
+                    expr,
+                    rule.content,
+                    Local::now().with_year(10000).unwrap(),
+                )
+                .await?;
+            }
+        }
+        Ok(())
+    }
+    // #[tokio::test]
+    // pub async fn init_concepts() {
+    //     dotenv().ok();
+    //     entity_service::init().await.unwrap();
+    //     let json = fs::read_to_string(r"D:\project\rust\streamind\prompts\concepts.json").unwrap();
+    //     let concepts = serde_json::from_str::<Vec<HashMap<String, String>>>(&json).unwrap();
+    //     //
+    //     let db = DB.get().unwrap();
+    //     for mut concept in concepts {
+    //         let name = concept.remove("name").unwrap_or_default();
+    //         let content = concept.remove("content").unwrap_or_default();
+    //         entity_service::concept::create(db, name, content)
+    //             .await
+    //             .unwrap();
+    //     }
+    // }
 }

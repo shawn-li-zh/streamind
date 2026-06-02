@@ -47,6 +47,7 @@ impl<E: EnvEvent, C: EventContext<E>> StreamMind<E, C> {
 
     /// 非阻塞地抽干(Drain)当前队列中的所有事件
     fn drain_events(&mut self) -> bool {
+    
         while let Ok(cmd) = self.cmd_receiver.try_recv() {
             match cmd {
                 // CommandEvent::Inject(e) => {
@@ -84,7 +85,6 @@ impl<E: EnvEvent, C: EventContext<E>> StreamMind<E, C> {
                 .write(true)
                 .append(true)
                 .create(true)
-                // .create_new(true)
                 .open("out.txt")
                 .unwrap();
             file.write_all("\n---\n".as_bytes()).unwrap();
@@ -93,11 +93,11 @@ impl<E: EnvEvent, C: EventContext<E>> StreamMind<E, C> {
                 last_tag: None,
                 chunk_buffer: String::new(),
             };
-            let resaon = self
-                .event_stream(&mut worker, file)
-                .await
-                .unwrap_or(EndReason::Error);
-
+            let res = self.event_stream(&mut worker, file).await;
+            let resaon = match res {
+                Ok(v) => v,
+                Err(e) => EndReason::Error(Arc::new(e)),
+            };
             worker.end(resaon).await;
             self.drain_events();
         }
@@ -112,7 +112,7 @@ impl<E: EnvEvent, C: EventContext<E>> StreamMind<E, C> {
             mpsc::UnboundedReceiver<String>,
         ) = mpsc::unbounded_channel();
         // 3. 准备当前要处理的上下文
-        let mut chunk_stream = self.context.chunk_stream().await;
+        let mut chunk_stream = self.context.chunk_stream().await?;
         // 3. 将 Rx 转换为 Stream 并与 LLM 流合并
         let mut inject_stream =
             tokio_stream::wrappers::UnboundedReceiverStream::new(proxy.1).boxed();
@@ -210,7 +210,7 @@ impl<E: EnvEvent, C: EventContext<E>> StreamMind<E, C> {
 
                 }
                 else=>{
-                     return Ok(EndReason::Error)
+                     return Ok(EndReason::Error(Arc::new(anyhow::anyhow!("连接中断"))))
                 }
             };
         }

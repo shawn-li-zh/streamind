@@ -8,7 +8,7 @@ use futures::StreamExt;
 use kernel::{
     client::{ChatClient, ChunkStream},
     message::{Information, Role},
-    model::ModelFamily,
+    model::{ModelFamily, ModelModal},
 };
 use serde::{Deserialize, Serialize};
 
@@ -23,7 +23,7 @@ pub struct Message {
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Request {
     pub model: String,
-    pub reasoning_effort: ReasoningEffort,
+    pub reasoning_effort: Option<ReasoningEffort>,
     pub thinking: Option<Thinking>,
     pub messages: Vec<Message>,
     pub max_tokens: Option<u32>,
@@ -137,8 +137,12 @@ pub struct DeepseekClient {
 }
 #[async_trait]
 impl ChatClient for DeepseekClient {
-    fn model_info(&self) -> (ModelFamily, String) {
-        (ModelFamily::DeepSeek, self.model.to_string())
+    fn model_info(&self) -> (ModelFamily, String, Vec<ModelModal>) {
+        (
+            ModelFamily::DeepSeek,
+            self.model.to_string(),
+            vec![ModelModal::Text],
+        )
     }
     async fn stream(
         &self,
@@ -147,10 +151,15 @@ impl ChatClient for DeepseekClient {
         let messages = messages.into_iter().map(|v| v.into()).collect();
         let request = Request {
             model: self.model.clone(),
-            reasoning_effort: ReasoningEffort::Low,
+
+            reasoning_effort: Some(ReasoningEffort::Low),
             thinking: Some(Thinking {
                 r#type: "enabled".to_string(),
             }),
+            // reasoning_effort: None,
+            // thinking: Some(Thinking {
+            //     r#type: "disabled".to_string(),
+            // }),
             messages: messages,
             max_tokens: None,
             stream: true,

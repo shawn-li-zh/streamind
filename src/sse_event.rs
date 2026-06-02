@@ -54,6 +54,7 @@ impl WebEvent {
                 | AppEnvEventData::Interaction(_)
                 | AppEnvEventData::Heartbeat
                 | AppEnvEventData::Reflection(_)
+                | AppEnvEventData::StackPop(_, _)
                 | AppEnvEventData::ToolResponse(_) => {
                     unreachable!("调用出错")
                 }

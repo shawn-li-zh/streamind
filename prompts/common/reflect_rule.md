@@ -14,9 +14,9 @@
 
 | 类型 | 算子 | 说明 | 返回值 |
 | :--- | :--- | :--- | :--- |
-| 文本分析 | `includes(str)` / `matches(regex)` | 包含子串 / 正则匹配 | bool |
+| 文本分析 | `includes(str)` /  `includes_pattern(regex)`  | 包含子串 / 包含正则 | bool |
+| 统计/索引 | `count(str)` / `count_pattern(regex)` / `index_of(str)` / `index_of_pattern(regex)` | 出现次数 / 首个索引位置 | number |
 | 元数据 | `event_type_is(type)` / `time_with(str)` | 类型匹配 / 时间特征匹配 | bool |
-| 统计/索引 | `count(str)` / `index_of(str)` | 出现次数 / 首个索引位置 | number |
 | 语义匹配 | `similar(concept_name)` | 与指定概念名词的余弦相似度 | number (0-1) |
 
 逻辑运算符：支持 `&` (与), `|` (或), `!` (非), 及四则运算、比较符 `(>, <, ==,>=,<=)`。

@@ -40,12 +40,13 @@
 | `keyboard.press(code="KEY")` | `code`: 键名 (如 "Enter", "Tab", "a") | `keyboard.press(code="Enter");` |
 | `keyboard.longPress(code="KEY", ms=MS)` | `ms`: 持续毫秒数 | `keyboard.longPress(code="Control", ms=1000);` |
 
-### D. 等待指令 (Wait)
+### D. 系统指令 (Wait)
 用于处理页面动态加载或动画。
 
 | 指令语法 | 参数说明 | 示例 |
 | :--- | :--- | :--- |
 | `wait(ms=MS)` | `ms`: 等待毫秒数 | `wait(ms=1000);` |
+| `eval(js=JS)` | `js`: 脚本 | `eval(js="alert(1);");` |
 
 ---
 

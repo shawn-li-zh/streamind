@@ -73,7 +73,12 @@ async fn get_local_image(
     }
 
     // 2. 检查文件是否存在
-    let path = PathBuf::from(&query.path);
+    let dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let path = dir.join(&query.path);
+    println!("Attempting to serve local image: {:?}", path);
+    if !path.exists() || !path.is_file() {
+        return (StatusCode::NOT_FOUND, "File not found").into_response();
+    }
     if !path.exists() || !path.is_file() {
         return (StatusCode::NOT_FOUND, "File not found").into_response();
     }
@@ -118,7 +123,7 @@ pub fn inject_router(mut router: Router) -> Router {
     router = router.route("/upload/{*path}", axum::routing::post(upload));
     // 新增：本地图片流获取接口
     // 注意：在 main.rs 中启动 server 时，必须使用 .into_make_service_with_connect_info::<SocketAddr>()
-    router = router.route("/local-image", get(get_local_image));
+    router = router.route("/api/local-image", get(get_local_image));
 
     //映射本地资源
     let serve_dir = tower_http::services::ServeDir::new(PUBLIC_DIR)

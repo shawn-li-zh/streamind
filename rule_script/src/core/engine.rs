@@ -1,9 +1,8 @@
 use std::{collections::HashMap, sync::Arc};
 
 use crate::{
-    TruthValues,
     core::{
-        evaluate::{self, Operators},
+        evaluate::{self},
         simplify,
     },
     expr::Expr,
@@ -24,42 +23,23 @@ impl<E: Send + Sync + 'static> ScriptEngine<E> {
         self.preds.insert(pred.name(), Arc::new(pred));
     }
 
-    pub async fn evaluate(
-        self: Arc<ScriptEngine<E>>,
-        exprs: &[&str],
-        element: Arc<E>,
-    ) -> anyhow::Result<Vec<TestValue>> {
-        //解析表达式
-        let mut asts = vec![];
-        for expr in exprs {
-            asts.push(parser::parse_expr(expr)?);
-        }
-        //算子去重
-        let operators = evaluate::extract_operators(&asts);
-        let operators = Arc::new(operators);
-        let asts = Arc::new(asts);
-        let values = self.solves(element, operators, asts).await?;
-        return Ok(values);
-    }
-
     pub async fn solves(
         self: Arc<ScriptEngine<E>>,
+        exprs: &Vec<Expr>,
         element: Arc<E>,
-        operators: Arc<Operators>,
-        exprs: Arc<Vec<Expr>>,
     ) -> anyhow::Result<Vec<TestValue>> {
-        //计算真值
-        let truth_values = evaluate::compute_truth_values(self.clone(), operators, element).await?;
         //代入求解
-        let values = evaluate::solve_exprs(exprs, truth_values)?;
+        let values = evaluate::solve_exprs(self.clone(), &exprs, element).await?;
         return Ok(values);
     }
 
-    pub fn simplify(&self, expr: &str) -> anyhow::Result<String> {
-        let expr = parser::parse_expr(expr).map_err(|e|anyhow::anyhow!("表达式解析失败:{e}"))?;
+    pub fn simplify(&self, expr: &str, orders: &HashMap<&str, i32>) -> anyhow::Result<String> {
+        let expr =
+            parser::parse_expr(expr, orders).map_err(|e| anyhow::anyhow!("表达式解析失败:{e}"))?;
         let expr = simplify::simplify(self, expr)?;
         Ok(format!("{}", expr))
     }
+
     pub(crate) fn get_predicate(
         &self,
         pred_name: &str,

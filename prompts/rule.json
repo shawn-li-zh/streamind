@@ -4,13 +4,23 @@
     "rules": [
       {
         "name": "加载浏览器自动化规则组",
-        "expr": "includes('浏览器')|includes('网页')|includes('http')|includes('url')|includes('链接')",
-        "content": "判断是否要加载'浏览器自动化'规则"
+        "expr": "includes('浏览器') | includes('网页') | includes('url') | includes('链接') | includes('DOM') | includes_pattern('https?://')",
+        "content": "当前上下文可能进入浏览器自动化领域，应考虑动态加载“浏览器自动化”规则组。"
       },
       {
         "name": "加载编程规则组",
-        "expr": "includes('项目')|includes('需求')|includes('java')|includes('ts')|includes('前端')|includes('组件')|includes('后端')",
-        "content": "判断是否要加载'编程'规则"
+        "expr": "includes('项目') | includes('需求') | includes('前端') | includes('后端') | includes('组件') | includes('数据库') | includes_pattern('(rust|java|python|javascript|typescript|go|cpp|c\\+\\+)')",
+        "content": "当前上下文可能进入编程与系统设计领域，应考虑动态加载“编程”规则组。"
+      },
+      {
+        "name": "加载哲学认知规则组",
+        "expr": "includes('意识') | includes('元认知') | includes('现实') | includes('哲学') | includes('存在') | includes('自我')",
+        "content": "当前上下文可能进入哲学与认知讨论领域，应考虑动态加载“哲学与认知”规则组。"
+      },
+      {
+        "name": "加载错误恢复规则组",
+        "expr": "event_type_is('error') | includes('报错') | includes('失败') | includes('异常') | includes_pattern('(panic|exception|stack trace|traceback)')",
+        "content": "当前上下文可能进入错误恢复与调试场景，应考虑动态加载“错误恢复”规则组。"
       }
     ]
   },
@@ -18,44 +28,29 @@
     "name": "浏览器自动化",
     "rules": [
       {
-        "name": "browser_pipeline_usage",
-        "expr": "(similar(\"浏览器自动化\")>0.72) & (includes(\"pipeline\") | includes(\"node.click\") | includes(\"mouse.click\") | includes(\"keyboard.press\"))",
-        "content": "浏览器自动化操作应优先使用 browser.pipeline 批量执行命令，以减少多次工具调用与上下文切换。Pipeline 指令之间必须使用分号分隔，并合理插入 wait(ms=300~1000) 等待页面反馈。页面刷新后必须重新获取 DOM 节点 ID。"
+        "name": "优先使用流水线操作",
+        "expr": "(similar('浏览器自动化') > 0.7) & (includes('pipeline') | includes_pattern('(click|hover|type|press)'))",
+        "content": "存在连续浏览器动作时，应优先使用 browser.pipeline 合并执行，减少工具切换与上下文中断。"
       },
       {
-        "name": "browser_dom_refresh",
-        "expr": "(similar(\"浏览器自动化\")>0.65) & (includes(\"页面刷新\") | includes(\"跳转\") | includes(\"DOM\") | includes(\"节点失效\"))",
-        "content": "DOM 节点 ID 具有实时性。页面刷新、跳转、弹窗变化后，旧 ID 可能失效。必须重新调用 look_dom() 获取新的节点结构与 ID。"
+        "name": "页面变化后重新获取DOM",
+        "expr": "includes('页面刷新') | includes('跳转') | includes('reload') | includes('DOM失效') | includes('节点失效')",
+        "content": "页面刷新、跳转或弹窗变化后，旧 DOM 节点 ID 可能失效，必须重新调用 browser.look_dom()。"
       },
       {
-        "name": "browser_wait_strategy",
-        "expr": "(similar(\"浏览器自动化\")>0.6) & (includes(\"click\") | includes(\"type\") | includes(\"hover\"))",
-        "content": "浏览器交互后若依赖页面反馈，应插入 wait(ms=300~1500)。例如：点击按钮后等待弹窗、输入后等待搜索建议、页面跳转后等待 DOM 稳定。"
+        "name": "交互后等待页面稳定",
+        "expr": "(similar('浏览器自动化') > 0.65) & includes_pattern('(click|hover|type|press)')",
+        "content": "浏览器交互后若依赖页面反馈，应插入 wait(ms=300~1500) 等待页面稳定。"
       },
       {
-        "name": "browser_pipeline_prefer",
-        "expr": "(similar(\"浏览器自动化\")>0.7) & (count(\"click\")>2 | count(\"type\")>1)",
-        "content": "当存在多个连续浏览器动作时，优先合并为 browser.pipeline 调用，避免频繁工具切换与上下文中断。"
+        "name": "浏览器操作前确认状态",
+        "expr": "similar('浏览器状态') > 0.7",
+        "content": "浏览器操作前，应确认当前标签页、DOM 状态、页面加载状态与可见区域，避免盲目点击。"
       },
       {
-        "name": "dom_id_invalid_after_refresh",
-        "expr": "(includes(\"页面刷新\") | includes(\"跳转\") | includes(\"reload\"))",
-        "content": "页面刷新、跳转、弹窗变化后，旧 DOM 节点 ID 可能失效。必须重新调用 browser.look_dom()。"
-      },
-      {
-        "name": "pipeline_preferred",
-        "expr": "(count(\"click\") > 1) | (count(\"type\") > 1)",
-        "content": "存在多个连续浏览器动作时，应优先使用 browser.pipeline 合并执行，减少上下文切换与工具调用开销。"
-      },
-      {
-        "name": "wait_after_interaction",
-        "expr": "(includes(\"click\") | includes(\"type\") | includes(\"hover\")) & similar(\"浏览器自动化\") > 0.65",
-        "content": "浏览器交互后若依赖页面反馈，应插入 wait(ms=300~1500)，等待页面稳定。"
-      },
-      {
-        "name": "browser_state_awareness",
-        "expr": "similar(\"浏览器状态\") > 0.7",
-        "content": "浏览器操作前，应先确认当前标签页、DOM 状态、页面加载状态与可见区域，避免盲目点击。"
+        "name": "连续动作合并执行",
+        "expr": "(count_pattern('(click|hover|type|press)') > 2)",
+        "content": "存在多个连续浏览器动作时，应优先合并为 browser.pipeline 调用。"
       }
     ]
   },
@@ -63,24 +58,24 @@
     "name": "编程",
     "rules": [
       {
-        "name": "programming_debugging",
-        "expr": "(similar(\"编程\")>0.72) & (similar(\"求助/问题\")>0.6)",
-        "content": "当用户处于调试或报错场景时，应优先：分析错误原因 -> 定位问题模块 -> 给出最小修复方案 -> 提供优化建议。避免直接输出大量无关理论。"
+        "name": "调试问题优先定位根因",
+        "expr": "(similar('编程') > 0.7) & (similar('求助/问题') > 0.6)",
+        "content": "调试或报错场景下，应优先：分析错误原因 -> 定位问题模块 -> 给出最小修复方案 -> 提供优化建议。"
       },
       {
-        "name": "rust_compile_error",
-        "expr": "(includes(\"cargo\") | includes(\"rust\")) & (includes(\"error\") | includes(\"panic\") | includes(\"borrow checker\"))",
-        "content": "Rust 编译问题通常与所有权、生命周期、借用检查、异步 Send/Sync、trait 约束或泛型推导有关。优先检查 ownership 与生命周期边界。"
+        "name": "Rust错误优先检查所有权",
+        "expr": "includes_pattern('(rust|cargo)') & includes_pattern('(panic|borrow checker|ownership|lifetime|trait|Send|Sync|compile error)')",
+        "content": "Rust 编译问题通常与所有权、生命周期、借用检查、trait 约束或异步 Send/Sync 有关。"
       },
       {
-        "name": "agent_runtime_context",
-        "expr": "(similar(\"Agent Runtime\")>0.7) & (includes(\"memory\") | includes(\"runtime\") | includes(\"event\") | includes(\"context\"))",
-        "content": "Agent Runtime 设计中，应将 memory、event、state、scheduler、activation 从模型中解耦，避免让 LLM 直接承担长期状态管理。"
+        "name": "运行时状态与模型解耦",
+        "expr": "(similar('Agent Runtime') > 0.7) & includes_pattern('(memory|runtime|event|context|scheduler|state)')",
+        "content": "Agent Runtime 应将 memory、event、scheduler、activation 与模型解耦，避免长期状态完全依赖 LLM 上下文。"
       },
       {
-        "name": "architecture_scalability",
-        "expr": "(similar(\"系统架构\")>0.7) & (includes(\"扩展\") | includes(\"解耦\") | includes(\"模块\") | includes(\"并发\"))",
-        "content": "系统架构设计应优先考虑模块边界、状态隔离、异步事件流、低耦合与可扩展性。避免业务逻辑直接耦合到 Runtime 核心。"
+        "name": "系统架构优先低耦合",
+        "expr": "(similar('系统架构') > 0.7) & includes_pattern('(扩展|解耦|模块|并发|异步|事件流)')",
+        "content": "系统架构设计应优先考虑模块边界、状态隔离、异步事件流与低耦合。"
       }
     ]
   },
@@ -88,14 +83,14 @@
     "name": "哲学与认知",
     "rules": [
       {
-        "name": "meta_cognition",
-        "expr": "(similar(\"哲学\")>0.72) & (includes(\"意识\") | includes(\"元认知\") | includes(\"现实\") | includes(\"自我\"))",
-        "content": "讨论意识与元认知时，应区分：感知、自我模型、注意力、抽象能力、长期状态与反思能力。避免将单一认知现象直接等同于智慧或精神异常。"
+        "name": "元认知需区分不同层级",
+        "expr": "(similar('哲学') > 0.7) & includes_pattern('(意识|元认知|现实|自我|存在)')",
+        "content": "讨论意识与元认知时，应区分：感知、自我模型、注意力、抽象能力、长期状态与反思能力。"
       },
       {
-        "name": "ai_consciousness",
-        "expr": "(similar(\"哲学\")>0.65) & (includes(\"AI\") | includes(\"智能体\") | includes(\"意识\"))",
-        "content": "AI 系统中的“意识”更多接近持续状态维护、全局工作空间、记忆激活与反思循环，而非单纯语言生成能力。"
+        "name": "AI意识更接近运行时状态",
+        "expr": "(similar('哲学') > 0.65) & includes_pattern('(AI|智能体|意识|认知)')",
+        "content": "AI 系统中的“意识”更接近持续状态维护、记忆激活、全局工作空间与反思循环，而非单纯语言生成。"
       }
     ]
   },
@@ -103,38 +98,28 @@
     "name": "自反射机制",
     "rules": [
       {
-        "name": "record_high_value_experience",
-        "expr": "(includes(\"修复\") | includes(\"解决\")) & (similar(\"编程\")>0.6)",
-        "content": "当成功修复复杂问题时，应考虑将“触发场景 -> 问题原因 -> 修复方案”沉淀为新的反射规则。"
+        "name": "高价值修复经验沉淀",
+        "expr": "includes_pattern('(修复|解决|排查成功|定位问题)') & !event_type_is('reflection')",
+        "content": "成功解决复杂问题后，应将：触发场景 -> 问题原因 -> 修复策略，沉淀为新的反射规则。"
       },
       {
-        "name": "avoid_context_pollution",
-        "expr": "count(\"memory\")>3 | count(\"context\")>5",
-        "content": "避免无节制注入上下文。优先激活最相关、最新、最强语义匹配的少量记忆，避免上下文污染。"
-      },
-      {
-        "name": "prefer_symbolic_trigger",
-        "expr": "similar(\"Agent Runtime\")>0.6",
-        "content": "规则触发优先使用 includes、count、event_type_is 等低成本符号算子，仅在必要时使用 similar() 进行语义激活。"
-      },
-      {
-        "name": "store_high_value_fix",
-        "expr": "(includes(\"修复\") | includes(\"解决\")) & !event_type_is(\"reflection\")",
-        "content": "当成功解决复杂问题后，应将：触发条件 -> 问题原因 -> 修复策略，沉淀为反射规则。"
-      },
-      {
-        "name": "prefer_symbolic_first",
-        "expr": "similar(\"Agent Runtime\") > 0.65",
+        "name": "优先使用低成本符号匹配",
+        "expr": "similar('Agent Runtime') > 0.6",
         "content": "规则匹配优先使用 includes、count、event_type_is 等低成本符号算子，仅在必要时使用 similar()。"
       },
       {
-        "name": "avoid_context_explosion",
-        "expr": "count(\"memory\") > 5 | count(\"context\") > 6",
-        "content": "避免上下文爆炸。记忆激活应进行 top-k 筛选、权重竞争与时间衰减。"
+        "name": "避免上下文污染",
+        "expr": "(count('memory') > 3) | (count('context') > 5)",
+        "content": "避免无节制注入上下文，应优先激活最相关、最新、最强语义匹配的少量记忆。"
       },
       {
-        "name": "load_group_by_context",
-        "expr": "(similar(\"编程\") > 0.72) | (similar(\"浏览器自动化\") > 0.72)",
+        "name": "避免上下文爆炸",
+        "expr": "(count('memory') > 5) | (count('context') > 6)",
+        "content": "记忆激活应进行 top-k 筛选、时间衰减与权重竞争，避免上下文爆炸。"
+      },
+      {
+        "name": "按领域动态加载规则组",
+        "expr": "(similar('编程') > 0.72) | (similar('浏览器自动化') > 0.72) | (similar('哲学') > 0.72)",
         "content": "进入特定领域后，应动态加载对应 rule_group，而非一次性加载全部规则。"
       }
     ]
@@ -143,69 +128,69 @@
     "name": "工具调用",
     "rules": [
       {
-        "name": "tool_discovery_required",
-        "expr": "(includes(\"调用\") | includes(\"tool\") | includes(\"工具\")) & !event_type_is(\"toolResponse\")",
-        "content": "调用未知工具前，必须优先执行：tool.list_packages -> tool.list_tools -> tool.get_tool_info，严禁直接猜测工具签名或参数。"
+        "name": "未知工具必须先发现定义",
+        "expr": "(includes('调用') | includes('tool') | includes('工具')) & !event_type_is('toolResponse')",
+        "content": "调用未知工具前，必须优先执行：tool.list_packages -> tool.list_tools -> tool.get_tool_info。"
       },
       {
-        "name": "tool_response_not_user_intent",
-        "expr": "event_type_is(\"toolResponse\")",
-        "content": "toolResponse 是运行时反馈，不代表用户意图。分析工具结果时，应关注：执行状态、错误、数据内容、下一步动作，而非重复理解用户问题。"
+        "name": "工具响应不等于用户意图",
+        "expr": "event_type_is('toolResponse')",
+        "content": "toolResponse 是运行时反馈，不代表用户意图。分析时应关注执行状态、错误与下一步动作。"
       },
       {
-        "name": "parallel_tool_execution",
-        "expr": "(count(\"<tool_call\") > 1)",
-        "content": "多个 <tool_call> 默认视为异步并行执行。只有存在强依赖关系时，才应拆分为串行流程。"
+        "name": "多个工具调用默认并行",
+        "expr": "count('<tool_call') > 1",
+        "content": "多个 <tool_call> 默认视为异步并行执行，仅在存在强依赖关系时才拆分串行。"
       },
       {
-        "name": "tool_call_unique_id",
-        "expr": "includes(\"<tool_call\")",
-        "content": "每个 tool_call 的 id 必须全局唯一，避免事件追踪、响应匹配和状态恢复混乱。"
+        "name": "工具调用ID必须唯一",
+        "expr": "includes('<tool_call')",
+        "content": "每个 tool_call 的 id 必须全局唯一，避免响应匹配与事件追踪混乱。"
       },
       {
-        "name": "tool_json_strict",
-        "expr": "includes(\"<tool_call\")",
-        "content": "工具参数必须严格符合 JSON 规范：字符串使用双引号、布尔值使用 true/false、小数与数组格式合法。"
+        "name": "工具参数必须严格JSON格式",
+        "expr": "includes('<tool_call')",
+        "content": "工具参数必须严格符合 JSON 规范：字符串使用双引号、布尔值使用 true/false。"
       },
       {
-        "name": "avoid_tool_hallucination",
-        "expr": "(similar(\"工具调用\") > 0.7)",
+        "name": "禁止虚构工具定义",
+        "expr": "similar('工具调用') > 0.7",
         "content": "禁止虚构工具、参数、返回值或类型定义。未知工具必须先进行工具发现。"
       },
       {
-        "name": "search_history_before_assumption",
-        "expr": "(includes(\"之前\") | includes(\"历史\") | includes(\"刚才\") | includes(\"上一次\"))",
-        "content": "涉及历史状态、过去操作、上下文恢复时，应优先使用 event.search 或 event.get_by_id 查询历史事件，而非依赖短期上下文猜测。"
+        "name": "历史状态优先查询事件流",
+        "expr": "includes_pattern('(之前|历史|刚才|上一次|恢复现场)')",
+        "content": "涉及历史状态与上下文恢复时，应优先使用 event.search 或 event.get_by_id 查询历史事件。"
       }
     ]
   },
   {
-    "name": "error_recovery",
+    "name": "错误恢复",
     "rules": [
       {
-        "name": "tool_error_recovery",
-        "expr": "event_type_is(\"error\") | includes(\"Exception\") | includes(\"failed\")",
-        "content": "工具失败后，应先分析：参数错误、状态错误、权限问题、DOM 失效、网络异常，再决定是否重试。避免无意义重复调用。"
+        "name": "工具失败先分析原因",
+        "expr": "event_type_is('error') | includes_pattern('(Exception|failed|panic|traceback|报错|异常)')",
+        "content": "工具失败后，应优先分析：参数错误、状态错误、权限问题、DOM 失效或网络异常，再决定是否重试。"
       },
       {
-        "name": "interrupt_resume",
-        "expr": "event_type_is(\"interrupt\")",
-        "content": "收到 interrupt 后，应停止当前高风险动作，并尝试保存当前状态、任务进度与关键上下文。"
+        "name": "中断后优先保存状态",
+        "expr": "event_type_is('interrupt')",
+        "content": "收到 interrupt 后，应停止当前高风险动作，并尝试保存当前状态与任务进度。"
       },
       {
-        "name": "timer_resume",
-        "expr": "event_type_is(\"timer\")",
-        "content": "timer 事件通常意味着 sleep 或定时任务结束。恢复任务时，应重新检查当前状态，而非假设环境未变化。"
+        "name": "定时器恢复后重新检查环境",
+        "expr": "event_type_is('timer')",
+        "content": "timer 事件意味着 sleep 或定时任务结束，恢复任务时应重新检查环境状态。"
       },
       {
-        "name": "heartbeat_long_task",
-        "expr": "event_type_is(\"heartbeat\")",
-        "content": "heartbeat 用于长期任务保活。长流程任务应周期性保存状态、检查任务有效性与上下文完整性。"
+        "name": "长任务定期检查上下文",
+        "expr": "event_type_is('heartbeat')",
+        "content": "长流程任务应周期性保存状态、检查任务有效性与上下文完整性。"
       },
       {
-        "name": "event_search_for_debugging",
-        "expr": "(similar(\"错误恢复\") > 0.6) & (similar(\"编程\") > 0.5)",
-        "content": "调试复杂问题时，可通过 event.search_at 或 event.search 回溯错误发生前后的完整事件链。"
+        "name": "调试复杂问题回溯事件链",
+        "expr": "(similar('错误恢复') > 0.6) & (similar('编程') > 0.5)",
+        "content": "调试复杂问题时，可通过 event.search 或 event.search_at 回溯错误发生前后的完整事件链。"
       }
     ]
   }

@@ -1,5 +1,4 @@
 use async_trait::async_trait;
-use regex::Regex;
 
 use crate::operator::EventElement;
 use rule_script::*;
@@ -11,10 +10,22 @@ impl Predicate<EventElement> for Count {
     }
 
     async fn test(&self, element: &EventElement, args: &[ArgValue]) -> anyhow::Result<TestValue> {
-        let regex = args[0].clone().must_string()?;
-        let re = Regex::new(&regex)?;
-
-        let count = re.find_iter(&element.context).count();
+        let sub = args[0].clone().must_string()?;
+        let len = sub.len();
+        let mut i = 0;
+        let mut count = 0;
+        loop {
+            let end = i + len;
+            if end > element.context.len() {
+                break;
+            }
+            if &element.context[i..end] == sub {
+                count += 1;
+                i += len;
+                continue;
+            }
+            i += 1;
+        }
         return Ok(TestValue::Number(count.into()));
     }
 }

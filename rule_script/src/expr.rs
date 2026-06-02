@@ -103,8 +103,8 @@ impl ArgValue {
 /// 逻辑表达式树
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Ord, PartialOrd)]
 pub enum Expr {
-    //函数 名称 参数
-    Func(String, Vec<ArgValue>),
+    //函数 排序 名称 参数
+    Func(i32, String, Vec<ArgValue>),
     Not(Box<Expr>),
     Binary {
         left: Box<Expr>,
@@ -117,7 +117,7 @@ pub enum Expr {
 impl Display for Expr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Expr::Func(name, args) => {
+            Expr::Func(_,name, args) => {
                 let s = to_func_key(name, args);
                 write!(f, "{}", s)
             }

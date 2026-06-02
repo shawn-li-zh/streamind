@@ -9,6 +9,7 @@ use anyhow::Context as _;
 use chromiumoxide::{
     Browser, BrowserConfig, Page,
     cdp::browser_protocol::browser::{SetDownloadBehaviorBehavior, SetDownloadBehaviorParams},
+    handler::viewport::Viewport,
 };
 use futures::StreamExt as _;
 use tracing::error;
@@ -19,9 +20,11 @@ use crate::browser::{
     utils::{self},
 };
 static JS: LazyLock<String> = LazyLock::new(|| {
-    let path = Path::new(r"D:\project\rust\streamind\public\browser.inject.js");
-    let content = std::fs::read_to_string(path).expect("Failed to read file");
-    content
+    let path = Path::new(r"D:\project\rust\streamind/public/dom_view.js");
+    let dom_view = std::fs::read_to_string(path).expect("Failed to read file");
+    let path = Path::new(r"D:\project\rust\streamind/public/fingerprint_cheat.js");
+    let fingerprint_cheat = std::fs::read_to_string(path).expect("Failed to read file");
+    format!("{};{}", dom_view, fingerprint_cheat)
 });
 #[tokio::test]
 pub async fn test_cdp() -> anyhow::Result<()> {
@@ -30,11 +33,25 @@ pub async fn test_cdp() -> anyhow::Result<()> {
     if !chrome_path.exists() {
         anyhow::bail!("无效的浏览器执行文件地址");
     }
+    let view = Viewport {
+        width: 1610,
+        height: 880,
+        device_scale_factor: Some(1.0), // 强制 1.0 比例，防止系统缩放导致偏移
+        emulating_mobile: false,
+        is_landscape: true,
+        has_touch: false,
+    };
     let config = BrowserConfig::builder()
         .user_data_dir(r"D:\project\rust\streamind\tempb")
         .chrome_executable(chrome_path)
         .no_sandbox() // Windows 有时需要这个
         .with_head()
+        // 3. 强制设备缩放比为 1，解决高分屏偏移问题
+        .arg("--force-device-scale-factor=1")
+        // 4. 禁用一些可能改变 UI 布局的参数
+        .arg("--disable-features=ViewsBrowser") // 某些版本下防止 UI 干扰
+        .arg("--start-maximized")
+        .viewport(view)
         .launch_timeout(Duration::from_secs(5))
         .build()
         .unwrap();
@@ -47,8 +64,8 @@ pub async fn test_cdp() -> anyhow::Result<()> {
             }
         }
     });
-    let page = new_tab("https://www.baidu.com".to_string(), &browser).await?;
-    if let Ok(res) = page.evaluate("window['STREAMIND']?.body()").await {
+    let page = new_tab("https://www.taobao.com/".to_string(), &browser).await?;
+    if let Ok(res) = page.evaluate("window['STREAMIND']?.look_dom()").await {
         if let Ok(s) = res.into_value::<Option<String>>() {
             println!("body: {:?}", s);
         };
@@ -95,16 +112,15 @@ async fn new_tab(url: String, browser: &Browser) -> anyhow::Result<Page> {
 #[test]
 pub fn pipeline() -> anyhow::Result<()> {
 
-    let cmds =
-        r#"node.type(id=14, text='测试账号');  node.type(id=16, text='测试密码');node.click(id=18, x=1161.1, y=486.7)"#;
+    let cmds = "node.click(id=43);wait(ms=300);node.type(id=43,text='迷你主机');wait(ms=300);node.click(id=38);wait(ms=2000);";
     let mut actions = vec![];
     for (i, s) in cmds.split(";").enumerate() {
         let s = s.trim();
         if s.is_empty() {
             continue;
         }
-        let action =
-            BrowserAction::from_str(s.trim()).map_err(|e| anyhow::anyhow!("第{}条指令解析错误: {}", i, e))?;
+        let action = BrowserAction::from_str(s.trim())
+            .map_err(|e| anyhow::anyhow!("第{}条指令解析错误: {}", i, e))?;
         actions.push(action);
     }
 

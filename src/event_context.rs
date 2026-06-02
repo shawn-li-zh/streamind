@@ -100,12 +100,13 @@ pub fn build_system_prompt(identity: &AgentIdentity, ctx: &AgentContext) -> Stri
     let dir = std::env::current_dir().unwrap();
 
     let mut lines = vec![];
-
+    let workspace = identity.workspace.to_str().unwrap_or_default();
     lines.push(format!(
-        "# 基础信息:\n- 编号:{}\n- 名称:{}\n- 工作目录(绝对路径):{}",
+        "# 基础信息:\n- 编号:{}\n- 名称:{}\n- 系统工作目录(绝对路径,公共文档一般是以这个路径为基准):{}\n-工作空间是:{}",
         identity.code(),
         identity.name(),
-        dir.join(&identity.workspace).to_str().unwrap_or_default()
+        dir.to_str().unwrap_or_default(),
+        workspace
     ));
     lines.push(EVENT_DRIVEN.trim().to_string());
     lines.push(GENERATE_RULE.trim().to_string());

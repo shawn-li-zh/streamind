@@ -10,7 +10,7 @@ pub fn to_sdk_message(value: RoleMessage) -> ChatCompletionRequestMessage {
     match role {
         kernel::message::Role::User => prompt_kit::user_message(text, paths),
         kernel::message::Role::System => prompt_kit::system_message(text),
-        kernel::message::Role::Tool => prompt_kit::tool_message(text, paths),
+        kernel::message::Role::Tool => prompt_kit::user_message(text, paths),
         kernel::message::Role::Assistant => prompt_kit::assistant_message(text),
     }
 }

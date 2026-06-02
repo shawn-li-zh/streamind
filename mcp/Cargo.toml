@@ -1,0 +1,25 @@
+[package]
+name = "mcp"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+rmcp ={version =  "1.7.0",features = ["client"]}
+tool_macro = { path = "../tool/tool_macro" }
+kernel = { path = "../kernel" }
+# 锁
+parking_lot = "0.12.5"
+# 异步库
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1.89"
+async_once = "0.2.6"
+async-stream = "0.3.6"
+tokio-stream = "0.1.18"
+futures = "0.3"
+# 序列化
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# 错误处理
+anyhow = { version = "1", features = ["std"] }
+# 日志
+tracing = "0.1"

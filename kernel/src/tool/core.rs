@@ -37,8 +37,9 @@ pub type ActiveFn = Box<
 pub type SafeAny = dyn Any + Send + Sync + 'static;
 pub type ContextData = Arc<RwLock<SafeAny>>;
 pub type ContextBuilder = Box<dyn Fn(Arc<AgentContext>) -> ContextData + Send + Sync>;
-pub type PackageRecycler =
-    Box<dyn Fn(Arc<AgentContext>, ContextData) -> BoxFuture<'static, anyhow::Result<()>> + Send + Sync>;
+pub type PackageRecycler = Box<
+    dyn Fn(Arc<AgentContext>, ContextData) -> BoxFuture<'static, anyhow::Result<()>> + Send + Sync,
+>;
 pub fn async_package_recycler<F, Fut>(f: F) -> PackageRecycler
 where
     F: Fn(Arc<AgentContext>, ContextData) -> Fut + Send + Sync + 'static,
@@ -76,6 +77,15 @@ pub enum ToolReturnValue {
     Json(serde_json::Value),
     Image(Binary),
 }
+impl ToolReturnValue {
+    pub fn is_empty(&self) -> bool {
+        match self {
+            ToolReturnValue::Ignore => true,
+            // ToolReturnValue::Raw(s) => s.is_empty(),
+            _ => false,
+        }
+    }
+}
 #[derive(Debug, Clone)]
 pub struct ToolReturn {
     pub values: Vec<ToolReturnValue>,
@@ -99,6 +109,18 @@ impl ToolReturn {
     }
     pub fn ignore() -> Self {
         ToolReturnValue::Ignore.into()
+    }
+
+    pub fn image(path: PathBuf, size: usize, name: Option<String>) -> Self {
+        ToolReturnValue::Image(Binary { path, name, size }).into()
+    }
+    pub fn is_empty(&self) -> bool {
+        for v in &self.values {
+            if !v.is_empty() {
+                return false;
+            }
+        }
+        return true;
     }
 }
 

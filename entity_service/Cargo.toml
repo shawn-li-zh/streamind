@@ -27,12 +27,13 @@ sea-orm = { version = "2.0.0-rc.37", features = [
     "schema-sync",
     "entity-registry",
 ] }
-
+# rusqlite = { version = "0.22.0-beta.0", features = ["bundled"] }
+libsqlite3-sys = "0.30"
 # 用于加载 SQLite 向量扩展
-sqlite-vec = "0.1" 
+sqlite-vec = "0.1"
 anyhow = "1"
 
-reqwest = { version = "0.12", features = ["json", "rustls-tls","stream"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"] }
 
 chrono = "0.4.44"
 dashmap = "6.1.0"

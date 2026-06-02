@@ -1,6 +1,7 @@
 -- 初始化测试模型
 INSERT INTO "main"."model" ("id", "name", "remark", "api_url", "api_key", "input_modals", "output_modals", "consumed_tokens", "status", "cost") VALUES (1, 'deepseek-v4-pro', '测试', 'https://api.deepseek.com', 'sk-e847b4cab3f447b9a1132ef98bfcc509', '["text","image"]', '["text"]', 0, 'active', 'low');
-INSERT INTO "main"."agent" ("id", "model_id", "parent_id", "state_id", "name", "code", "persona", "workspace", "avatar", "tool_packages", "startup_time", "create_time","status") VALUES (1, 1, 0, 1, '助手', '5a03b2455', '', 'workspace/5a03b2455', 'https://api.dicebear.com/9.x/bottts/svg?scale=90&seed=助手-0.30414842228662375', '["*"]', '2026-05-11T13:55:58.760881100+08:00', '2026-05-05T16:17:28.133669800+08:00','idle');
+INSERT INTO "main"."model" ("id", "name", "remark", "api_url", "api_key", "input_modals", "output_modals", "consumed_tokens", "status", "cost") VALUES (2, 'Pro/moonshotai/Kimi-K2.6', '测试', 'https://api.siliconflow.cn/v1', 'sk-kzxxmauuezefajpvtelyhmhsnetlocxwgfnjctmdwgqjopux', '["text","image"]', '["text"]', 0, 'active', 'low');
+INSERT INTO "main"."agent" ("id", "model_id", "parent_id", "state_id", "name", "code", "persona", "workspace", "avatar", "tool_packages", "startup_time", "create_time","status") VALUES (1, 1, 0, 1, '助手', 'main', '', 'workspace/main', 'https://api.dicebear.com/9.x/bottts/svg?scale=90&seed=助手-0.30414842228662375', '["*"]', '2026-05-11T13:55:58.760881100+08:00', '2026-05-05T16:17:28.133669800+08:00','idle');
 INSERT INTO "main"."state" ("id", "agent_id", "pos", "dumped", "title", "content", "time") VALUES (1, 1, 0, 0, '根节点', '- 工作机制:我是一个事件驱动的agent,使用rust构建
 - 原生能力:异步处理事件、动态生成和渲染ui、创建分身、栈式上下文管理
 - 自身状态:用户刚初始化我的环境
@@ -29,12 +30,19 @@ INSERT INTO "main"."render_component" ("id", "name", "path", "annotation", "doc"
   purpose: string;
 }
 ', '2026-05-18T12:26:36.995581600+08:00', 'system', 'system', '{"code":"0","purpose":"需要保存您的个人基本信息以提供个性化服务。"}');
-INSERT INTO "main"."render_component" ("id", "name", "path", "annotation", "doc", "create_time", "author_type", "author_name", "preview_attrs") VALUES (2, 'ImageList', 'ImageList/index.js', '向用户展示一组图片', 'interface Attrs {
-  urls: string[];
+INSERT INTO "main"."render_component" ("id", "name", "path", "annotation", "doc", "create_time", "author_type", "author_name", "preview_attrs") VALUES (2, 'ImageList', 'ImageList/index.js', '向用户展示一组图片', 'interface Image {
+  //url或者本地文件路径
+  path: string;
+  name?: string;
+}
+
+interface Attrs {
+  title?: string;
+  images: Image[];
   width?: number;
   height?: number;
 }
-', '2026-05-18T14:06:23.154057600+08:00', 'system', 'system', '{"height":100,"images":[{"name":"鹿","url":"https://fuss10.elemecdn.com/a/3f/3302e58f9a181d2509f3dc0fa68b0jpeg.jpeg"},{"name":"马","url":"https://fuss10.elemecdn.com/1/34/19aa98b1fcb2781c4fba33d850549jpeg.jpeg"},{"name":"母狮","url":"https://fuss10.elemecdn.com/0/6f/e35ff375812e6b0020b6b4e8f9583jpeg.jpeg"},{"name":"傻狍子","url":"https://fuss10.elemecdn.com/9/bb/e27858e973f5d7d3904835f46abbdjpeg.jpeg"},{"name":"狐狸","url":"https://fuss10.elemecdn.com/d/e6/c4d93a3805b3ce3f323f7974e6f78jpeg.jpeg"},{"name":"雪狐","url":"https://fuss10.elemecdn.com/3/28/bbf893f792f03a54408b3b7a7ebf0jpeg.jpeg"},{"name":"猴","url":"https://fuss10.elemecdn.com/2/11/6535bcfb26e4c79b48ddde44f4b6fjpeg.jpeg"}],"title":"动物摄影","width":100}');
+', '2026-05-18T14:06:23.154057600+08:00', 'system', 'system', '{"height":100,"images":[{"name":"鹿","path":"https://fuss10.elemecdn.com/a/3f/3302e58f9a181d2509f3dc0fa68b0jpeg.jpeg"},{"name":"马","path":"https://fuss10.elemecdn.com/1/34/19aa98b1fcb2781c4fba33d850549jpeg.jpeg"},{"name":"母狮","path":"https://fuss10.elemecdn.com/0/6f/e35ff375812e6b0020b6b4e8f9583jpeg.jpeg"},{"name":"傻狍子","path":"https://fuss10.elemecdn.com/9/bb/e27858e973f5d7d3904835f46abbdjpeg.jpeg"},{"name":"狐狸","path":"https://fuss10.elemecdn.com/d/e6/c4d93a3805b3ce3f323f7974e6f78jpeg.jpeg"},{"name":"雪狐","path":"https://fuss10.elemecdn.com/3/28/bbf893f792f03a54408b3b7a7ebf0jpeg.jpeg"},{"name":"猴","path":"https://fuss10.elemecdn.com/2/11/6535bcfb26e4c79b48ddde44f4b6fjpeg.jpeg"}],"title":"动物摄影","width":100}');
 INSERT INTO "main"."render_component" ("id", "name", "path", "annotation", "doc", "create_time", "author_type", "author_name", "preview_attrs") VALUES (3, 'FileList', 'FileList/index.js', '向用户展示一组文件', 'interface File {
   url: string;
   name: string;

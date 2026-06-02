@@ -210,7 +210,6 @@ pub mod http {
                     let body = match &entry.body {
                         super::ProcessedBody::Text(c) => c.clone(),
                         super::ProcessedBody::File(path, _) => {
-                            let path = ctx.to_short_path(&path);
                             let path = path.to_str().unwrap();
                             format!("<file:{path}>")
                         }

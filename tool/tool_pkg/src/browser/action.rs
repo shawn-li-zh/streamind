@@ -201,6 +201,7 @@ pub enum BrowserAction {
     Mouse(MouseEvent),
     Keyboard(KeyboardEvent),
     Wait(u64),
+    Eval(String),
 }
 impl BrowserAction {
     pub async fn execute(self, page: &Page) -> anyhow::Result<()> {
@@ -210,6 +211,10 @@ impl BrowserAction {
             BrowserAction::Keyboard(keyboard) => keyboard.execute(page).await,
             BrowserAction::Wait(ms) => {
                 sleep(Duration::from_millis(ms)).await;
+                Ok(())
+            }
+            BrowserAction::Eval(js) => {
+                page.evaluate(js.as_str()).await?;
                 Ok(())
             }
         }
@@ -240,6 +245,14 @@ impl BrowserAction {
 
                     return Ok(BrowserAction::Wait(duration));
                 }
+                if f == "eval" {
+                    let js = args
+                        .remove("js")
+                        .and_then(|v| v.as_str().map(|s| s.to_string()))
+                        .context("eval js必填")?;
+                    return Ok(BrowserAction::Eval(js));
+                }
+
                 anyhow::bail!("invalid action");
             }
             _ => {

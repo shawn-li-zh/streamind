@@ -1,14 +1,18 @@
 mod count;
+mod count_pattern;
+
 mod event_type_is;
 mod includes;
+mod includes_pattern;
 mod index_of;
-mod matches;
+mod index_of_pattern;
 mod similar;
 mod time_with;
 
 pub use {
-    count::Count, event_type_is::EventTypeIs, includes::Includes, index_of::IndexOf,
-    matches::Matches, similar::Similar, time_with::TimeWith,
+    count::Count, count_pattern::CountPattern, event_type_is::EventTypeIs, includes::Includes,
+    includes_pattern::IncludesPattern, index_of::IndexOf, index_of_pattern::IndexOfPattern,
+    similar::Similar, time_with::TimeWith,
 };
 
 pub struct EventElement {

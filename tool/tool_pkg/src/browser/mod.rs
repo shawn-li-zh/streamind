@@ -27,9 +27,12 @@ pub mod browser {
 
     use chromiumoxide::{
         Browser, BrowserConfig, Page,
-        cdp::browser_protocol::{
-            browser::{SetDownloadBehaviorBehavior, SetDownloadBehaviorParams},
-            page::CaptureScreenshotFormat,
+        cdp::{
+            browser_protocol::{
+                browser::{SetDownloadBehaviorBehavior, SetDownloadBehaviorParams},
+                page::{CaptureScreenshotFormat, Frame, FrameTree, GetFrameTreeParams},
+            },
+            js_protocol::runtime::{EvaluateParams, ExecutionContextId},
         },
         handler::viewport::Viewport,
         page::ScreenshotParams,
@@ -37,6 +40,7 @@ pub mod browser {
     use futures::StreamExt;
     use kernel::{
         agent::context::AgentContext,
+        model::ModelModal,
         simple_id,
         tool::{ContextData, core::ToolReturn},
     };
@@ -71,6 +75,44 @@ pub mod browser {
         #[serde(skip)]
         pub page: Page,
     }
+    impl Tab {
+        pub async fn get_frame_context_id(
+            &self,
+            iframe_id: Option<String>,
+        ) -> anyhow::Result<Option<ExecutionContextId>> {
+            match iframe_id {
+                Some(id) => {
+                    let id = self
+                        .page
+                        .frame_execution_context(id.into())
+                        .await
+                        .map_err(|e| anyhow::anyhow!("获取iframe执行环境失败: {e}"))?;
+                    Ok(id)
+                }
+                None => Ok(None),
+            }
+        }
+    }
+    #[class("浏览器Iframe信息")]
+    #[derive(Debug, Clone, Serialize)]
+    pub struct Iframe {
+        pub id: String,
+        pub url: String,
+        pub child_frames: Option<Vec<Iframe>>,
+    }
+    impl Iframe {
+        pub fn from(tree: FrameTree) -> Self {
+            let f = tree.frame;
+            Iframe {
+                id: f.id.inner().to_string(),
+                url: f.url,
+                child_frames: tree
+                    .child_frames
+                    .map(|c| c.into_iter().map(Iframe::from).collect()),
+            }
+        }
+    }
+
     #[context]
     pub fn new_context(agent: Arc<AgentContext>) -> Context {
         Context {
@@ -113,8 +155,8 @@ pub mod browser {
             anyhow::bail!("浏览器已启动");
         }
         let view = Viewport {
-            width: 1920,
-            height: 1080,
+            width: 1610,
+            height: 880,
             device_scale_factor: Some(1.0), // 强制 1.0 比例，防止系统缩放导致偏移
             emulating_mobile: false,
             is_landscape: true,
@@ -127,13 +169,11 @@ pub mod browser {
             .no_sandbox()
             .with_head() // 有头模式
             .args(args.unwrap_or_default())
-            // 如果想要固定大小且左上角对齐，建议直接指定位置和大小
-            .arg("--window-position=0,0")
-            .arg("--window-size=1920,1080")
             // 3. 强制设备缩放比为 1，解决高分屏偏移问题
             .arg("--force-device-scale-factor=1")
             // 4. 禁用一些可能改变 UI 布局的参数
             .arg("--disable-features=ViewsBrowser") // 某些版本下防止 UI 干扰
+            .arg("--start-maximized")
             .viewport(view)
             .launch_timeout(Duration::from_secs(10))
             .build()
@@ -210,8 +250,13 @@ pub mod browser {
             }
             tokio::time::timeout(Duration::from_secs(10), async {
                 utils::wait_for_dom(&page, 100).await.unwrap();
+                let js = format!("window['resolve_dom']()");
+                let res = page.evaluate(js.as_str()).await?;
+                let s = res.into_value::<Option<String>>()?;
+                Ok(())
             })
-            .await?;
+            .await
+            .map_err(|_| anyhow::anyhow!("加载网页超时"))??;
 
             Tab {
                 id: simple_id(6),
@@ -300,12 +345,13 @@ pub mod browser {
     }
     //执行命令
     #[tool(
-        anno = "执行js脚本,脚本的返回值必须可以被转换成string或者不返回值",
+        anno = "执行js脚本,脚本的返回值必须可以被转换成string或者不返回值(最好不要用js来交互元素，容易触发反爬)",
         example = r#"exec(js="console.log(1+1)")"#,
         limit = "10s:5"
     )]
     pub async fn exec(
         #[arg("命令")] js: String,
+        #[arg("iframe id,默认主网页")] iframe_id: Option<String>,
         #[ctx] ctx: ToolCallContext,
     ) -> anyhow::Result<ToolReturn> {
         let mut ctx = ctx.context_data.write().await;
@@ -317,7 +363,11 @@ pub mod browser {
             anyhow::bail!("请先打开标签页");
         }
         let tab = ctx.tabs.get_mut(ctx.current_tab.as_ref().unwrap()).unwrap();
-        let res = tab.page.evaluate(js.as_str()).await?;
+        //
+        let mut eval = EvaluateParams::new(js);
+        eval.context_id = tab.get_frame_context_id(iframe_id).await?;
+        let res = tab.page.evaluate(eval).await?;
+        //
         let s = res.into_value::<Option<serde_json::Value>>()?;
         Ok(ToolReturn::json(s.unwrap_or_default())?)
     }
@@ -328,9 +378,10 @@ pub mod browser {
     )]
     pub async fn resolve_dom(
         #[arg(
-            "要解析的根元素，默认是document.body,可以传入一段js代码,系统自动调用环境中的resolve_dom(ele?:HTMLElement)"
+            "每当页面发生变动，都需要重新解析元素，默认是document.body,也可以传入一段js代码,系统自动调用环境中的resolve_dom(ele?:HTMLElement)"
         )]
         element: Option<String>,
+        #[arg("iframe id,默认主网页")] iframe_id: Option<String>,
         #[ctx] ctx: ToolCallContext,
     ) -> anyhow::Result<ToolReturn> {
         let mut ctx = ctx.context_data.write().await;
@@ -343,18 +394,22 @@ pub mod browser {
         }
         let tab = ctx.tabs.get_mut(ctx.current_tab.as_ref().unwrap()).unwrap();
         let js = format!("window['resolve_dom']({})", element.unwrap_or_default());
-        let res = tab.page.evaluate(js.as_str()).await?;
+        //
+        let mut eval = EvaluateParams::new(js);
+        eval.context_id = tab.get_frame_context_id(iframe_id).await?;
+        let res = tab.page.evaluate(eval).await?;
         let s = res.into_value::<Option<String>>()?;
         Ok(ToolReturn::raw(format!("{}", s.unwrap_or_default())))
     }
     #[tool(
-        anno = "查看dom树,返回精简后的节点树文档(每一行都是一个节点,节点id在头部，格式=[id]),在js中通过node_element(node_id)可以访问对应的元素对象",
+        anno = "查看dom树,返回精简后的节点树文档,如果区间内节点数大于100,会将相同层级相同标签的节点折叠omit(每一行都是一个节点,节点id在头部，格式=[id]),在js中通过node_element(node_id)可以访问对应的元素对象,)",
         example = r#"look_dom()"#,
         limit = "10s:5"
     )]
     pub async fn look_dom(
         #[arg("起始节点id,默认=0,代表body元素")] start: Option<u32>,
         #[arg("结束节点id")] end: Option<i32>,
+        #[arg("iframe id,默认主网页")] iframe_id: Option<String>,
         #[ctx] ctx: ToolCallContext,
     ) -> anyhow::Result<ToolReturn> {
         let mut ctx = ctx.context_data.write().await;
@@ -369,17 +424,41 @@ pub mod browser {
         let start = start.unwrap_or_default();
         let end = end.unwrap_or(-1);
         let js = format!("window['look_dom']({},{})", start, end);
-        let res = tab.page.evaluate(js.as_str()).await?;
+        //
+        let mut eval = EvaluateParams::new(js);
+        eval.context_id = tab.get_frame_context_id(iframe_id).await?;
+        let res = tab.page.evaluate(eval).await?;
         let s = res.into_value::<Option<String>>()?;
         Ok(ToolReturn::raw(format!("{}", s.unwrap_or_default())))
     }
+    #[tool(
+        anno = "查看页面的iframe树",
+        example = r#"look_iframes()"#,
+        limit = "10s:5"
+    )]
+    pub async fn look_iframes(#[ctx] ctx: ToolCallContext) -> anyhow::Result<Iframe> {
+        let mut ctx = ctx.context_data.write().await;
+        let ctx = ctx.downcast_mut::<Context>().unwrap();
+        if !ctx.is_runing {
+            anyhow::bail!("浏览器未启动");
+        }
+        if ctx.current_tab.is_none() {
+            anyhow::bail!("请先打开标签页");
+        }
+        let tab = ctx.tabs.get_mut(ctx.current_tab.as_ref().unwrap()).unwrap();
+        let res = tab.page.execute(GetFrameTreeParams::default()).await?;
+        let tree = res.frame_tree.clone();
+        let root = Iframe::from(tree);
+        Ok(root)
+    }
+
     //截图
     #[tool(
-        anno = "页面截图,返回图片路径",
+        anno = "页面截图,返回图片路径(视觉模型返回图片内容)",
         example = r#"screenshot()"#,
         limit = "10s:5"
     )]
-    pub async fn screenshot(#[ctx] call_ctx: ToolCallContext) -> anyhow::Result<String> {
+    pub async fn screenshot(#[ctx] call_ctx: ToolCallContext) -> anyhow::Result<ToolReturn> {
         let mut ctx = call_ctx.context_data.write().await;
         let ctx = ctx.downcast_mut::<Context>().unwrap();
         if !ctx.is_runing {
@@ -388,36 +467,49 @@ pub mod browser {
         if ctx.current_tab.is_none() {
             anyhow::bail!("请先打开标签页");
         }
-        let (path, mut file) = call_ctx.new_temp_result_file("png")?;
+        let (path, mut file) = call_ctx.new_temp_result_file("jpeg")?;
         let tab = ctx.tabs.get_mut(ctx.current_tab.as_ref().unwrap()).unwrap();
         let bytes = tab
             .page
             .screenshot(
                 ScreenshotParams::builder()
-                    .format(CaptureScreenshotFormat::Png)
-                    .full_page(true)
+                    .format(CaptureScreenshotFormat::Jpeg)
+                    .quality(65)
+                    .full_page(false)
                     .omit_background(true)
                     .build(),
             )
             .await?;
         file.write_all(&bytes)?;
-        let path = call_ctx.to_short_path(&path);
-        Ok(path.to_string_lossy().to_string())
+        if call_ctx.agent_identity.modals.contains(&ModelModal::Image) {
+            //只占1000,图片字节太多，免得计算上下文长度时出现一两句话就溢出了
+            let image = ToolReturn::image(path.clone(), 1000, Some("网页截图".to_string()));
+            Ok(image)
+        } else {
+            Ok(ToolReturn::raw(path.to_string_lossy().to_string()))
+        }
     }
     //指令流水线
     #[tool(
-        anno = "执行指令流水线,使用文档内容较多，请打开./prompts/browser_tool.doc.md 文件查看使用方法",
-        example = r#"pipeline(cmds="node.click(id=1,x=100,y=100);")"#,
+        anno = r#"执行指令流水线,使用文档内容较多，请打开'系统工作目录+/prompts/browser_tool.doc.md' 文件查看具体使用方法。
+        除了wait(ms=xxx)指令，其他指令超过3秒都会超时中断"#,
+        example = r#"pipeline(cmds="node.click(id=1,x=100,y=100);node.type(id=1,text='hello world')")"#,
         limit = "10s:5"
     )]
     pub async fn pipeline(
         #[arg("指令流水线")] cmds: String,
         #[arg("指令分割符,默认是';'")] delimiter: Option<String>,
+        // #[arg("iframe id,默认主网页")] iframe_id: Option<String>,
         #[ctx] call_ctx: ToolCallContext,
     ) -> anyhow::Result<()> {
         let mut actions = vec![];
         let delimiter = delimiter.unwrap_or_else(|| ";".into());
-        for (i, s) in cmds.split(&delimiter).enumerate() {
+        let cmds: Vec<_> = cmds
+            .split(&delimiter)
+            .map(|v| v.trim())
+            .filter(|v| !v.is_empty())
+            .collect();
+        for (i, s) in cmds.iter().enumerate() {
             let s = s.trim();
             if s.is_empty() {
                 continue;
@@ -436,8 +528,18 @@ pub mod browser {
             anyhow::bail!("请先打开标签页");
         }
         let tab = ctx.tabs.get(ctx.current_tab.as_ref().unwrap()).unwrap();
-        for action in actions {
-            action.execute(&tab.page).await?;
+        for (i, action) in actions.into_iter().enumerate() {
+            match &action {
+                BrowserAction::Wait(_) => action.execute(&tab.page).await?,
+                _ => {
+                    let _ = tokio::time::timeout(Duration::from_secs(3), async move {
+                        action.execute(&tab.page).await?;
+                        Ok(())
+                    })
+                    .await
+                    .map_err(|_| anyhow::anyhow!("执行超时:{},可能元素发生变化,请刷新页面,或者调用resolve_dom重新解析网页", &cmds[i]))??;
+                }
+            }
         }
         Ok(())
     }
