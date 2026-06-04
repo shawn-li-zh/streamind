@@ -1,7 +1,6 @@
 <think>
     用户想了解北京的天气，我需要调用天气查询工具...
 </think>
-asdjgajhgsdhjag
 <tool_call id="a1">http.request(method="get",url="https://crates.io/crates/nanoid")</tool_call>
 <tool_call  id="a2">http.request(method="get",url="https://crates.io111111123/crates/nanoid")</tool_call>
 <push>

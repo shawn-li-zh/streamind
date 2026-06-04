@@ -163,35 +163,5 @@
         "content": "涉及历史状态与上下文恢复时，应优先使用 event.search 或 event.get_by_id 查询历史事件。"
       }
     ]
-  },
-  {
-    "name": "错误恢复",
-    "rules": [
-      {
-        "name": "工具失败先分析原因",
-        "expr": "event_type_is('error') | includes_pattern('(Exception|failed|panic|traceback|报错|异常)')",
-        "content": "工具失败后，应优先分析：参数错误、状态错误、权限问题、DOM 失效或网络异常，再决定是否重试。"
-      },
-      {
-        "name": "中断后优先保存状态",
-        "expr": "event_type_is('interrupt')",
-        "content": "收到 interrupt 后，应停止当前高风险动作，并尝试保存当前状态与任务进度。"
-      },
-      {
-        "name": "定时器恢复后重新检查环境",
-        "expr": "event_type_is('timer')",
-        "content": "timer 事件意味着 sleep 或定时任务结束，恢复任务时应重新检查环境状态。"
-      },
-      {
-        "name": "长任务定期检查上下文",
-        "expr": "event_type_is('heartbeat')",
-        "content": "长流程任务应周期性保存状态、检查任务有效性与上下文完整性。"
-      },
-      {
-        "name": "调试复杂问题回溯事件链",
-        "expr": "(similar('错误恢复') > 0.6) & (similar('编程') > 0.5)",
-        "content": "调试复杂问题时，可通过 event.search 或 event.search_at 回溯错误发生前后的完整事件链。"
-      }
-    ]
   }
 ]

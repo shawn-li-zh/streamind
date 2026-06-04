@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, sync::Arc};
 
 pub use self::reflect::build_package;
 use futures::future::BoxFuture;
@@ -53,7 +53,7 @@ pub mod reflect {
     }
     #[tool(
         anno = "分页查询领域内的反射规则",
-        example = r#"page_rules(scope_id=1,page=1,size=10)"#,
+        example = r#"page_rules(scope_id=1,page=1,size=10,key="可选关键字")"#,
         limit = "30s:10"
     )]
     pub async fn page_rules(
@@ -141,13 +141,13 @@ pub mod reflect {
 
     #[tool(
         anno = "创建新的规则,如有重复则自动覆盖",
-        example = r#"save_rule(group_id=1,name="配置文件地址",
+        example = r#"save_rule(scope_id=1,name="配置文件地址",
         expr="matches("配置|env|环境|config")&similar("编程")>0.6",
         content="文件在xxx路径下,包含xxx,关联事件id有...")"#,
         limit = "30s:10"
     )]
     pub async fn save_rule(
-        #[arg("组id")] group_id: i64,
+        #[arg("领域id")] scope_id: i64,
         #[arg("规则名")] name: String,
         #[arg("表达式")] mut expr: String,
         #[arg("反射内容，你的第一人称自述")] content: String,
@@ -162,7 +162,7 @@ pub mod reflect {
                 let inner = cap[1].to_string();
                 concept_names.push(inner);
             }
-            let concepts = entity_service::concept::find_by_names(&concept_names).await?;
+            let concepts = entity_service::concept::find_by_names(scope_id, &concept_names).await?;
             for concept in concepts {
                 concept_names.retain(|v| &concept.name != v);
             }
@@ -183,72 +183,15 @@ pub mod reflect {
         let dur = humantime::parse_duration(&expire_dur.unwrap_or("1year".to_string()))?;
         let expire_time = Local::now() + dur;
         let id =
-            entity_service::rule::save_rule(db, group_id, name, expr, content, expire_time).await?;
+            entity_service::rule::save_rule(db, scope_id, name, expr, content, expire_time).await?;
         Ok(ToolReturn::raw(format!("id={id}")))
     }
-    #[tool(
-        anno = "加载规则组,有则覆盖",
-        example = r#"load_groups(group_names=['编程','生活','人际关系','股票','法律'])"#,
-        limit = "30s:10"
-    )]
-    pub async fn load_groups(
-        #[arg("规则名")] group_names: Vec<String>,
-        #[ctx] ctx: ToolCallContext,
-    ) -> anyhow::Result<ToolReturn> {
-        if group_names.is_empty() {
-            anyhow::bail!("请指定规则名")
-        }
-        if let Some(injected) = ctx.agent_context.get::<ReflectInjected>() {
-            (injected.load_groups)(group_names).await?;
-        } else {
-            anyhow::bail!("反射功能未启用")
-        }
-        Ok(ToolReturn::raw(format!("重载成功")))
-    }
-    #[tool(
-        anno = "移除当前加载的知识组",
-        example = r#"unload_groups(group_names=['编程','生活','人际关系','股票','法律'])"#,
-        limit = "30s:10"
-    )]
-    pub async fn unload_groups(
-        #[arg("规则名")] group_names: Vec<String>,
-        #[ctx] ctx: ToolCallContext,
-    ) -> anyhow::Result<ToolReturn> {
-        if group_names.is_empty() {
-            anyhow::bail!("请指定规则名")
-        }
-        if let Some(injected) = ctx.agent_context.get::<ReflectInjected>() {
-            (injected.unload_groups)(group_names).await?;
-        } else {
-            anyhow::bail!("反射功能未启用")
-        }
-        Ok(ToolReturn::raw(format!("重载成功")))
-    }
-    #[tool(
-        anno = "查看当前系统里加载了的反射组",
-        example = r#"current_groups()"#,
-        limit = "30s:10"
-    )]
-    pub async fn current_groups(#[ctx] ctx: ToolCallContext) -> anyhow::Result<ToolReturn> {
-        if let Some(injected) = ctx.agent_context.get::<ReflectInjected>() {
-            let names = (injected.current_group_names)().await?;
-            let names = names.into_iter().collect::<Vec<_>>();
-            Ok(ToolReturn::raw(names.join("\n")))
-        } else {
-            anyhow::bail!("反射功能未启用")
-        }
-    }
 }
-
+#[derive(Clone)]
 pub struct ReflectInjected {
     pub embedding:
-        Box<dyn (Fn(String) -> BoxFuture<'static, anyhow::Result<Vec<f32>>>) + Send + Sync>,
-    pub unload_groups:
-        Box<dyn (Fn(Vec<String>) -> BoxFuture<'static, anyhow::Result<()>>) + Send + Sync>,
-    pub load_groups:
-        Box<dyn (Fn(Vec<String>) -> BoxFuture<'static, anyhow::Result<()>>) + Send + Sync>,
-    pub current_group_names:
-        Box<dyn (Fn() -> BoxFuture<'static, anyhow::Result<HashSet<String>>>) + Send + Sync>,
+        Arc<dyn (Fn(String) -> BoxFuture<'static, anyhow::Result<Vec<f32>>>) + Send + Sync>,
+
     pub simplify_expr:
-        Box<dyn (Fn(String) -> BoxFuture<'static, anyhow::Result<String>>) + Send + Sync>,
+        Arc<dyn (Fn(String) -> BoxFuture<'static, anyhow::Result<String>>) + Send + Sync>,
 }

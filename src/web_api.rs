@@ -18,7 +18,7 @@ use tracing::info;
 use web::wrapper::ApiResponse;
 
 use crate::{
-    agent::AppAgent,
+    agent::app::AppAgent,
     global::AGENT_POOL,
     sse_event::{ServerEvent, WebEvent},
 };

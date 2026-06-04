@@ -6,23 +6,26 @@ use std::{
     time::Duration,
 };
 
-use kernel::agent::{context::AgentStatus, AgentOutfit};
-
 use ::runtime::agent::event::AppEnvEventData;
 use tracing::error;
 
-use crate::{agent::AppAgent, status::AgentStatusHolder};
+use crate::agent::app::AppAgent;
+
 pub struct Heartbeat {
     flag: AtomicBool,
+    in_progress: AtomicBool,
     enabled: AtomicBool,
 }
 
 impl Heartbeat {
     pub fn new() -> Self {
         let flag = AtomicBool::new(false);
+        let in_progress = AtomicBool::new(false);
+        let enabled = AtomicBool::new(true);
         Self {
-            flag: flag,
-            enabled: AtomicBool::new(true),
+            flag,
+            in_progress,
+            enabled,
         }
     }
     pub fn reset(&self) {
@@ -37,17 +40,30 @@ impl Heartbeat {
     pub fn is_enabled(&self) -> bool {
         self.enabled.load(Ordering::SeqCst)
     }
+    pub fn in_progress(&self) {
+        self.in_progress.store(true, Ordering::SeqCst);
+    }
+    pub fn in_idle(&self) {
+        self.flag.store(false, Ordering::SeqCst);
+        self.in_progress.store(false, Ordering::SeqCst);
+    }
     fn try_beat(&self) -> bool {
         let status = self.is_enabled();
         if !status {
+            println!("heartbeat disabled, skipping..");
             return false;
         }
+        if self.in_progress.load(Ordering::SeqCst) {
+            println!("agent in progress, skipping...");
+            return false;
+        }
+
         if self
             .flag
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
             .is_err()
         {
-            // println!("Previous heartbeat still pending, skipping...");
+            println!("Previous heartbeat still pending, skipping...");
             return false;
         }
         true

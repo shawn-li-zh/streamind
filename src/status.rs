@@ -15,7 +15,7 @@ pub struct AgentStatusHolder {
 
 impl AgentStatusHolder {
     pub fn new(agent: Arc<AgentInstance>) -> Self {
-        let identity = agent.identity();
+        let identity = agent.identity.clone();
         let (sender, receiver) = watch::channel(AgentStatus::Idle);
         Self {
             agent,

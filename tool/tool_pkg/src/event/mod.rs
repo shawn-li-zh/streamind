@@ -7,7 +7,7 @@ pub mod event {
 
     use entity_service::event::event_convert;
     use kernel::{
-        agent::event::EnvEvent as _,
+        mind::event::EnvEvent as _,
         tool::{ToolCallContext, core::ToolReturn},
     };
 

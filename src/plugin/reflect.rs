@@ -3,9 +3,8 @@ use std::{
     sync::Arc,
 };
 
-use dashmap::DashMap;
 use entity_service::DB;
-use kernel::{agent::event::EnvEvent as _, message::Information};
+use kernel::{message::Information, mind::event::EnvEvent as _};
 use reflection::{
     engine::{
         core::{Rule, RuleGroup},
@@ -13,22 +12,29 @@ use reflection::{
     },
     operator::{EventElement, Similar},
 };
-use runtime::agent::{
-    event::{AppEnvEvent, AppEnvEventData},
-    event_context::StackContext,
-    reflect::{ReflectData, ReflectEvent},
+use runtime::{
+    agent::{
+        event::{AppEnvEvent, AppEnvEventData},
+        reflect::{ReflectData, ReflectEvent},
+    },
+    context::stack::StackContext,
 };
+use serde::{Deserialize, Serialize};
 use tracing::info;
 
 use crate::global::EMBEDDING_CLIENT;
-
-pub struct CondReflection {
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Recall {
+    pub event_type: String,
+    pub time: String,
+    pub content: String,
+}
+pub struct CondReflectEngine {
     agent_id: u32,
     event_context: Arc<StackContext<AppEnvEvent>>,
     pub reflect_engine: Arc<RuleEngine<ReflectData>>,
-    triggered_rule_ids: parking_lot::Mutex<HashSet<i64>>,
 }
-impl CondReflection {
+impl CondReflectEngine {
     pub fn new(
         agent_id: u32,
         event_context: Arc<StackContext<AppEnvEvent>>,
@@ -38,27 +44,30 @@ impl CondReflection {
             agent_id,
             event_context,
             reflect_engine: Arc::new(reflect_engine),
-            triggered_rule_ids: parking_lot::Mutex::new(HashSet::new()),
         }
     }
-    pub fn refresh_triggered_rules(&self) {
-        for node in self.event_context.nodes() {
-            let events = node.events();
-            for event in events {
-                match &event.data {
-                    AppEnvEventData::Reflection(reflect_event) => {
-                        for data in &reflect_event.datas {
-                            let mut rule_ids = self.triggered_rule_ids.lock();
-                            rule_ids.insert(data.id);
-                        }
-                    }
-                    _ => {
-                        continue;
-                    }
-                }
-            }
-        }
+
+    //内容反射
+    pub async fn conent_reflect(&self, recall: Recall) -> anyhow::Result<Option<ReflectEvent>> {
+        let content = recall.content;
+        let embedding = if content.len() > 15 {
+            let client = EMBEDDING_CLIENT.get().unwrap();
+            let embedding = client
+                .union_embed(vec![Information::Text(content.clone())])
+                .await?;
+            embedding
+        } else {
+            vec![]
+        };
+        let element = EventElement {
+            event_type: recall.event_type.clone(),
+            time: recall.time.clone(),
+            context: content,
+            embedding,
+        };
+        self.reflect(0, element).await
     }
+
     //事件反射
     pub async fn event_reflect(&self, event: &AppEnvEvent) -> anyhow::Result<Option<ReflectEvent>> {
         let mut source_event_id = event.id;
@@ -72,76 +81,90 @@ impl CondReflection {
                 }
                 source_event_id = ev.source_event_id;
             }
+            AppEnvEventData::Heartbeat
+            | AppEnvEventData::Interrupt(_)
+            | AppEnvEventData::ToolResponse(_)
+            | AppEnvEventData::StackPop(_, _) => {
+                return Ok(None);
+            }
             _ => {}
         }
         //
         let (text, _paths) = event.to_message().to_tuple();
-        // let embedding = match &event.data {
-        //     // AppEnvEventData::AgentResponse(_)
-        //     | AppEnvEventData::Timer(_)
-        //     // | AppEnvEventData::ToolResponse(_)
-        //     // | AppEnvEventData::Interaction(_)
-        //     // | AppEnvEventData::UserRequest(_) => {
-        //     //     let client = EMBEDDING_CLIENT.get().unwrap();
-        //     //     let embedding = client
-        //     //         .union_embed(vec![Information::Text(text.clone())])
-        //     //         .await?;
-        //     //     embedding
-        //     // }
-        //     // _ => {
-        //     //     //其他的都没必要嵌入
-        //     //     vec![]
-        //     // }
-        // };
-        let embedding = vec![];
+        let embedding = match &event.data {
+            AppEnvEventData::AgentResponse(_)
+            | AppEnvEventData::Timer(_)
+            | AppEnvEventData::ToolResponse(_)
+            | AppEnvEventData::Interaction(_)
+            | AppEnvEventData::UserRequest(_) => {
+                let client = EMBEDDING_CLIENT.get().unwrap();
+                let embedding = client
+                    .union_embed(vec![Information::Text(text.clone())])
+                    .await?;
+                embedding
+            }
+            _ => {
+                //其他的都没必要嵌入
+                vec![]
+            }
+        };
         let element = EventElement {
             event_type: event.data.code(),
             time: event.time.format("%Y-%m-%d %H:%M:%S").to_string(),
-            force: event.force,
             context: text,
             embedding,
         };
+        self.reflect(source_event_id, element).await
+    }
 
-        let mut datas = self.reflect_engine.trigger(element).await?;
+    async fn reflect(
+        &self,
+        source_event_id: i64,
+        element: EventElement,
+    ) -> anyhow::Result<Option<ReflectEvent>> {
+        let db = DB.get().unwrap();
+        //按语义匹配对应的规则域
+
+        let scopes =
+            entity_service::rule::page_scopes(1, 5, None, Some(element.embedding.clone())).await?;
+        if scopes.is_empty() {
+            return Ok(None);
+        }
+        let scope_ids: Vec<i64> = scopes.into_iter().map(|s| s.id).collect();
         // 过滤掉已经触发过的
-        let rule_ids = self.triggered_rule_ids.lock();
-        datas.retain(|v| !rule_ids.contains(&v.id));
+        let rule_models = entity_service::rule::list_not_active_rules(scope_ids).await?;
+        if rule_models.is_empty() {
+            return Ok(None);
+        }
+        let mut rules = vec![];
+        for ele in rule_models {
+            let expr = self.reflect_engine.parse(&ele.expr)?;
+            let data: ReflectData = ReflectData {
+                id: ele.id,
+                name: ele.name,
+                content: ele.content,
+            };
+            let rule = Rule {
+                expr: expr,
+                data: data,
+            };
+            rules.push(rule);
+        }
+        let datas = self.reflect_engine.filter(rules, element).await?;
         if datas.is_empty() {
             return Ok(None);
         }
+        //激活规则
+        let state_id = self.event_context.top_node().map(|v| v.id).unwrap_or(1);
+        let rule_ids = datas.iter().map(|v| v.id).collect();
 
+        entity_service::rule::activate_rules(db, state_id, rule_ids).await?;
         let event = ReflectEvent {
             source_event_id,
-            level,
+            level: 1,
             datas,
         };
         Ok(Some(event))
-    }
-
-    pub async fn load_groups(&self, group_names: &Vec<String>) -> anyhow::Result<()> {
-        let db = DB.get().unwrap();
-        let rule_engine = self.reflect_engine.clone();
-        let groups = load_rule_groups(&rule_engine, group_names).await?;
-        for group in groups {
-            rule_engine.add_rule_group(group);
-        }
-        let names = rule_engine.group_names().into_iter().collect();
-        entity_service::agent::update_rule_groups(db, self.agent_id, names).await?;
-        Ok(())
-    }
-    pub async fn unload_groups(&self, group_names: &Vec<String>) -> anyhow::Result<()> {
-        let db = DB.get().unwrap();
-        let rule_engine: Arc<RuleEngine<ReflectData>> = self.reflect_engine.clone();
-        for group in group_names {
-            rule_engine.remove_rule_group(&group);
-        }
-        let names = rule_engine.group_names().into_iter().collect();
-        entity_service::agent::update_rule_groups(db, self.agent_id, names).await?;
-        Ok(())
-    }
-    pub fn group_names(&self) -> HashSet<String> {
-        let rule_engine = self.reflect_engine.clone();
-        rule_engine.group_names()
     }
 }
 pub async fn load_reflection_engine(
@@ -184,7 +207,7 @@ pub async fn load_rule_groups(
     for group in group_models {
         let rules = map.remove(&group.id).unwrap_or_default();
         let exprs: Vec<&str> = rules.iter().map(|v| v.expr.as_str()).collect();
-        let exprs = engine.parse(&exprs)?;
+        let exprs = engine.parses(&exprs)?;
         let rules: Vec<Rule<_>> = rules
             .into_iter()
             .zip(exprs.clone())

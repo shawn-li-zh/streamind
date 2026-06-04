@@ -18,7 +18,6 @@ pub use {
 pub struct EventElement {
     pub event_type: String,
     pub time: String,
-    pub force: bool,
     pub context: String,
     pub embedding: Vec<f32>,
 }

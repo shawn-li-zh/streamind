@@ -3,10 +3,10 @@ use std::sync::{Arc, LazyLock, atomic::AtomicUsize};
 use async_trait::async_trait;
 use futures::{Stream, StreamExt};
 use kernel::{
-    agent::event::{self, EnvEvent},
     client::ChatClient,
     message::{Role, RoleMessage},
     mind::context::{ChunkStream, EventContext},
+    mind::event::{self, EnvEvent},
 };
 
 use parking_lot::{Mutex, RwLock};
@@ -14,93 +14,57 @@ use serde::{Deserialize, Serialize};
 use tracing::{error, info};
 
 /// test
-pub(crate) static OUTPUTS: LazyLock<Vec<Vec<String>>> = LazyLock::new(|| {
-    if let Ok(test) = std::fs::read_to_string("./test.xml") {
-        return test
-            .split("<end/>")
-            .map(|item| item.trim())
-            .filter(|v| !v.is_empty())
-            .map(|item| split_into_chunks(item))
-            .collect();
-    }
-    vec![]
-});
+// pub(crate) static OUTPUTS: LazyLock<Vec<Vec<String>>> = LazyLock::new(|| {
+//     if let Ok(test) = std::fs::read_to_string("./test.xml") {
+//         return test
+//             .split("<end/>")
+//             .map(|item| item.trim())
+//             .filter(|v| !v.is_empty())
+//             .map(|item| split_into_chunks(item))
+//             .collect();
+//     }
+//     vec![]
+// });
 
-pub fn split_into_chunks(input: &str) -> Vec<String> {
-    let chars: Vec<char> = input.chars().collect(); // 转为字符数组
-    let mut chunks = Vec::new();
-    let mut start = 0;
-    let len = chars.len();
+// pub fn split_into_chunks(input: &str) -> Vec<String> {
+//     let chars: Vec<char> = input.chars().collect(); // 转为字符数组
+//     let mut chunks = Vec::new();
+//     let mut start = 0;
+//     let len = chars.len();
 
-    while start < len {
-        // 随机决定当前块的长度
-        let chunk_size = 2;
-        let end = (start + chunk_size).min(len);
+//     while start < len {
+//         // 随机决定当前块的长度
+//         let chunk_size = 2;
+//         let end = (start + chunk_size).min(len);
 
-        // 获取切片并转回 String
-        let chunk: String = chars[start..end].iter().collect();
-        chunks.push(chunk);
+//         // 获取切片并转回 String
+//         let chunk: String = chars[start..end].iter().collect();
+//         chunks.push(chunk);
 
-        start = end;
-    }
+//         start = end;
+//     }
 
-    chunks
-}
-// struct StackContextInner<E> {
-//     pub nodes: Vec<Arc<MindNode<E>>>,
-//     //上下文长度
-//     pub content_len: usize,
+//     chunks
 // }
 
-// impl<E> StackContextInner<E> {
-//     pub fn new() -> Self {
-//         Self {
-//             nodes: vec![],
-
-//             content_len: 0,
-//         }
-//     }
-
-//     pub fn push(&mut self, node: Node) {
-//         let node = MindNode {
-//             node,
-//             events: RwLock::new(vec![]),
-//             content_len: 0,
-//         };
-//         self.back_to(node.node.pos);
-//         self.nodes.push(node);
-//     }
-
-//     //回到指定位置，并丢弃后面的节点
-//     fn back_to(&mut self, pos: usize) -> Vec<MindNode<E>> {
-//         let removed = self.nodes.split_off(pos);
-//         for ele in &removed {
-//             self.content_len = self.content_len.saturating_sub(ele.content_len)
-//         }
-//         return removed;
-//     }
-
-//     pub fn last(&self) -> Option<&MindNode<E>> {
-//         self.nodes.last()
-//     }
-
-//     // pub async fn chunk_stream(
-//     //     &self,
-//     //     client: Arc<dyn ChatClient>,
-//     // ) -> std::pin::Pin<Box<dyn Stream<Item = String> + Send>> {
-//     //     let o = &*OUTPUTS;
-//     //     let i = self.step % o.len();
-//     //     stream::iter(o[i].clone()).boxed()
-//     // }
-// }
-
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Node {
     pub id: i64,
     pub pos: usize,
     pub title: String,
     pub content: String,
 }
+impl Node {
+    pub fn statement(&self) -> String {
+        format!(
+            r#"(stack pos={} title="{}"\n{})"#,
+            self.pos,
+            self.title,
+            self.content
+        )
+    }
+}
+
 pub struct MindNode<E> {
     pub id: i64,
     pub pos: usize,
@@ -124,9 +88,7 @@ impl<E> MindNode<E> {
     }
     pub fn statement(&self) -> String {
         format!(
-            r#"<stack pos={} title="{}">
-            {}
-            </stack>"#,
+            r#"(stack pos={} title="{}"\n{})"#,
             self.pos,
             self.title,
             self.content.read()
@@ -204,7 +166,13 @@ impl<E> StackContext<E> {
     }
     pub fn pop_node(&self) -> Option<Arc<MindNode<E>>> {
         let mut nodes = self.nodes.write();
-        nodes.pop()
+        if let Some(node) = nodes.pop() {
+            let size = node.size();
+            self.content_size
+                .fetch_sub(size, std::sync::atomic::Ordering::Relaxed);
+            return Some(node);
+        }
+        None
     }
 
     //     //回到指定位置，并丢弃后面的节点
@@ -220,6 +188,23 @@ impl<E> StackContext<E> {
         }
         return removed;
     }
+
+    pub fn backup(&self) -> Vec<(Node, Vec<Arc<E>>)> {
+        let inner = self.nodes.read();
+        inner
+            .iter()
+            .map(|node| {
+                let n = Node {
+                    id: node.id,
+                    pos: node.pos,
+                    title: node.title.clone(),
+                    content: node.content.read().clone(),
+                };
+                let events = node.events();
+                (n, events)
+            })
+            .collect()
+    }
     pub fn node_len(&self) -> usize {
         return self.nodes.read().len();
     }
@@ -227,7 +212,8 @@ impl<E> StackContext<E> {
 
 #[async_trait]
 impl<E: EnvEvent> EventContext<E> for StackContext<E> {
-    fn push_event(&self, event: E) {
+    fn push_event<T: Into<E>>(&self, event: T) {
+        let event = event.into();
         let size = event.size();
         self.content_size
             .fetch_add(size, std::sync::atomic::Ordering::Relaxed);

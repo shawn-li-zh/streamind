@@ -173,6 +173,9 @@ impl ChatClient for DeepseekClient {
         let stream = stream.map(move |r| {
             let r = r
                 .map(|mut v| {
+                    if v.choices.is_empty() {
+                        return "".to_string();
+                    }
                     let text = v.choices[0].delta.content.take();
                     let reasoning = v.choices[0].delta.reasoning_content.take();
                     if let Some(reasoning) = reasoning {

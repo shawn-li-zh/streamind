@@ -6,31 +6,28 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::Context as _;
 use chrono::{DateTime, Local};
 
 use entity_service::DB;
-use futures::{FutureExt, StreamExt};
+use futures::StreamExt;
 use kernel::{
-    agent::{context::AgentContext, AgentOutfit},
+    agent::context::AgentContext,
     mind::{
         context::EventContext,
         port::{CommandEvent, EndReason, GenerateEvent, MindOutlet},
         section::{Section, SectionTag},
+        stream::StreamMind,
     },
-    parser,
     render::RenderContext,
     tool::{
         call::ToolCall,
-        core::ToolReturnValue,
         engine::{ToolEngine, ToolEngineContext},
-        event::{ToolCallDetailItem, ToolCallEvent, ToolCallStatus},
+        event::ToolCallDetailItem,
     },
 };
-use runtime::agent::{
-    event::{AppEnvEvent, AppEnvEventData, SectionEvent},
-    event_context::{Node, StackCommand},
-    instance::EventLoop,
+use runtime::{
+    agent::event::{AppEnvEvent, AppEnvEventData, SectionEvent},
+    context::stack::{StackCommand, StackContext},
 };
 use serde_json::json;
 
@@ -38,38 +35,43 @@ use tokio::sync::watch;
 use tracing::{error, info, warn};
 
 use crate::{
-    agent::{AppAgent, WebSender},
-    plugin::{heartbeat::HeartbeatRunner, scheduler::AgentSchedulerRunner},
+    agent::{app::AppAgent, common::WebSender},
+    plugin::{heartbeat::HeartbeatRunner, reflect::Recall, scheduler::AgentSchedulerRunner},
+    runtime::{memory::MemoryAgentRuntime, reflect_call, stack_call, tool_call},
     sse_event::{ServerEvent, WebEvent},
 };
 
-pub struct AgentRuntime {
+pub struct AppAgentRuntime {
     agent: Arc<AppAgent>,
+    stream_mind: StreamMind<AppEnvEvent, StackContext<AppEnvEvent>>,
     mind_outlet: MindOutlet,
-    event_loop: EventLoop,
     heartbeat: HeartbeatRunner,
     scheduler_runner: AgentSchedulerRunner,
     gen_sender: watch::Sender<bool>,
+    memory_agent_runtime: MemoryAgentRuntime,
 }
-impl AgentRuntime {
+impl AppAgentRuntime {
     pub fn new(
         agent: Arc<AppAgent>,
-        event_loop: EventLoop,
+        stream_mind: StreamMind<AppEnvEvent, StackContext<AppEnvEvent>>,
         mind_outlet: MindOutlet,
         heartbeat: HeartbeatRunner,
         scheduler_runner: AgentSchedulerRunner,
         gen_sender: watch::Sender<bool>,
+        memory_agent_runtime: MemoryAgentRuntime,
     ) -> Self {
         Self {
             agent,
-            event_loop,
+            stream_mind,
             mind_outlet,
             heartbeat,
             scheduler_runner,
             gen_sender,
+            memory_agent_runtime,
         }
     }
     pub fn start(mut self) {
+        tokio::spawn(async move { self.stream_mind.event_loop().await });
         {
             let var = std::env::var("HEARTBEAT_INTERVAL").unwrap_or("10".to_string());
             let secs = var.parse::<u64>().unwrap();
@@ -77,7 +79,8 @@ impl AgentRuntime {
             self.heartbeat.start(interval);
             //
             self.scheduler_runner.start();
-            self.event_loop.start();
+
+            self.memory_agent_runtime.start();
         }
         {
             let agent = self.agent.clone();
@@ -99,7 +102,6 @@ impl AgentRuntime {
             agent: self.agent.clone(),
             start_time: Local::now(),
             last_tag_open: None,
-            // response_event: None,
             response_event_id: 0,
             response_sections: vec![],
             gen_sender: self.gen_sender,
@@ -123,7 +125,9 @@ impl AgentRuntime {
             while let Some(event) = self.mind_outlet.next().await {
                 if let Err(e) = generate_worker.handle(event).await {
                     error!("GenerateWorker failed to handle event: {:?}", e);
-                    // 可选：通知前端或改变 Agent 状态为 Error
+                    //释放状态
+                    generate_worker.gen_sender.send(false).expect("Failed to send generation status update");
+                    generate_worker.agent.heartbeat.in_idle();
                 }
             }
         });
@@ -155,6 +159,7 @@ impl GenerateWorker {
             GenerateEvent::Start => {
                 println!("start...");
                 self.gen_sender.send(true)?;
+                self.agent.heartbeat.in_progress();
                 self.reset(); // 增加清理
                 entity_service::event::processing(db, agent_id).await?;
                 {
@@ -187,7 +192,7 @@ impl GenerateWorker {
                         Some(data) => data,
                         None => {
                             warn!("Received Close event without Open for tag: {}", tag.name);
-                            return Ok(()); // 或者生成一个默认的占位符
+                            return Ok(());
                         }
                     };
                     let elapsed = open_time.elapsed();
@@ -247,7 +252,7 @@ impl GenerateWorker {
                             size,
                         }
                     };
-                    let reflection = self.agent.cond_reflection.event_reflect(&event).await?;
+                    let reflection = self.agent.reflect_engine.event_reflect(&event).await?;
                     self.agent
                         .inject_event_to_context(event, reflection)
                         .await?;
@@ -268,30 +273,31 @@ impl GenerateWorker {
                 println!("call end...{}", events.len());
                 for ele in events {
                     let event = self.agent.save_event(ele).await?;
-                    let reflection = self.agent.cond_reflection.event_reflect(&event).await?;
+                    let reflection = self.agent.reflect_engine.event_reflect(&event).await?;
                     self.agent
                         .inject_event_to_context(event, reflection)
                         .await?;
                 }
-                self.agent.cond_reflection.refresh_triggered_rules();
+
                 if continue_flag {
                     self.agent.send_cmd(CommandEvent::Generate).await?;
                 } else {
                     //释放状态
-                    self.agent.heartbeat.reset();
                     self.gen_sender.send(false)?;
+                    self.agent.heartbeat.in_idle();
                 }
             }
             GenerateEvent::Error(e) => {
                 error!("generate event error: {:?}", e);
+                //释放状态
                 self.gen_sender.send(false)?;
+                self.agent.heartbeat.in_idle();
             }
         }
         Ok(())
     }
     async fn handle_end(&mut self, resaon: EndReason) -> (Vec<(AppEnvEventData, bool)>, bool) {
         let mut events: Vec<(AppEnvEventData, bool)> = vec![];
-
         let db = DB.get().unwrap();
         let agent_id = self.agent_id;
         {
@@ -315,6 +321,7 @@ impl GenerateWorker {
         let mut errors = vec![];
         let mut tool_call_infos: Vec<(ToolCallDetailItem, ToolCall)> = vec![];
         let mut stack_cmds: Vec<StackCommand> = vec![];
+        let mut recalls: Vec<Recall> = vec![];
         {
             let mut counter: HashMap<&String, u32> = HashMap::new();
             for section in &self.response_sections {
@@ -326,6 +333,7 @@ impl GenerateWorker {
                     section,
                     &mut tool_call_infos,
                     &mut stack_cmds,
+                    &mut recalls,
                 )
                 .await
                 {
@@ -348,12 +356,10 @@ impl GenerateWorker {
             events.push((AppEnvEventData::Error(errors.join("\n")), false));
             return (events, true);
         }
-
         let mut continue_flag = events.len() > 0;
-
         //函数调用
         if !tool_call_infos.is_empty() {
-            let res = tool_call(
+            let res = tool_call::invoke(
                 self.response_event_id,
                 tool_call_infos,
                 &self.tool_engine,
@@ -372,7 +378,24 @@ impl GenerateWorker {
         //处理压栈
         if !stack_cmds.is_empty() {
             continue_flag = true;
-            if let Err(e) = handle_stack_commands(self.agent.clone(), stack_cmds).await {
+            if let Err(e) = stack_call::handle_stack_commands(self.agent.clone(), stack_cmds).await
+            {
+                events.push((AppEnvEventData::Error(e.to_string()), false));
+            };
+        }
+        //处理经验/记忆召回
+        if !recalls.is_empty() {
+            continue_flag = true;
+            let state_id = self
+                .agent
+                .event_context()
+                .top_node()
+                .map(|v| v.id)
+                .unwrap_or(1);
+            if let Err(e) =
+                reflect_call::invoke(recalls, &self.agent.reflect_engine, &mut events, state_id)
+                    .await
+            {
                 events.push((AppEnvEventData::Error(e.to_string()), false));
             };
         }
@@ -385,6 +408,7 @@ async fn parse_section(
     section: &Section,
     tool_call_infos: &mut Vec<(ToolCallDetailItem, ToolCall)>,
     stack_cmds: &mut Vec<StackCommand>,
+    recalls: &mut Vec<Recall>,
 ) -> anyhow::Result<serde_json::Value> {
     let content = section.content.trim();
     let payload = match section.name.as_str() {
@@ -397,40 +421,24 @@ async fn parse_section(
             serde_json::to_value(ctx)?
         }
         "tool_call" => {
-            let inner = section
-                .header
-                .trim_start_matches("<tool_call")
-                .trim_end_matches(">")
-                .trim();
-            let mut attrs = parser::parse_attrs(inner);
-            let call_id = match attrs
-                .remove("id")
-                .map(|v| v.as_str().unwrap_or_default().to_string())
-            {
-                Some(v) => v,
-                None => {
-                    anyhow::bail!("tool_call id is required")
-                }
-            };
-            let mut call = tool_engine.preprocess(call_id.clone(), content)?;
+            let (mut detail, mut call) =
+                tool_call::parse(&section.header, &section.content, tool_engine)?;
+            detail.id = section.id;
             call.id = section.id;
-            let detail = ToolCallDetailItem {
-                id: section.id,
-                call_id,
-                package: call.package.name.to_string(),
-                tool: call.tool.name.to_string(),
-                values: vec![],
-                status: ToolCallStatus::Undo,
-                args: call.args.clone(),
-                elapsed: "".to_string(),
-            };
-
+            //
             let p = json!(&detail);
             tool_call_infos.push((detail, call));
             p
         }
+        "recall" => {
+            let recall = reflect_call::parse(&section.header, &section.content)?;
+            //
+            let p = json!(&recall);
+            recalls.push(recall);
+            p
+        }
         "push" => {
-            let mut push = parse_push(&section.header, content)?;
+            let mut push = stack_call::parse_push(&section.header, content)?;
             push.id = section.id;
             let p = json!(&push);
             stack_cmds.push(StackCommand::Push(push));
@@ -447,148 +455,4 @@ async fn parse_section(
         _ => serde_json::Value::Null,
     };
     Ok(payload)
-}
-fn parse_push(header: &str, content: &str) -> anyhow::Result<Node> {
-    let inner = header
-        .trim_start_matches("<push")
-        .trim_end_matches(">")
-        .trim();
-    let mut attrs = parser::parse_attrs(inner);
-    let title = attrs
-        .remove("title")
-        .map(|v| v.as_str().unwrap_or_default().to_string())
-        .ok_or_else(|| anyhow::anyhow!("push标签缺少title属性"))?;
-    Ok(Node {
-        id: 0,
-        pos: 0,
-        title: title.trim().to_string(),
-        content: content.trim().to_string(),
-    })
-}
-
-async fn tool_call(
-    response_event_id: i64,
-    tool_call_infos: Vec<(ToolCallDetailItem, ToolCall)>,
-    tool_engine: &ToolEngine,
-    web_sender: Arc<WebSender>,
-    events: &mut Vec<(AppEnvEventData, bool)>,
-) -> anyhow::Result<()> {
-    let db = DB.get().unwrap();
-    //
-    let mut tool_call_details: HashMap<i64, ToolCallDetailItem> = HashMap::new();
-    let mut tool_calls = vec![];
-
-    let mut call_ids = vec![];
-    for (detail, call) in tool_call_infos {
-        //
-        tool_call_details.insert(detail.id, detail);
-        call_ids.push(call.id);
-        tool_calls.push(call);
-    }
-
-    //批执行
-    let mut stream = tool_engine.batch_call(tool_calls).await.boxed();
-    while let Some(event) = stream.next().await {
-        //通知前端
-        web_sender.send(WebEvent::ToolCall(event.clone(), response_event_id));
-        let item = match event {
-            ToolCallEvent::Success(item) => item,
-            ToolCallEvent::Failure(item) => item,
-            _ => {
-                continue;
-            }
-        };
-        let mut detial = tool_call_details.remove(&item.id).unwrap();
-        detial.values = item.values;
-        detial.status = item.status;
-        detial.elapsed = item.elapsed;
-        //保存
-        entity_service::section::update_payload(db, detial.id, detial.clone()).await?;
-        let is_empty = detial.values.iter().filter(|v| !v.is_empty()).count() == 0;
-        if is_empty {
-            continue;
-        }
-        //发送完整事件
-        events.push((AppEnvEventData::ToolResponse(detial), false));
-    }
-    //结束
-    Ok(())
-}
-
-async fn handle_stack_commands(
-    agent: Arc<AppAgent>,
-    stack_cmds: Vec<StackCommand>,
-) -> anyhow::Result<()> {
-    let db = DB.get().unwrap();
-    let agent_id = agent.identity().id();
-    let stack = agent.event_context();
-    for cmd in stack_cmds {
-        match cmd {
-            StackCommand::Push(mut node) => {
-                //设置节点的位置
-                {
-                    let pos = stack.top_node().map(|v| v.pos).unwrap_or_default();
-                    node.pos = pos + 1;
-                }
-                let model = entity_service::state::push(
-                    db,
-                    agent_id,
-                    node.pos as _,
-                    node.title.clone(),
-                    node.content.clone(),
-                )
-                .await?;
-                node.id = model.id;
-                stack.push_node(node);
-                println!("push node to stack");
-            }
-            StackCommand::Reset(content) => {
-                if let Some(top_node) = stack.top_node() {
-                    let node_id = top_node.id;
-                    let c = content.clone();
-                    entity_service::transaction(|db| {
-                        async move {
-                            entity_service::event::unload_events(db, node_id).await?;
-                            entity_service::state::reset(db, node_id, c).await?;
-                            Ok(())
-                        }
-                        .boxed()
-                    })
-                    .await?;
-                    top_node.reset(content);
-                } else {
-                    anyhow::bail!("栈顶不存在")
-                }
-                println!("reset node");
-            }
-            StackCommand::Pop(result) => {
-                if stack.node_len() <= 1 {
-                    anyhow::bail!("核心栈状态不能弹出")
-                }
-
-                let last_top_node = stack.pop_node().unwrap();
-                let title = &last_top_node.title;
-                let node_id = last_top_node.id;
-                entity_service::transaction(|db| {
-                    async move {
-                        entity_service::event::unload_events(db, node_id).await?;
-                        entity_service::state::dump(db, node_id).await?;
-                        Ok(())
-                    }
-                    .boxed()
-                })
-                .await?;
-
-                if let Some(top_node) = stack.top_node() {
-                    let event = AppEnvEventData::StackPop(title.clone(), result);
-                    let event = agent.save_event((event, false)).await?;
-                    top_node.push(event);
-                } else {
-                    anyhow::bail!("栈顶不存在")
-                }
-                println!("pop node from stack");
-            }
-        }
-    }
-    Ok(())
 }

@@ -1,54 +1,60 @@
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use kernel::{
-    agent::{AgentIdentity, AgentOutfit, context::AgentContext, port::AgentOutlet},
-    mind::port::{CommandEvent, MindOutlet},
+    agent::{AgentIdentity, AgentOutfit, context::AgentContext},
+    mind::{
+        port::{CommandEvent, MindInlet, MindOutlet},
+        stream::StreamMind,
+    },
 };
 
-use crate::agent::{
-    authority::AgentAuthorityHandler, event::AppEnvEvent, event_context::StackContext,
-    scheduler::AgentSchedulerHandler,
-};
-pub type Agent = kernel::agent::Agent<AppEnvEvent, StackContext<AppEnvEvent>>;
+use crate::{agent::event::AppEnvEvent, context::stack::StackContext};
+
 pub struct AgentInstance {
-    agent: Arc<Agent>,
-    pub scheduler: Arc<dyn AgentSchedulerHandler>,
-    pub authority: Arc<dyn AgentAuthorityHandler>,
+    pub identity: Arc<AgentIdentity>,
+    pub context: Arc<AgentContext>,
+    pub event_context: Arc<StackContext<AppEnvEvent>>,
+    pub mind_inlet: MindInlet,
 }
 
-#[async_trait]
-impl AgentOutfit<AppEnvEvent, StackContext<AppEnvEvent>> for AgentInstance {
-    async fn send_cmd(&self, cmd: CommandEvent) -> anyhow::Result<()> {
-        self.agent.send_cmd(cmd).await
+impl AgentInstance {
+    pub fn build(
+        identity: Arc<AgentIdentity>,
+        context: Arc<AgentContext>,
+        event_context: Arc<StackContext<AppEnvEvent>>,
+    ) -> (AgentInstance, EventLoop, MindOutlet) {
+        //通道
+        //mind
+        let (stream_mind, mind_inlet, mind_outlet) = StreamMind::new(event_context.clone());
+        //创建代理实例
+        let agent = AgentInstance {
+            identity,
+            event_context: event_context.clone(),
+            context: context.clone(),
+            mind_inlet,
+        };
+        let event_loop = EventLoop { stream_mind };
+
+        (agent, event_loop, mind_outlet)
     }
-    fn event_context(&self) -> Arc<StackContext<AppEnvEvent>> {
-        self.agent.event_context()
+}
+
+impl AgentInstance {
+    pub async fn send_cmd(&self, cmd: CommandEvent) -> anyhow::Result<()> {
+        let _ = self.mind_inlet.send(cmd).await?;
+        Ok(())
     }
-    fn context(&self) -> Arc<AgentContext> {
-        self.agent.context()
-    }
-    fn identity(&self) -> Arc<AgentIdentity> {
-        self.agent.identity()
-    }
-    async fn shutdown(&self) -> anyhow::Result<()> {
+    pub async fn wait(&self, is_run: bool) -> anyhow::Result<()> {
+        self.mind_inlet.wait(is_run).await?;
         Ok(())
     }
 }
-pub type EventLoop = kernel::agent::EventLoop<AppEnvEvent, StackContext<AppEnvEvent>>;
-pub fn build_agent_instance(
-    identity: Arc<AgentIdentity>,
-    context: Arc<AgentContext>,
-    event_context: Arc<StackContext<AppEnvEvent>>,
-    scheduler: Arc<dyn AgentSchedulerHandler>,
-    authority: Arc<dyn AgentAuthorityHandler>,
-) -> (AgentInstance, EventLoop, MindOutlet) {
-    let (agent, event_loop, outlet) = kernel::agent::Agent::build(identity, context, event_context);
-    // let context = agent.context();
-    let ins = AgentInstance {
-        agent: Arc::new(agent),
-        scheduler,
-        authority,
-    };
-    (ins, event_loop, outlet)
+
+pub struct EventLoop {
+    stream_mind: StreamMind<AppEnvEvent, StackContext<AppEnvEvent>>,
+}
+impl EventLoop {
+    pub fn start(mut self) {
+        tokio::spawn(async move { self.stream_mind.event_loop().await });
+    }
 }

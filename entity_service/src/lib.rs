@@ -16,6 +16,7 @@ pub mod model;
 pub mod rule;
 pub mod section;
 pub mod state;
+pub mod task;
 
 pub static DB: OnceLock<DatabaseConnection> = OnceLock::new();
 static SQL: &'static str = include_str!("../../sql/init.vec.sql");

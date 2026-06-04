@@ -36,23 +36,41 @@ pub async fn push(
     Ok(model)
 }
 
-pub async fn dumps(
+// pub async fn dumps(
+//     db: &impl ConnectionTrait,
+//     agent_id: u32,
+//     state_ids: Vec<i64>,
+// ) -> anyhow::Result<()> {
+//     entity::state::Entity::update_many()
+//         .set(entity::state::ActiveModel {
+//             dumped: Set(true),
+//             ..Default::default()
+//         })
+//         .filter(entity::state::Column::AgentId.eq(agent_id))
+//         .filter(entity::state::Column::Id.is_in(state_ids))
+//         .exec(db)
+//         .await?;
+//     Ok(())
+// }
+// pub async fn dump(db: &impl ConnectionTrait, state_id: i64) -> anyhow::Result<()> {
+//     entity::state::Entity::update_many()
+//         .set(entity::state::ActiveModel {
+//             dumped: Set(true),
+//             ..Default::default()
+//         })
+//         .filter(entity::state::Column::Id.eq(state_id))
+//         .exec(db)
+//         .await?;
+//     Ok(())
+// }
+
+pub async fn pop(
     db: &impl ConnectionTrait,
     agent_id: u32,
-    state_ids: Vec<i64>,
+    state_id: i64,
+    last_state_id: i64,
 ) -> anyhow::Result<()> {
-    entity::state::Entity::update_many()
-        .set(entity::state::ActiveModel {
-            dumped: Set(true),
-            ..Default::default()
-        })
-        .filter(entity::state::Column::AgentId.eq(agent_id))
-        .filter(entity::state::Column::Id.is_in(state_ids))
-        .exec(db)
-        .await?;
-    Ok(())
-}
-pub async fn dump(db: &impl ConnectionTrait, state_id: i64) -> anyhow::Result<()> {
+    //卸载节点
     entity::state::Entity::update_many()
         .set(entity::state::ActiveModel {
             dumped: Set(true),
@@ -61,10 +79,24 @@ pub async fn dump(db: &impl ConnectionTrait, state_id: i64) -> anyhow::Result<()
         .filter(entity::state::Column::Id.eq(state_id))
         .exec(db)
         .await?;
+
+    //指向最新状态
+    let _ = entity::agent::Entity::update_many()
+        .set(entity::agent::ActiveModel {
+            state_id: Set(last_state_id),
+            ..Default::default()
+        })
+        .filter(entity::agent::Column::Id.eq(agent_id))
+        .exec(db)
+        .await?;
     Ok(())
 }
 
-pub async fn reset(db: &impl ConnectionTrait, state_id: i64,content:String) -> anyhow::Result<()> {
+pub async fn reset(
+    db: &impl ConnectionTrait,
+    state_id: i64,
+    content: String,
+) -> anyhow::Result<()> {
     entity::state::Entity::update_many()
         .set(entity::state::ActiveModel {
             content: Set(content),

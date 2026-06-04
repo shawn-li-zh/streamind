@@ -1,5 +1,5 @@
 use crate::{
-    agent::event::EnvEvent,
+    mind::event::EnvEvent,
     mind::{
         context::EventContext,
         port::{CommandEvent, EndReason, GenerateEvent, MindInlet, MindOutlet},
@@ -9,12 +9,13 @@ use crate::{
 use std::{
     fs::{File, OpenOptions},
     io::Write as _,
+    marker::PhantomData,
     sync::Arc,
 };
 use tracing::{error, info};
 
 use futures::stream;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 
 use futures::{Stream, StreamExt};
 
@@ -25,29 +26,31 @@ pub enum MindFlag {
 
 pub struct StreamMind<E: EnvEvent, C: EventContext<E>> {
     context: Arc<C>,
-    event_id_buffer: Vec<E>,
     cmd_receiver: mpsc::Receiver<CommandEvent>,
     generate_sender: mpsc::Sender<GenerateEvent>,
+    flag_sender: watch::Sender<bool>,
+    _private: PhantomData<E>,
 }
 
 impl<E: EnvEvent, C: EventContext<E>> StreamMind<E, C> {
     pub fn new(context: Arc<C>) -> (Self, MindInlet, MindOutlet) {
+        let (flag_sender, flag_receiver) = watch::channel::<bool>(false);
         let event = mpsc::channel::<CommandEvent>(50);
-        let inlet = MindInlet::new(event.0);
+        let inlet = MindInlet::new(event.0, flag_receiver);
         let mind_event = mpsc::channel::<GenerateEvent>(100);
         let outlet = MindOutlet::new(mind_event.1);
         let mind = StreamMind {
             context,
-            event_id_buffer: vec![],
             cmd_receiver: event.1,
             generate_sender: mind_event.0,
+            flag_sender,
+            _private: PhantomData,
         };
         (mind, inlet, outlet)
     }
 
     /// 非阻塞地抽干(Drain)当前队列中的所有事件
     fn drain_events(&mut self) -> bool {
-    
         while let Ok(cmd) = self.cmd_receiver.try_recv() {
             match cmd {
                 // CommandEvent::Inject(e) => {
@@ -80,6 +83,7 @@ impl<E: EnvEvent, C: EventContext<E>> StreamMind<E, C> {
                     }
                 }
             }
+            self.flag_sender.send(true).unwrap(); //通知外部开始生成了
             let mut file = OpenOptions::new()
                 .read(true)
                 .write(true)
@@ -99,6 +103,7 @@ impl<E: EnvEvent, C: EventContext<E>> StreamMind<E, C> {
                 Err(e) => EndReason::Error(Arc::new(e)),
             };
             worker.end(resaon).await;
+            self.flag_sender.send(false).unwrap(); //通知外部生成结束
             self.drain_events();
         }
     }

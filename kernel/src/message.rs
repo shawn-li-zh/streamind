@@ -97,16 +97,16 @@ impl RoleMessage {
             RoleMessage::Tool(_, _) => Role::Tool,
         }
     }
-    pub fn infos(role: Role, infos: Vec<Information>) -> anyhow::Result<Self> {
+    pub fn infos(role: Role, infos: Vec<Information>) -> Self{
         let s = match role {
             Role::User => RoleMessage::User(infos),
             Role::System => RoleMessage::System(infos),
             Role::Assistant => RoleMessage::Assistant(infos, false),
-            Role::Tool => anyhow::bail!("not support Tool"),
+            Role::Tool => RoleMessage::Tool("ID".to_string(), infos),
         };
-        Ok(s)
+        s
     }
-    pub fn text<S: std::fmt::Display>(role: Role, v: S) -> anyhow::Result<Self> {
+    pub fn text<S: std::fmt::Display>(role: Role, v: S) -> Self {
         let v = v.to_string();
         let v = Information::Text(v);
         RoleMessage::infos(role, vec![v])
@@ -116,7 +116,7 @@ impl RoleMessage {
         path: PathBuf,
         size: usize,
         name: Option<String>,
-    ) -> anyhow::Result<Self> {
+    ) -> Self {
         let v = Information::Image(Binary { path, name, size });
         RoleMessage::infos(role, vec![v])
     }

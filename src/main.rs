@@ -4,18 +4,17 @@ use tracing::info;
 use tracing_subscriber::EnvFilter;
 use web::feature::auth::LOGIN_CODE;
 
-
-mod agent;
 mod common;
+mod event_context;
 mod global;
-mod web_api;
 mod plugin;
+mod runtime;
 mod sse_event;
 mod status;
-mod event_context;
-mod runtime;
-
+mod web_api;
+mod agent;
 mod task;
+
 
 // mod web;
 

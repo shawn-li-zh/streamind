@@ -4,7 +4,9 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-thiserror = "2.0.18"
+
+# 锁
+parking_lot = "0.12.5"
 # 异步库
 tokio = { version = "1", features = ["full"] }
 async-trait = "0.1.89"
@@ -19,6 +21,8 @@ serde_json = "1"
 regex = "1"
 # 错误处理
 anyhow = { version = "1", features = ["std"] }
+thiserror = "2.0.18"
+
 chrono = "0.4.44"
 dashmap = "6.1.0"
 

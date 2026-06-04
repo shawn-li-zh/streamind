@@ -3,3 +3,4 @@ pub mod scheduler;
 pub mod heartbeat;
 pub mod reflect;
 pub mod logger;
+pub mod memory;

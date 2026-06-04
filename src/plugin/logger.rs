@@ -1,8 +1,7 @@
 use std::{io::Write, path::PathBuf};
 
 use chrono::Local;
-use kernel::agent::event::EnvEvent;
-use runtime::agent::event::AppEnvEvent;
+use kernel::mind::event::EnvEvent;
 use tokio::{
     fs::{self, File},
     io::{self, AsyncWriteExt as _},
@@ -32,7 +31,7 @@ impl AgentLogger {
             log_file: tokio::sync::Mutex::new(log_file),
         })
     }
-    pub async fn log_event(&self, event: &AppEnvEvent) -> io::Result<()> {
+    pub async fn log_event<E: EnvEvent>(&self, event: &E) -> io::Result<()> {
         let msg = event.to_message();
         let role = msg.role();
         let (text, _) = msg.to_tuple();

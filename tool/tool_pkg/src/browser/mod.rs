@@ -132,7 +132,7 @@ pub mod browser {
         }
         Ok(())
     }
-    #[tool(anno = "启动浏览器", example = r#"launch()"#)]
+    #[tool(anno = "启动浏览器", example = r#"launch()"#, timeout = "30s")]
     pub async fn launch(
         #[arg("浏览器启动参数")] args: Option<Vec<String>>,
         #[ctx] ctx: ToolCallContext,
@@ -193,7 +193,7 @@ pub mod browser {
         Ok(())
     }
     //关闭浏览器
-    #[tool(anno = "关闭浏览器", example = r#"close()"#)]
+    #[tool(anno = "关闭浏览器", example = r#"close()"#, timeout = "10s")]
     pub async fn close(#[ctx] ctx: ToolCallContext) -> anyhow::Result<()> {
         let mut ctx = ctx.context_data.write().await;
         let ctx = ctx.downcast_mut::<Context>().unwrap();
@@ -213,7 +213,8 @@ pub mod browser {
         anno = "打开网页,等dom解析完毕,返回tab id",
         example = r#"new_tab(url="https://www.baidu.com")"#,
         timeout = "5s"
-        limit = "10s:5"
+        limit = "10s:5",
+        timeout = "30s"
     )]
     pub async fn new_tab(
         #[arg("网页地址")] url: String,
@@ -278,7 +279,8 @@ pub mod browser {
     #[tool(
         anno = "切换标签页",
         example = r#"switch_tab(id="123")"#,
-        limit = "10s:5"
+        limit = "10s:5",
+        timeout = "10s"
     )]
     pub async fn switch_tab(
         #[arg("标签页id")] id: String,
@@ -299,7 +301,8 @@ pub mod browser {
     #[tool(
         anno = "关闭标签页,返回打开的tab id",
         example = r#"close_tab(id="123")"#,
-        limit = "10s:5"
+        limit = "10s:5",
+        timeout = "10s"
     )]
     pub async fn close_tab(
         #[arg("标签页id")] id: String,
@@ -347,7 +350,8 @@ pub mod browser {
     #[tool(
         anno = "执行js脚本,脚本的返回值必须可以被转换成string或者不返回值(最好不要用js来交互元素，容易触发反爬)",
         example = r#"exec(js="console.log(1+1)")"#,
-        limit = "10s:5"
+        limit = "10s:5",
+        timeout = "5m"
     )]
     pub async fn exec(
         #[arg("命令")] js: String,
@@ -371,44 +375,48 @@ pub mod browser {
         let s = res.into_value::<Option<serde_json::Value>>()?;
         Ok(ToolReturn::json(s.unwrap_or_default())?)
     }
-    #[tool(
-        anno = "解析dom树，用在每次网页发生交互后，重新解析网页的节点树",
-        example = r#"resolve_dom()"#,
-        limit = "10s:5"
-    )]
-    pub async fn resolve_dom(
-        #[arg(
-            "每当页面发生变动，都需要重新解析元素，默认是document.body,也可以传入一段js代码,系统自动调用环境中的resolve_dom(ele?:HTMLElement)"
-        )]
-        element: Option<String>,
-        #[arg("iframe id,默认主网页")] iframe_id: Option<String>,
-        #[ctx] ctx: ToolCallContext,
-    ) -> anyhow::Result<ToolReturn> {
-        let mut ctx = ctx.context_data.write().await;
-        let ctx = ctx.downcast_mut::<Context>().unwrap();
-        if !ctx.is_runing {
-            anyhow::bail!("浏览器未启动");
-        }
-        if ctx.current_tab.is_none() {
-            anyhow::bail!("请先打开标签页");
-        }
-        let tab = ctx.tabs.get_mut(ctx.current_tab.as_ref().unwrap()).unwrap();
-        let js = format!("window['resolve_dom']({})", element.unwrap_or_default());
-        //
-        let mut eval = EvaluateParams::new(js);
-        eval.context_id = tab.get_frame_context_id(iframe_id).await?;
-        let res = tab.page.evaluate(eval).await?;
-        let s = res.into_value::<Option<String>>()?;
-        Ok(ToolReturn::raw(format!("{}", s.unwrap_or_default())))
-    }
+    // #[tool(
+    //     anno = "解析dom树，用在每次网页发生交互后，重新解析网页的节点树",
+    //     example = r#"resolve_dom()"#,
+    //     limit = "10s:5"
+    // )]
+    // pub async fn resolve_dom(
+    //     #[arg(
+    //         "每当页面发生变动，都需要重新解析元素，默认是document.body,也可以传入一段js代码,系统自动调用环境中的resolve_dom(ele?:HTMLElement)"
+    //     )]
+    //     element: Option<String>,
+    //     #[arg("iframe id,默认主网页")] iframe_id: Option<String>,
+    //     #[ctx] ctx: ToolCallContext,
+    // ) -> anyhow::Result<ToolReturn> {
+    //     let mut ctx = ctx.context_data.write().await;
+    //     let ctx = ctx.downcast_mut::<Context>().unwrap();
+    //     if !ctx.is_runing {
+    //         anyhow::bail!("浏览器未启动");
+    //     }
+    //     if ctx.current_tab.is_none() {
+    //         anyhow::bail!("请先打开标签页");
+    //     }
+    //     let tab = ctx.tabs.get_mut(ctx.current_tab.as_ref().unwrap()).unwrap();
+    //     let js = format!("window['resolve_dom']({})", element.unwrap_or_default());
+    //     //
+    //     let mut eval = EvaluateParams::new(js);
+    //     eval.context_id = tab.get_frame_context_id(iframe_id).await?;
+    //     let res = tab.page.evaluate(eval).await?;
+    //     let s = res.into_value::<Option<String>>()?;
+    //     Ok(ToolReturn::raw(format!("{}", s.unwrap_or_default())))
+    // }
     #[tool(
         anno = "查看dom树,返回精简后的节点树文档,如果区间内节点数大于100,会将相同层级相同标签的节点折叠omit(每一行都是一个节点,节点id在头部，格式=[id]),在js中通过node_element(node_id)可以访问对应的元素对象,)",
         example = r#"look_dom()"#,
-        limit = "10s:5"
+        limit = "10s:5",
+        timeout = "10s"
     )]
     pub async fn look_dom(
         #[arg("起始节点id,默认=0,代表body元素")] start: Option<u32>,
         #[arg("结束节点id")] end: Option<i32>,
+        #[arg(
+            "解析元素，默认是document.body,也可以传入一段js代码,必须是HTMLElement类型"
+        )]      element: Option<String>,
         #[arg("iframe id,默认主网页")] iframe_id: Option<String>,
         #[ctx] ctx: ToolCallContext,
     ) -> anyhow::Result<ToolReturn> {
@@ -421,20 +429,37 @@ pub mod browser {
             anyhow::bail!("请先打开标签页");
         }
         let tab = ctx.tabs.get_mut(ctx.current_tab.as_ref().unwrap()).unwrap();
-        let start = start.unwrap_or_default();
-        let end = end.unwrap_or(-1);
-        let js = format!("window['look_dom']({},{})", start, end);
+        let frame_context_id = tab.get_frame_context_id(iframe_id).await?;
         //
-        let mut eval = EvaluateParams::new(js);
-        eval.context_id = tab.get_frame_context_id(iframe_id).await?;
-        let res = tab.page.evaluate(eval).await?;
-        let s = res.into_value::<Option<String>>()?;
-        Ok(ToolReturn::raw(format!("{}", s.unwrap_or_default())))
+        let range = {
+            let js = format!("window['resolve_dom']({})", element.unwrap_or_default());
+            let mut eval = EvaluateParams::new(js);
+            eval.context_id = frame_context_id.clone();
+            let res = tab.page.evaluate(eval).await?;
+            res.into_value::<Option<String>>()?
+                .unwrap_or("无".to_string())
+        };
+        //
+        let dom = {
+            let start = start.unwrap_or_default();
+            let end = end.unwrap_or(-1);
+            let js = format!("window['look_dom']({},{})", start, end);
+            //
+            let mut eval = EvaluateParams::new(js);
+            eval.context_id = frame_context_id;
+            let res = tab.page.evaluate(eval).await?;
+            let s = res.into_value::<Option<String>>()?;
+            s.unwrap_or("无".to_string())
+        };
+
+        //
+        Ok(ToolReturn::raw(format!("{range}\n{dom}",)))
     }
     #[tool(
         anno = "查看页面的iframe树",
         example = r#"look_iframes()"#,
-        limit = "10s:5"
+        limit = "10s:5",
+        timeout = "10s"
     )]
     pub async fn look_iframes(#[ctx] ctx: ToolCallContext) -> anyhow::Result<Iframe> {
         let mut ctx = ctx.context_data.write().await;
@@ -456,7 +481,8 @@ pub mod browser {
     #[tool(
         anno = "页面截图,返回图片路径(视觉模型返回图片内容)",
         example = r#"screenshot()"#,
-        limit = "10s:5"
+        limit = "10s:5",
+        timeout = "10s"
     )]
     pub async fn screenshot(#[ctx] call_ctx: ToolCallContext) -> anyhow::Result<ToolReturn> {
         let mut ctx = call_ctx.context_data.write().await;
@@ -481,7 +507,11 @@ pub mod browser {
             )
             .await?;
         file.write_all(&bytes)?;
-        if call_ctx.agent_identity.modals.contains(&ModelModal::Image) {
+        if call_ctx
+            .agent_identity
+            .input_modals
+            .contains(&ModelModal::Image)
+        {
             //只占1000,图片字节太多，免得计算上下文长度时出现一两句话就溢出了
             let image = ToolReturn::image(path.clone(), 1000, Some("网页截图".to_string()));
             Ok(image)
@@ -494,7 +524,8 @@ pub mod browser {
         anno = r#"执行指令流水线,使用文档内容较多，请打开'系统工作目录+/prompts/browser_tool.doc.md' 文件查看具体使用方法。
         除了wait(ms=xxx)指令，其他指令超过3秒都会超时中断"#,
         example = r#"pipeline(cmds="node.click(id=1,x=100,y=100);node.type(id=1,text='hello world')")"#,
-        limit = "10s:5"
+        limit = "10s:5",
+        timeout = "10m"
     )]
     pub async fn pipeline(
         #[arg("指令流水线")] cmds: String,
@@ -537,7 +568,7 @@ pub mod browser {
                         Ok(())
                     })
                     .await
-                    .map_err(|_| anyhow::anyhow!("执行超时:{},可能元素发生变化,请刷新页面,或者调用resolve_dom重新解析网页", &cmds[i]))??;
+                    .map_err(|_| anyhow::anyhow!("执行超时:{},可能元素发生变化", &cmds[i]))??;
                 }
             }
         }

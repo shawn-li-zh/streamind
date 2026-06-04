@@ -13,21 +13,32 @@ use std::{
 
 use futures::{SinkExt as _, Stream};
 use pin_project::pin_project;
-use tokio::sync::mpsc::{self, error::SendError};
+use tokio::sync::{
+    mpsc::{self, error::SendError},
+    watch::{self, error::RecvError},
+};
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::mind::section::SectionTag;
 
-
 pub struct MindInlet {
     inner: mpsc::Sender<CommandEvent>,
+    run_flag: tokio::sync::RwLock<watch::Receiver<bool>>,
 }
 impl MindInlet {
-    pub(crate) fn new(inner: mpsc::Sender<CommandEvent>) -> Self {
-        Self { inner: inner }
+    pub(crate) fn new(inner: mpsc::Sender<CommandEvent>, run_flag: watch::Receiver<bool>) -> Self {
+        Self {
+            inner: inner,
+            run_flag: tokio::sync::RwLock::new(run_flag),
+        }
     }
     pub async fn send(&self, event: CommandEvent) -> Result<(), SendError<CommandEvent>> {
         self.inner.send(event).await
+    }
+    pub async fn wait(&self, is_run: bool) -> Result<(), RecvError> {
+        let mut run_flag = self.run_flag.write().await;
+        run_flag.wait_for(|v| *v == is_run).await?;
+        Ok(())
     }
 }
 

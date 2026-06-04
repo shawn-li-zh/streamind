@@ -12,9 +12,9 @@ use kernel::{
     mind::context::EventContext as _,
     tool::engine::ToolEngineContext,
 };
-use runtime::agent::{
-    event::AppEnvEvent,
-    event_context::{MindNode, Node, StackContext},
+use runtime::{
+    agent::event::AppEnvEvent,
+    context::stack::{Node, StackContext},
 };
 use tracing::info;
 
@@ -49,7 +49,7 @@ pub async fn load_stack(
         arr.push(s);
     }
     //
-    let sp = build_system_prompt(identity, ctx);
+    let sp = build_main_system_prompt(identity, ctx);
     let stack = StackContext::new(client, sp);
     for state in states {
         let node = stack.push_node(Node {
@@ -78,15 +78,15 @@ pub static GENERATE_RULE: LazyLock<String> = LazyLock::new(|| {
 pub static STACK_CONTEXT_RULE: LazyLock<String> = LazyLock::new(|| {
     std::fs::read_to_string("prompts/common/stack_context_rule.md").unwrap_or_default()
 });
-pub static REFLECT_RULE: LazyLock<String> =
-    LazyLock::new(|| std::fs::read_to_string("prompts/common/reflect_rule.md").unwrap_or_default());
+pub static RECALL_RULE: LazyLock<String> =
+    LazyLock::new(|| std::fs::read_to_string("prompts/common/recall_rule.md").unwrap_or_default());
 pub static TOOL_CALL_RULE: LazyLock<String> = LazyLock::new(|| {
     std::fs::read_to_string("prompts/common/tool_call_rule.md").unwrap_or_default()
 });
 pub static RENDER_RULE: LazyLock<String> =
     LazyLock::new(|| std::fs::read_to_string("prompts/common/render_rule.md").unwrap_or_default());
 
-pub fn build_system_prompt(identity: &AgentIdentity, ctx: &AgentContext) -> String {
+pub fn build_main_system_prompt(identity: &AgentIdentity, ctx: &AgentContext) -> String {
     let tool_engine_context = ctx.get::<ToolEngineContext>().unwrap();
     let items: Vec<String> = tool_engine_context
         .tool_packages
@@ -111,9 +111,42 @@ pub fn build_system_prompt(identity: &AgentIdentity, ctx: &AgentContext) -> Stri
     lines.push(EVENT_DRIVEN.trim().to_string());
     lines.push(GENERATE_RULE.trim().to_string());
     lines.push(STACK_CONTEXT_RULE.trim().to_string());
-    lines.push(REFLECT_RULE.trim().to_string());
+    lines.push(RECALL_RULE.trim().to_string());
     lines.push(TOOL_CALL_RULE.trim().to_string());
     lines.push(RENDER_RULE.trim().to_string());
+    lines.push(format!("# 工具包列表(全部)\n{}", items.join("\n"),));
+
+    lines.join("\n\n")
+}
+
+pub static REFLECT_RULE: LazyLock<String> =
+    LazyLock::new(|| std::fs::read_to_string("prompts/memory/reflect_rule.md").unwrap_or_default());
+pub fn build_memory_system_prompt(identity: &AgentIdentity, ctx: &AgentContext) -> String {
+    let tool_engine_context = ctx.get::<ToolEngineContext>().unwrap();
+    let items: Vec<String> = tool_engine_context
+        .tool_packages
+        .iter()
+        .map(|pkg_name| {
+            let pkg = tool_engine_context.package_pool.get(pkg_name).unwrap();
+            let tool_size = pkg.tools().len();
+            format!("{}(tools:{tool_size}):{}", pkg_name, pkg.annotation)
+        })
+        .collect();
+    let dir = std::env::current_dir().unwrap();
+
+    let mut lines = vec![];
+    let workspace = identity.workspace.to_str().unwrap_or_default();
+    lines.push(format!(
+        "# 基础信息:\n- 编号:{}\n- 名称:{}\n- 系统工作目录(绝对路径,公共文档一般是以这个路径为基准):{}\n-工作空间是:{}",
+        identity.code(),
+        identity.name(),
+        dir.to_str().unwrap_or_default(),
+        workspace
+    ));
+    lines.push(EVENT_DRIVEN.trim().to_string());
+    lines.push(GENERATE_RULE.trim().to_string());
+    lines.push(REFLECT_RULE.trim().to_string());
+    lines.push(TOOL_CALL_RULE.trim().to_string());
     lines.push(format!("# 工具包列表(全部)\n{}", items.join("\n"),));
 
     lines.join("\n\n")

@@ -1,6 +1,6 @@
 use kernel::{
-    agent::event::EnvEvent,
     message::{Information, RoleMessage},
+    mind::event::EnvEvent,
     mind::section::{Section, SectionTag},
     tool::event::ToolCallDetailItem,
 };
@@ -131,7 +131,7 @@ impl AppEnvEventData {
             AppEnvEventData::ToolResponse(result) => {
                 let mut list: Vec<Information> = vec![];
                 let head = format!(
-                    r#"<tool_reponse id="{}" status={} elapsed="{}">"#,
+                    r#"<tool_reponse id="{}" status="{}" elapsed="{}">"#,
                     result.call_id, result.status, result.elapsed
                 );
                 list.push(Information::Text(head));
@@ -242,9 +242,6 @@ pub struct AppEnvEvent {
     pub time: chrono::DateTime<chrono::Local>,
 }
 impl EnvEvent for AppEnvEvent {
-    fn id(&self) -> i64 {
-        self.id
-    }
     fn size(&self) -> usize {
         self.size
     }

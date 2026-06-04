@@ -6,7 +6,10 @@ use std::{
 use dashmap::DashMap;
 use rule_script::{Expr, ScriptEngine};
 
-use crate::{engine::core::RuleGroup, operator::EventElement};
+use crate::{
+    engine::core::{Rule, RuleGroup},
+    operator::EventElement,
+};
 static ORDERS: LazyLock<HashMap<&'static str, i32>> = LazyLock::new(|| {
     //按执行代价排序
     HashMap::from([
@@ -55,12 +58,15 @@ impl<R: Clone + Send + Sync + 'static> RuleEngine<R> {
     pub fn add_rule_group(&self, group: RuleGroup<R>) {
         self.rule_groups.insert(group.name.clone(), Arc::new(group));
     }
-    pub fn parse(&self, exprs: &[&str]) -> anyhow::Result<Vec<Expr>> {
+    pub fn parses(&self, exprs: &[&str]) -> anyhow::Result<Vec<Expr>> {
         let mut asts = vec![];
         for expr in exprs {
             asts.push(rule_script::parse_expr(expr, &*&ORDERS)?);
         }
         return Ok(asts);
+    }
+    pub fn parse(&self, expr: &str) -> anyhow::Result<Expr> {
+        return Ok(rule_script::parse_expr(expr, &*&ORDERS)?);
     }
     pub fn simplify(&self, expr: &str) -> anyhow::Result<String> {
         self.script_engine.simplify(expr, &*&ORDERS)
@@ -97,6 +103,42 @@ impl<R: Clone + Send + Sync + 'static> RuleEngine<R> {
         let results = futures::future::join_all(tasks).await;
 
         // 4. 收集结果
+        let mut triggered_rules = vec![];
+        for (res, rules) in results {
+            let values = res?;
+            for (i, ele) in values.into_iter().enumerate() {
+                if let Ok(b) = ele.must_bool() {
+                    if b {
+                        triggered_rules.push(rules[i].data.clone());
+                    }
+                }
+            }
+        }
+        Ok(triggered_rules)
+    }
+
+    pub async fn filter(
+        &self,
+        rules: Vec<Rule<R>>,
+        element: EventElement,
+    ) -> anyhow::Result<Vec<R>> {
+        let element = Arc::new(element);
+        let exprs = rules
+            .iter()
+            .map(|rule| rule.expr.clone())
+            .collect::<Vec<_>>();
+        // 构建任务
+        let script_engine = self.script_engine.clone();
+        let mut tasks = Vec::new();
+        tasks.push(async move {
+            let res = script_engine.solves(&exprs, element).await;
+            (res, rules)
+        });
+
+        // 并发执行
+        let results = futures::future::join_all(tasks).await;
+
+        // 收集结果
         let mut triggered_rules = vec![];
         for (res, rules) in results {
             let values = res?;

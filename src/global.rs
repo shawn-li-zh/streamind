@@ -22,7 +22,7 @@ use runtime::{
     llm::{deepseek::DeepseekClient, openai::OpenaiClient, siliconflow::SiliconflowClient},
 };
 
-use crate::{agent::AppAgent, task};
+use crate::{agent::app::AppAgent, task};
 //全局agent池
 pub static AGENT_POOL: LazyLock<RwLock<HashMap<u32, Arc<AppAgent>>>> =
     LazyLock::new(|| RwLock::new(HashMap::new()));

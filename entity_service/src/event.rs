@@ -1,6 +1,9 @@
 use chrono::Local;
 use entity::{
-    agent::AgentStatusEnum, event::{EnvEventStatus, EnvEventType}, format::date_time, state
+    agent::AgentStatusEnum,
+    event::{EnvEventStatus, EnvEventType},
+    format::date_time,
+    state,
 };
 
 use kernel::mind::section::Section;
@@ -20,15 +23,27 @@ pub async fn get_by_id(agent_id: u32, id: i64) -> anyhow::Result<Option<entity::
         .await?;
     Ok(model)
 }
-
+pub async fn list_by_ids(
+    agent_id: u32,
+    ids: Vec<i64>,
+) -> anyhow::Result<Vec<entity::event::Model>> {
+    let db = DB.get().unwrap();
+    let models = entity::event::Entity::find()
+        .filter(entity::event::Column::Id.is_in(ids))
+        .filter(entity::event::Column::AgentId.eq(agent_id))
+        .all(db)
+        .await?;
+    Ok(models)
+}
 pub async fn time_range(
     agent_id: u32,
     start: chrono::DateTime<Local>,
     end: chrono::DateTime<Local>,
     event_type: Option<String>,
-    key: Option<String>,
+    mut key: Option<String>,
     limit: u64,
 ) -> anyhow::Result<Vec<entity::event::Model>> {
+    key = key.filter(|s| !s.is_empty());
     let db = DB.get().unwrap();
     let mut query = entity::event::Entity::find()
         .filter(entity::event::Column::AgentId.eq(agent_id))
@@ -51,10 +66,11 @@ pub async fn search_at(
     agent_id: u32,
     id: i64,
     event_type: Option<String>,
-    key: Option<String>,
+    mut key: Option<String>,
     limit: u64,
     is_before: bool,
 ) -> anyhow::Result<Vec<entity::event::Model>> {
+    key = key.filter(|s| !s.is_empty());
     let db = DB.get().unwrap();
     let mut query =
         entity::event::Entity::find().filter(entity::event::Column::AgentId.eq(agent_id));

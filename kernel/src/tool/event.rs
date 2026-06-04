@@ -13,9 +13,9 @@ pub enum ToolCallStatus {
 impl Display for ToolCallStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let sta = match self {
-            ToolCallStatus::Undo => "Undo",
-            ToolCallStatus::Success => "Success",
-            ToolCallStatus::Failure => "Failure",
+            ToolCallStatus::Undo => "undo",
+            ToolCallStatus::Success => "success",
+            ToolCallStatus::Failure => "failure",
         };
         f.write_str(sta)
     }

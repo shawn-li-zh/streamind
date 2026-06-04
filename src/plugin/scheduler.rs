@@ -21,7 +21,7 @@ use tokio::sync::mpsc;
 use tokio_cron_scheduler::{Job, JobScheduler};
 use uuid::Uuid;
 
-use crate::{agent::AppAgent, global::SCHEDULER};
+use crate::{agent::app::AppAgent, global::SCHEDULER};
 
 pub struct AgentScheduler {
     identity: Arc<AgentIdentity>,
@@ -82,7 +82,7 @@ pub struct AgentSchedulerRunner {
 }
 impl AgentSchedulerRunner {
     pub fn new(agent: Arc<AppAgent>, receiver: mpsc::Receiver<(Arc<AgentTimer>, bool)>) -> Self {
-        let context = agent.context();
+        let context = agent.context().clone();
         let context: Arc<AgentSchedulerContext> = context.get::<AgentSchedulerContext>().unwrap();
         let runner = Self {
             agent,
