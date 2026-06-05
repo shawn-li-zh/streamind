@@ -134,6 +134,7 @@ impl From<kernel::message::RoleMessage> for Message {
 pub struct DeepseekClient {
     pub model: String,
     pub client: Client<OpenAIConfig>,
+    pub reasoning_effort: Option<ReasoningEffort>,
 }
 #[async_trait]
 impl ChatClient for DeepseekClient {
@@ -149,17 +150,18 @@ impl ChatClient for DeepseekClient {
         messages: Vec<kernel::message::RoleMessage>,
     ) -> anyhow::Result<ChunkStream> {
         let messages = messages.into_iter().map(|v| v.into()).collect();
+        let reasoning_effort = self.reasoning_effort.clone().filter(|v|!matches!(v,ReasoningEffort::None));
+        let thinking = if matches!(reasoning_effort, Some(ReasoningEffort::None) | None) {
+            "disabled"
+        } else {
+            "enabled"
+        };
         let request = Request {
             model: self.model.clone(),
-
-            reasoning_effort: Some(ReasoningEffort::Low),
+            reasoning_effort: reasoning_effort,
             thinking: Some(Thinking {
-                r#type: "enabled".to_string(),
+                r#type: thinking.to_string(),
             }),
-            // reasoning_effort: None,
-            // thinking: Some(Thinking {
-            //     r#type: "disabled".to_string(),
-            // }),
             messages: messages,
             max_tokens: None,
             stream: true,

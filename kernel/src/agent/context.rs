@@ -30,7 +30,6 @@ impl AgentContext {
         }
     }
 
-    // 为了方便演示，先写一个插入方法
     pub fn insert<T: Send + Sync + 'static>(&mut self, value: T) -> Arc<T> {
         let type_id = TypeId::of::<T>();
         // 将整个 RwLock 包装成 dyn Any
@@ -40,8 +39,6 @@ impl AgentContext {
             .insert(type_id, (boxed.clone() as Arc<dyn Any + Send + Sync>));
         boxed
     }
-
-    // 你要求的实现
     pub fn get<T: Send + Sync + 'static>(&self) -> Option<Arc<T>> {
         let type_id = TypeId::of::<T>();
         let entry = self.inner.get(&type_id)?;

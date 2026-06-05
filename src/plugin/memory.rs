@@ -1,4 +1,7 @@
-use std::sync::{Arc, LazyLock};
+use std::{
+    sync::{Arc, LazyLock},
+    time::Instant,
+};
 
 use chrono::Local;
 use entity::task_queue::TaskStatus;
@@ -109,6 +112,7 @@ impl MemoryTaskRunner {
 
         while let Some(task) = self.receiver.recv().await {
             println!("recv task:{}", task.task_id);
+            let now = Instant::now();
             entity_service::task::update_tasks(vec![task.task_id], TaskStatus::Processing).await?;
             // 清空上下文
             mem_agent.clear_events();
@@ -131,7 +135,7 @@ impl MemoryTaskRunner {
             let req = RoleMessage::User(vec![context.into()]);
             mem_agent.push_message(req).await?;
             let req = RoleMessage::User(vec![format!(
-                "你只需要关注**当前栈顶pos={}**后面的事件和内容，将其转化为DSL,沉淀为可复用的经验和记忆",top_pos
+                "结合整个上下文，你只需要关注**当前栈顶pos={}**后面的事件和内容，将其转化为DSL,沉淀为可复用的经验和记忆",top_pos
             )
             .into()]);
             mem_agent.push_message(req).await?;
@@ -142,7 +146,8 @@ impl MemoryTaskRunner {
             //等待生成完成
             mem_agent.gen_wait(false).await?;
             //更新任务进度
-            entity_service::task::update_tasks(vec![task.task_id], TaskStatus::Done).await?;
+            let elapsed = humantime::format_duration(now.elapsed()).to_string();
+            entity_service::task::update_task(task.task_id, TaskStatus::Done, elapsed).await?;
         }
         Ok(())
     }

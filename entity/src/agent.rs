@@ -11,6 +11,8 @@ pub struct Model {
     #[sea_orm(primary_key, auto_increment = true)]
     pub id: u32,
     pub model_id: u32,
+    #[sea_orm(default_value=0)]
+    pub memory_model_id: u32,
     #[sea_orm(not_null, default_value = 0)]
     pub parent_id: u32,
     #[sea_orm(not_null, default_value = 0)]

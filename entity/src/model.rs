@@ -24,6 +24,8 @@ pub struct Model {
     pub consumed_tokens: i64,
     pub status: ModelStatus,
     pub cost: ModelCost,
+    #[sea_orm(not_null, default_value = "none")]
+    pub reasoning_effort: ReasoningEffort,
 }
 
 impl ActiveModelBehavior for ActiveModel {}
@@ -34,7 +36,7 @@ impl ActiveModelBehavior for ActiveModel {}
     db_type = "String(StringLen::None)",
     rename_all = "lowercase"
 )]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "lowercase")]
 pub enum ModelStatus {
     #[default]
     Active,
@@ -47,7 +49,7 @@ pub enum ModelStatus {
     db_type = "String(StringLen::None)",
     rename_all = "lowercase"
 )]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "lowercase")]
 pub enum ModelCost {
     #[default]
     Low,
@@ -55,3 +57,22 @@ pub enum ModelCost {
     High,
 }
 
+
+
+
+#[derive(EnumIter, DeriveActiveEnum, Clone, Serialize, Debug, Deserialize, PartialEq, Default)]
+#[sea_orm(
+    rs_type = "String",
+    db_type = "String(StringLen::None)",
+    rename_all = "lowercase"
+)]
+#[serde(rename_all = "lowercase")]
+pub enum ReasoningEffort {
+    None,
+    Minimal,
+    Low,
+    #[default]
+    Medium,
+    High,
+    Xhigh,
+}

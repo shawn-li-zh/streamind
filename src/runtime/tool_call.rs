@@ -58,6 +58,7 @@ pub async fn invoke(
         //发送完整事件
         events.push((AppEnvEventData::ToolResponse(detial), false));
     }
+    println!("call invoke done...");
     //结束
     Ok(())
 }

@@ -95,8 +95,6 @@ impl AppAgentRuntime {
             });
         }
         //
-        let ctx: Arc<AgentContext> = self.agent.context();
-        let tool_engine_context = ctx.get::<ToolEngineContext>().unwrap();
         let mut generate_worker = GenerateWorker {
             agent_id: self.agent.identity().id(),
             agent: self.agent.clone(),
@@ -106,12 +104,7 @@ impl AppAgentRuntime {
             response_sections: vec![],
             gen_sender: self.gen_sender,
             web_sender: self.agent.web_sender.clone(),
-
-            tool_engine: Arc::new(ToolEngine::new(
-                self.agent.identity(),
-                self.agent.context(),
-                tool_engine_context,
-            )),
+            tool_engine: self.agent.tool_engine.clone(),
         };
 
         tokio::spawn(async move {
@@ -126,7 +119,10 @@ impl AppAgentRuntime {
                 if let Err(e) = generate_worker.handle(event).await {
                     error!("GenerateWorker failed to handle event: {:?}", e);
                     //释放状态
-                    generate_worker.gen_sender.send(false).expect("Failed to send generation status update");
+                    generate_worker
+                        .gen_sender
+                        .send(false)
+                        .expect("Failed to send generation status update");
                     generate_worker.agent.heartbeat.in_idle();
                 }
             }

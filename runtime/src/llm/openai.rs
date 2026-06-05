@@ -22,11 +22,16 @@ pub struct OpenaiClient {
     pub model: String,
     pub client: Client<OpenAIConfig>,
     pub modals: Vec<ModelModal>,
+    pub reasoning_effort: Option<ReasoningEffort>,
 }
 #[async_trait]
 impl ChatClient for OpenaiClient {
     fn model_info(&self) -> (ModelFamily, String, Vec<ModelModal>) {
-        (ModelFamily::OpenAI, self.model.to_string(), self.modals.clone())
+        (
+            ModelFamily::OpenAI,
+            self.model.to_string(),
+            self.modals.clone(),
+        )
     }
     async fn stream(
         &self,
@@ -38,15 +43,15 @@ impl ChatClient for OpenaiClient {
             .collect();
         let request = CreateChatCompletionRequestArgs::default()
             .model(self.model.clone())
-            .reasoning_effort(ReasoningEffort::Medium)
+            .reasoning_effort(self.reasoning_effort.clone().unwrap_or(ReasoningEffort::None))
             .messages(messages)
             .build()?;
         let stream = self.client.chat().create_stream(request).await?;
         let stream = stream.map(|r| {
             r.map(|mut v| {
-                 if v.choices.is_empty() {
-                        return "".to_string();
-                    }
+                if v.choices.is_empty() {
+                    return "".to_string();
+                }
                 let text = v.choices[0].delta.content.take();
                 let refusal = v.choices[0].delta.refusal.take();
                 text.or(refusal).unwrap_or_default()

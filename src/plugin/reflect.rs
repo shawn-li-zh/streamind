@@ -32,13 +32,13 @@ pub struct Recall {
 pub struct CondReflectEngine {
     agent_id: u32,
     event_context: Arc<StackContext<AppEnvEvent>>,
-    pub reflect_engine: Arc<RuleEngine<ReflectData>>,
+    pub reflect_engine: Arc<RuleEngine>,
 }
 impl CondReflectEngine {
     pub fn new(
         agent_id: u32,
         event_context: Arc<StackContext<AppEnvEvent>>,
-        reflect_engine: RuleEngine<ReflectData>,
+        reflect_engine: RuleEngine,
     ) -> Self {
         Self {
             agent_id,
@@ -124,14 +124,13 @@ impl CondReflectEngine {
     ) -> anyhow::Result<Option<ReflectEvent>> {
         let db = DB.get().unwrap();
         //按语义匹配对应的规则域
-
         let scopes =
             entity_service::rule::page_scopes(1, 5, None, Some(element.embedding.clone())).await?;
         if scopes.is_empty() {
             return Ok(None);
         }
         let scope_ids: Vec<i64> = scopes.into_iter().map(|s| s.id).collect();
-        // 过滤掉已经触发过的
+        // 查询并过滤掉已经触发过的
         let rule_models = entity_service::rule::list_not_active_rules(scope_ids).await?;
         if rule_models.is_empty() {
             return Ok(None);
@@ -150,6 +149,7 @@ impl CondReflectEngine {
             };
             rules.push(rule);
         }
+        //触发规则
         let datas = self.reflect_engine.filter(rules, element).await?;
         if datas.is_empty() {
             return Ok(None);
@@ -157,8 +157,8 @@ impl CondReflectEngine {
         //激活规则
         let state_id = self.event_context.top_node().map(|v| v.id).unwrap_or(1);
         let rule_ids = datas.iter().map(|v| v.id).collect();
-
         entity_service::rule::activate_rules(db, state_id, rule_ids).await?;
+        //
         let event = ReflectEvent {
             source_event_id,
             level: 1,
@@ -167,12 +167,7 @@ impl CondReflectEngine {
         Ok(Some(event))
     }
 }
-pub async fn load_reflection_engine(
-    agent: &entity::agent::Model,
-) -> anyhow::Result<RuleEngine<ReflectData>> {
-    let mut groups = agent.rule_groups.0.clone();
-    groups.push("meta".into());
-    info!("加载规则组:{:?}", groups);
+pub fn build_reflect_engine() -> RuleEngine {
     let sim = Similar(Box::new(move |name: &str| {
         let name = name.to_string();
         Box::pin(async move {
@@ -181,54 +176,8 @@ pub async fn load_reflection_engine(
             Ok(vec)
         })
     }));
-    let engine: RuleEngine<ReflectData> = RuleEngine::new(sim);
-    let groups = load_rule_groups(&engine, &groups).await?;
-
-    for group in groups {
-        engine.add_rule_group(group);
-    }
-    Ok(engine)
-}
-
-pub async fn load_rule_groups(
-    engine: &RuleEngine<ReflectData>,
-    group_names: &Vec<String>,
-) -> anyhow::Result<Vec<RuleGroup<ReflectData>>> {
-    let group_models = entity_service::rule::list_groups_by_names(group_names).await?;
-    let mut map: HashMap<i64, Vec<entity::rule_item::Model>> = HashMap::new();
-    {
-        let rules = entity_service::rule::list_rules_by_group_names(group_names).await?;
-        for ele in rules {
-            map.entry(ele.scope_id).or_default().push(ele);
-        }
-    }
-
-    let mut groups: Vec<RuleGroup<ReflectData>> = vec![];
-    for group in group_models {
-        let rules = map.remove(&group.id).unwrap_or_default();
-        let exprs: Vec<&str> = rules.iter().map(|v| v.expr.as_str()).collect();
-        let exprs = engine.parses(&exprs)?;
-        let rules: Vec<Rule<_>> = rules
-            .into_iter()
-            .zip(exprs.clone())
-            .map(|(raw, expr)| Rule {
-                expr: expr,
-                data: ReflectData {
-                    id: raw.id,
-                    name: raw.name,
-                    content: raw.content,
-                },
-            })
-            .collect();
-        let group = RuleGroup {
-            name: group.name,
-
-            exprs: Arc::new(exprs),
-            rules,
-        };
-        groups.push(group);
-    }
-    Ok(groups)
+    let engine: RuleEngine = RuleEngine::new(sim);
+    engine
 }
 
 #[cfg(test)]
@@ -267,7 +216,7 @@ mod tests {
                 Ok(vec)
             })
         }));
-        let engine: RuleEngine<ReflectData> = RuleEngine::new(sim);
+        let engine: RuleEngine = RuleEngine::new(sim);
         //
         let db = DB.get().unwrap();
         for scope in scopes {

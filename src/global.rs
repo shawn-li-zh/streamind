@@ -15,6 +15,7 @@ use kernel::{
 };
 
 use parking_lot::RwLock;
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio_cron_scheduler::{Job, JobScheduler};
 
 use runtime::{
@@ -27,17 +28,25 @@ use crate::{agent::app::AppAgent, task};
 pub static AGENT_POOL: LazyLock<RwLock<HashMap<u32, Arc<AppAgent>>>> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
 
-pub static ENGINE_POOL: LazyLock<RwLock<HashMap<u32, Arc<dyn ChatClient + Sync + Send>>>> =
+pub static MODEL_POOL: LazyLock<RwLock<HashMap<u32, Arc<dyn ChatClient + Sync + Send>>>> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
 pub static TOOL_PACKAGE_TOOL: LazyLock<ToolPackagePool> = LazyLock::new(|| tool_pkg::tool_pool());
 pub(crate) static SCHEDULER: OnceLock<JobScheduler> = OnceLock::new();
 pub static EMBEDDING_CLIENT: OnceLock<Arc<dyn EmbeddingClient>> = OnceLock::new();
+
+fn convert_value<F: Serialize, T: DeserializeOwned>(
+    from: F,
+) -> std::result::Result<T, serde_json::Error> {
+    let value = serde_json::to_value(from)?;
+    let v = serde_json::from_value(value)?;
+    Ok(v)
+}
 pub async fn init() -> anyhow::Result<()> {
     // 初始化引擎
     let models = entity_service::model::query(None, None, Some(ModelStatus::Active)).await?;
     let model_ids = models.iter().map(|m| m.id).collect::<Vec<u32>>();
     for model in models {
-        let mut p = ENGINE_POOL.write();
+        let mut p = MODEL_POOL.write();
         let client = Client::with_config(
             OpenAIConfig::new()
                 .with_api_base(model.api_url.clone())
@@ -50,6 +59,7 @@ pub async fn init() -> anyhow::Result<()> {
             model: model.name.clone(),
             client,
             modals: modals,
+            reasoning_effort: convert_value(model.reasoning_effort)?,
         };
         p.insert(model.id, Arc::new(engine));
     }

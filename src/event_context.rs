@@ -22,6 +22,7 @@ pub async fn load_stack(
     identity: &AgentIdentity,
     client: Arc<dyn ChatClient>,
     ctx: &AgentContext,
+    tool_engine_context: &ToolEngineContext,
 ) -> anyhow::Result<StackContext<AppEnvEvent>> {
     let agent_id = identity.id();
     //查状态栈
@@ -49,7 +50,7 @@ pub async fn load_stack(
         arr.push(s);
     }
     //
-    let sp = build_main_system_prompt(identity, ctx);
+    let sp = build_main_system_prompt(identity, ctx, tool_engine_context);
     let stack = StackContext::new(client, sp);
     for state in states {
         let node = stack.push_node(Node {
@@ -86,8 +87,11 @@ pub static TOOL_CALL_RULE: LazyLock<String> = LazyLock::new(|| {
 pub static RENDER_RULE: LazyLock<String> =
     LazyLock::new(|| std::fs::read_to_string("prompts/common/render_rule.md").unwrap_or_default());
 
-pub fn build_main_system_prompt(identity: &AgentIdentity, ctx: &AgentContext) -> String {
-    let tool_engine_context = ctx.get::<ToolEngineContext>().unwrap();
+pub fn build_main_system_prompt(
+    identity: &AgentIdentity,
+    ctx: &AgentContext,
+    tool_engine_context: &ToolEngineContext,
+) -> String {
     let items: Vec<String> = tool_engine_context
         .tool_packages
         .iter()

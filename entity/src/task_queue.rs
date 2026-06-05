@@ -15,13 +15,14 @@ pub struct Model {
     pub payload: serde_json::Value,
     #[sea_orm(not_null)]
     pub status: TaskStatus,
+    pub error: Option<String>,
+    pub elapsed: Option<String>,
     #[sea_orm(not_null)]
     #[serde(with = "date_time")]
     pub time: chrono::DateTime<Local>,
 }
 
 impl ActiveModelBehavior for ActiveModel {}
-
 
 #[derive(EnumIter, DeriveActiveEnum, Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[sea_orm(

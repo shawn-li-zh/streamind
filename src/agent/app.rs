@@ -6,13 +6,16 @@ use entity_service::{event::event_convert, DB};
 
 use futures::FutureExt as _;
 use kernel::{
-    agent::{context::AgentContext, AgentIdentity},
+    agent::{
+        context::{self, AgentContext},
+        AgentIdentity,
+    },
     mind::{
         context::EventContext as _,
         port::{CommandEvent, MindInlet},
         stream::StreamMind,
     },
-    tool::engine::ToolEngineContext,
+    tool::engine::{ToolEngine, ToolEngineContext},
 };
 
 use reflection::engine::engine::RuleEngine;
@@ -36,7 +39,7 @@ use crate::{
         memory::MemoryAgent,
     },
     event_context::load_stack,
-    global::{AGENT_POOL, EMBEDDING_CLIENT, ENGINE_POOL},
+    global::{AGENT_POOL, EMBEDDING_CLIENT, MODEL_POOL},
     plugin::{
         authority::AgentAuthority,
         heartbeat::{Heartbeat, HeartbeatRunner},
@@ -58,6 +61,7 @@ pub struct AppAgent {
     logger: Arc<AgentLogger>,
     scheduler: Arc<AgentScheduler>,
     authority: Arc<AgentAuthority>,
+    pub tool_engine: Arc<ToolEngine>,
     pub(crate) memory_agent: Arc<MemoryAgent>,
     pub(crate) reflect_engine: CondReflectEngine,
 }
@@ -66,31 +70,42 @@ impl AppAgent {
         //chat 客户端
         let client = {
             let model_id = agent.model_id;
-            let p = ENGINE_POOL.read();
+            let p = MODEL_POOL.read();
             let client = p.get(&model_id).unwrap().clone();
             client
         };
         let (_model_family, _model_name, modals) = client.model_info();
-        //
+        //构建agent上下文
         let identity = Arc::new(build_agent_identity(&agent, modals));
-        let context = build_agent_context(&identity).await;
-        //事件上下文
-        let event_context = load_stack(identity.as_ref(), client.clone(), &context)
-            .await
-            .unwrap();
-        let event_context = Arc::new(event_context);
+        let mut context = build_agent_context(&identity).await;
         //初始化工具上下文
-        if let Some(ctx) = context.get::<ToolEngineContext>() {
-            ctx.init(context.clone());
-        }
+        let tool_engine_context = build_tool_context(&mut context, &identity);
+        let tool_engine_context = context.insert(tool_engine_context);
+        let context = Arc::new(context);
+        let tool_engine = Arc::new(ToolEngine::new(
+            identity.clone(),
+            context.clone(),
+            tool_engine_context.clone(),
+        ));
+        tool_engine_context.init(context.clone());
+
+        //事件上下文
+        let event_context = load_stack(
+            identity.as_ref(),
+            client.clone(),
+            &context,
+            &tool_engine_context,
+        )
+        .await
+        .unwrap();
+        let event_context = Arc::new(event_context);
+
         //mind
         let (stream_mind, mind_inlet, mind_outlet) = StreamMind::new(event_context.clone());
         let heartbeat = Arc::new(Heartbeat::new());
         let gen = watch::channel(false);
-        //
-
-        let reflect_engine: RuleEngine<ReflectData> =
-            reflect::load_reflection_engine(&agent).await.unwrap();
+        //初始化反射引擎
+        let reflect_engine: RuleEngine = reflect::build_reflect_engine();
         //日志
         let logger: AgentLogger = AgentLogger::new(&identity.workspace).await.unwrap();
         let logger = Arc::new(logger);
@@ -105,9 +120,17 @@ impl AppAgent {
             identity: identity.clone(),
             context: ctx,
         });
-        //记忆任务
-        let (memory_agent, memory_agent_runtime) =
-            MemoryAgent::new(identity.clone(), context.clone(), client.clone()).await;
+
+        //记忆任务agent
+        let (memory_agent, memory_agent_runtime) = {
+            let client = {
+                let model_id = agent.memory_model_id;
+                let p = MODEL_POOL.read();
+                let client = p.get(&model_id).map(|v| v.clone()).unwrap_or(client);
+                client
+            };
+            MemoryAgent::new(identity.clone(), context.clone(), client).await
+        };
         let agent = AppAgent {
             identity,
             context,
@@ -121,6 +144,7 @@ impl AppAgent {
             memory_agent,
             scheduler: scheduler.clone(),
             authority: authority.clone(),
+            tool_engine,
         };
 
         let agent = Arc::new(agent);
@@ -145,7 +169,15 @@ impl AppAgent {
 impl AppAgent {
     pub async fn send_cmd(&self, cmd: CommandEvent) -> anyhow::Result<()> {
         //发送给代理
+        let is_cancel = matches!(&cmd, CommandEvent::Cancel);
         self.mind_inlet.send(cmd).await?;
+        if is_cancel {
+            info!("cancel...");
+            self.tool_engine.stop().await;
+            self.gen_wait(false).await?
+        } else {
+            // self.gen_wait(true).await?
+        }
         Ok(())
     }
     pub async fn wait(&self, is_run: bool) -> anyhow::Result<()> {
@@ -198,15 +230,14 @@ impl AppAgent {
         }
         self.heartbeat.disable();
         info!("AgentEvent: {:?}", &env_event.data);
-        let reflection = self.reflect_engine.event_reflect(&env_event).await?;
+
         //发送给代理
         if env_event.force {
             self.send_cmd(CommandEvent::Cancel).await?;
         }
-
+        let reflection = self.reflect_engine.event_reflect(&env_event).await?;
         //等待生成完成
-        let mut gen = self.gen_watcher.lock().await;
-        gen.wait_for(|v| !*v).await?;
+        self.gen_wait(false).await?;
         //发送事件给上下文
         self.inject_event_to_context(env_event, reflection).await?;
         //开始生成
@@ -262,7 +293,7 @@ impl AppAgent {
     }
 }
 
-async fn build_agent_context(identity: &AgentIdentity) -> Arc<AgentContext> {
+async fn build_agent_context(identity: &AgentIdentity) -> AgentContext {
     let agent_id = identity.id();
     let mut context = AgentContext::new();
     //初始化工作空间
@@ -312,98 +343,100 @@ async fn build_agent_context(identity: &AgentIdentity) -> Arc<AgentContext> {
         context
     };
     context.insert(timers);
+    context
+}
+
+fn build_tool_context(context: &mut AgentContext, identity: &AgentIdentity) -> ToolEngineContext {
+    let agent_id = identity.id();
     // 工具上下文
     let ctx = build_tool_engine_context(&identity.tool_packages);
-    context.insert(ctx);
     //
     //注入相关工具
-    {
-        let injected = TimerInjected {
-            add: Box::new(move |timer| {
+    let injected = TimerInjected {
+        add: Box::new(move |timer| {
+            let agent = {
+                let p = AGENT_POOL.read();
+                p.get(&agent_id).map(|v| v.clone())
+            };
+
+            async move {
+                if let Some(agent) = agent {
+                    let id = agent.scheduler.add(timer).await?;
+                    return Ok(id);
+                }
+                anyhow::bail!("Agent not found")
+            }
+            .boxed()
+        }),
+        cancel: Box::new(move |id| {
+            let agent = {
+                let p = AGENT_POOL.read();
+                p.get(&agent_id).map(|v| v.clone())
+            };
+
+            async move {
+                if let Some(agent) = agent {
+                    let _ = agent.scheduler.cancel(id).await?;
+                    return Ok(());
+                }
+                anyhow::bail!("Agent not found")
+            }
+            .boxed()
+        }),
+        sleep: Box::new(move |dur| {
+            let agent = {
+                let p = AGENT_POOL.read();
+                p.get(&agent_id).map(|v| v.clone())
+            };
+
+            async move {
+                if let Some(agent) = agent {
+                    agent.heartbeat.disable();
+                    println!("Sleeping...");
+                    tokio::spawn(async move {
+                        tokio::time::sleep(dur).await;
+                        agent.heartbeat.in_idle();
+                        agent.heartbeat.enable();
+                        println!("Wake up...");
+                    });
+                    return Ok(());
+                }
+                anyhow::bail!("Agent not found")
+            }
+            .boxed()
+        }),
+    };
+    context.insert(injected);
+    let injected = ReflectInjected {
+        embedding: Arc::new(move |query| {
+            async move {
+                let client = EMBEDDING_CLIENT.get().unwrap();
+                let embedding = client.union_embed(vec![query.into()]).await.map_err(|e| {
+                    error!("embedding error: {}", e);
+                    anyhow::anyhow!("embedding error")
+                })?;
+                Ok(embedding)
+            }
+            .boxed()
+        }),
+
+        simplify_expr: Arc::new(move |expr| {
+            async move {
                 let agent = {
                     let p = AGENT_POOL.read();
                     p.get(&agent_id).map(|v| v.clone())
                 };
 
-                async move {
-                    if let Some(agent) = agent {
-                        let id = agent.scheduler.add(timer).await?;
-                        return Ok(id);
-                    }
-                    anyhow::bail!("Agent not found")
+                if let Some(agent) = agent {
+                    let rule_engine = agent.reflect_engine.reflect_engine.clone();
+                    let expr = rule_engine.simplify(&expr)?;
+                    return Ok(expr);
                 }
-                .boxed()
-            }),
-            cancel: Box::new(move |id| {
-                let agent = {
-                    let p = AGENT_POOL.read();
-                    p.get(&agent_id).map(|v| v.clone())
-                };
-
-                async move {
-                    if let Some(agent) = agent {
-                        let _ = agent.scheduler.cancel(id).await?;
-                        return Ok(());
-                    }
-                    anyhow::bail!("Agent not found")
-                }
-                .boxed()
-            }),
-            sleep: Box::new(move |dur| {
-                let agent = {
-                    let p = AGENT_POOL.read();
-                    p.get(&agent_id).map(|v| v.clone())
-                };
-
-                async move {
-                    if let Some(agent) = agent {
-                        agent.heartbeat.disable();
-                        println!("Sleeping...");
-                        tokio::spawn(async move {
-                            tokio::time::sleep(dur).await;
-                            agent.heartbeat.reset();
-                            agent.heartbeat.enable();
-                            println!("Wake up...");
-                        });
-                        return Ok(());
-                    }
-                    anyhow::bail!("Agent not found")
-                }
-                .boxed()
-            }),
-        };
-        context.insert(injected);
-        let injected = ReflectInjected {
-            embedding: Arc::new(move |query| {
-                async move {
-                    let client = EMBEDDING_CLIENT.get().unwrap();
-                    let embedding = client.union_embed(vec![query.into()]).await.map_err(|e| {
-                        error!("embedding error: {}", e);
-                        anyhow::anyhow!("embedding error")
-                    })?;
-                    Ok(embedding)
-                }
-                .boxed()
-            }),
-
-            simplify_expr: Arc::new(move |expr| {
-                async move {
-                    let agent = {
-                        let p = AGENT_POOL.read();
-                        p.get(&agent_id).map(|v| v.clone())
-                    };
-
-                    if let Some(agent) = agent {
-                        let rule_engine = agent.reflect_engine.reflect_engine.clone();
-                        let expr = rule_engine.simplify(&expr)?;
-                        return Ok(expr);
-                    }
-                    anyhow::bail!("Agent not found")
-                }
-                .boxed()
-            }),
-        };
-        context.insert(injected);
-    }
-    Arc::new(context)
+                anyhow::bail!("Agent not found")
+            }
+            .boxed()
+        }),
+    };
+    context.insert(injected);
+    ctx
 }

@@ -16,7 +16,7 @@ pub async fn new_task(task_type: &str, payload: serde_json::Value) -> anyhow::Re
         status: Set(TaskStatus::Pending),
         ..Default::default()
     };
-    let res=task.insert(db).await?;
+    let res = task.insert(db).await?;
     Ok(res.id)
 }
 
@@ -39,6 +39,18 @@ pub async fn update_tasks(task_ids: Vec<i64>, status: TaskStatus) -> anyhow::Res
     task_queue::Entity::update_many()
         .col_expr(task_queue::Column::Status, Expr::value(status))
         .filter(task_queue::Column::Id.is_in(task_ids))
+        .exec(db)
+        .await?;
+
+    Ok(())
+}
+
+pub async fn update_task(task_id: i64, status: TaskStatus, elpased: String) -> anyhow::Result<()> {
+    let db = DB.get().unwrap();
+    task_queue::Entity::update_many()
+        .col_expr(task_queue::Column::Status, Expr::value(status))
+        .col_expr(task_queue::Column::Elapsed, Expr::value(Some(elpased)))
+        .filter(task_queue::Column::Id.eq(task_id))
         .exec(db)
         .await?;
 

@@ -58,6 +58,7 @@ pub struct SiliconflowClient {
     pub model: String,
     pub client: Client<OpenAIConfig>,
     pub modals: Vec<ModelModal>,
+    pub reasoning_effort: Option<ReasoningEffort>,
 }
 #[async_trait]
 impl ChatClient for SiliconflowClient {
@@ -78,7 +79,7 @@ impl ChatClient for SiliconflowClient {
             .collect();
         let request: CreateChatCompletionRequest = CreateChatCompletionRequestArgs::default()
             .model(self.model.clone())
-            .reasoning_effort(ReasoningEffort::Medium)
+            .reasoning_effort(self.reasoning_effort.clone().unwrap_or(ReasoningEffort::None))
             .messages(messages)
             .stream(true)
             .build()?;

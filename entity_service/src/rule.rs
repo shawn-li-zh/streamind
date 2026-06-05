@@ -243,6 +243,7 @@ pub async fn list_not_active_rules(
     let rules = entity::rule_item::Entity::find()
         .filter(entity::rule_item::Column::ScopeId.is_in(scope_ids))
         .filter(entity::rule_item::Column::StateId.eq(0))
+        .filter(entity::rule_item::Column::ExpireTime.lt(Local::now()))
         .all(db)
         .await?;
     Ok(rules)

@@ -9,7 +9,7 @@ use axum::{
 
 use futures::Stream;
 
-use kernel::agent::AgentOutfit;
+
 use runtime::agent::event::{AppEnvEventData, InteractionData, UserMessage};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
@@ -109,7 +109,7 @@ pub async fn user_interrupt(Path(agent_id): Path<u32>) -> ApiResponse<()> {
     let event = AppEnvEventData::Interrupt("用户发起中断指令".to_string());
 
     if let Some(agent_arc) = agent_arc {
-        match agent_arc.send_event((event, false)).await {
+        match agent_arc.send_event((event, true)).await {
             Ok(_) => {
                 return ApiResponse::ok();
             }
@@ -134,7 +134,7 @@ pub async fn chat(Path(agent_id): Path<u32>, Json(msg): Json<UserMessageReq>) ->
                 content: msg.content.trim().to_string(),
                 attachments: vec![],
             }),
-            false,
+            true,
         );
         match agent_arc.send_event(event).await {
             Ok(_) => {
