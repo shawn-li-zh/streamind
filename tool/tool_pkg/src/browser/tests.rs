@@ -26,6 +26,9 @@ static JS: LazyLock<String> = LazyLock::new(|| {
     let fingerprint_cheat = std::fs::read_to_string(path).expect("Failed to read file");
     format!("{};{}", dom_view, fingerprint_cheat)
 });
+// 这是手动集成测试：会真的拉起本机 Chrome 并写死绝对路径，
+// 默认跳过。需要时执行：cargo test -p tool_pkg -- --ignored
+#[ignore = "需要本机 Chrome 与固定路径，属手动集成测试"]
 #[tokio::test]
 pub async fn test_cdp() -> anyhow::Result<()> {
     let chrome_path = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";

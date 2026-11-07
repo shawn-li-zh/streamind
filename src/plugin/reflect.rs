@@ -188,6 +188,10 @@ mod tests {
 
     use super::*;
     use std::{collections::HashMap, fs};
+    // 这不是单元测试：它会初始化真实数据库并把 sql 之外的规则写进开发库，
+    // 重复执行会撞 rule_scope.name 的唯一约束，所以默认跳过。
+    // 需要时手动执行：cargo test -p streamind --bin streamind -- --ignored
+    #[ignore = "需要真实数据库，且会写入 prompts/rule_scope.json 的内容"]
     #[tokio::test]
     pub async fn init() -> anyhow::Result<()> {
         dotenv().ok();
