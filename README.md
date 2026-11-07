@@ -346,6 +346,7 @@ cargo nextest run              # 已在 dev-dependencies 中声明
 $env:RUST_LOG="debug"; cargo run
 ```
 
+- 单元测试覆盖规则引擎、分节解析、工具调用解析、栈上下文与上传路径，全仓库 33 项；另有 2 项依赖真实环境的集成测试默认 `#[ignore]`（真实数据库 / 本机 Chrome），用 `cargo test --workspace -- --ignored` 手动执行。
 - 日志同时走 `tracing`（stdout）和 Agent 工作区文件（`workspace/<code>/log/*.txt`）。
 - 想重置 1 号 Agent 的对话：执行 `sql/reset.sql`。
 - 想重建向量索引：删掉 `vec_concept` / `vec_scope` 两张表后重启。
