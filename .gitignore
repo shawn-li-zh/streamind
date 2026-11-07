@@ -1,7 +1,22 @@
+# ===== 构建产物 =====
 /target
+
+# ===== 编辑器 =====
 /.idea
 /.vscode
-/Cargo.lock
+
+# Cargo.lock 对二进制应用应当提交，故不忽略
+
+# ===== 密钥与本地配置（严禁提交）=====
+/.env
+/.env.*
+!/.env.example
+
+# ===== 运行时数据（含 API Key、对话记录、浏览器 profile）=====
 /workspace
 /public
-
+/tempb
+*.db
+*.db-journal
+*.db-wal
+*.db-shm

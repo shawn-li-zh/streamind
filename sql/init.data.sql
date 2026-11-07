@@ -1,6 +1,12 @@
+-- 种子数据：示例模型 / Agent / 渲染组件 / 渲染依赖
+-- 注意：其中的 api_key 均为占位符，直接执行会得到无效密钥。
+-- 请先把 sql 中的 sk-REPLACE_WITH_... 换成自己的密钥，或在启动后通过
+-- 前端「模型」页 / 下面的 SQL 更新：
+--   update model set api_key = 'sk-你的密钥' where id = 1;
+
 -- 初始化测试模型
-INSERT INTO "main"."model" ("id", "name", "remark", "api_url", "api_key", "input_modals", "output_modals", "consumed_tokens", "status", "cost") VALUES (1, 'deepseek-v4-pro', '测试', 'https://api.deepseek.com', 'sk-e847b4cab3f447b9a1132ef98bfcc509', '["text"]', '["text"]', 0, 'active', 'low');
-INSERT INTO "main"."model" ("id", "name", "remark", "api_url", "api_key", "input_modals", "output_modals", "consumed_tokens", "status", "cost") VALUES (2, 'Pro/moonshotai/Kimi-K2.6', '测试', 'https://api.siliconflow.cn/v1', 'sk-kzxxmauuezefajpvtelyhmhsnetlocxwgfnjctmdwgqjopux', '["text","image"]', '["text"]', 0, 'active', 'low');
+INSERT INTO "main"."model" ("id", "name", "remark", "api_url", "api_key", "input_modals", "output_modals", "consumed_tokens", "status", "cost") VALUES (1, 'deepseek-v4-pro', '测试', 'https://api.deepseek.com', 'sk-REPLACE_WITH_YOUR_DEEPSEEK_KEY', '["text"]', '["text"]', 0, 'active', 'low');
+INSERT INTO "main"."model" ("id", "name", "remark", "api_url", "api_key", "input_modals", "output_modals", "consumed_tokens", "status", "cost") VALUES (2, 'Pro/moonshotai/Kimi-K2.6', '测试', 'https://api.siliconflow.cn/v1', 'sk-REPLACE_WITH_YOUR_SILICONFLOW_KEY', '["text","image"]', '["text"]', 0, 'active', 'low');
 INSERT INTO "main"."agent" ("id", "model_id", "parent_id", "state_id", "name", "code", "persona", "workspace", "avatar", "tool_packages", "startup_time", "create_time","status") VALUES (1, 1, 0, 1, '助手', 'main', '', 'workspace/main', 'https://api.dicebear.com/9.x/bottts/svg?scale=90&seed=助手-0.30414842228662375', '["*"]', '2026-05-11T13:55:58.760881100+08:00', '2026-05-05T16:17:28.133669800+08:00','idle');
 INSERT INTO "main"."state" ("id", "agent_id", "pos", "dumped", "title", "content", "time") VALUES (1, 1, 0, 0, '根节点', '- 工作机制:我是一个事件驱动的agent,使用rust构建
 - 原生能力:异步处理事件、动态生成和渲染ui、创建分身、栈式上下文管理
