@@ -97,6 +97,8 @@ pub async fn rewrite_manifest() -> anyhow::Result<()> {
     let imports = json! ({
          "imports": map
     });
+    // 首次运行 / 全新克隆时 public/ 可能不存在
+    std::fs::create_dir_all("./public")?;
     std::fs::write("./public/component-manifest.json", imports.to_string())?;
     Ok(())
 }

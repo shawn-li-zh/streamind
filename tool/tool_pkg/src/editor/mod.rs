@@ -13,7 +13,7 @@ pub mod collection;
 use tool_macro::package;
 
 static MODES: LazyLock<HashMap<String, Vec<String>>> =
-    LazyLock::new(|| load_mode_delimiters(r"D:\project\rust\streamind\reader\modes"));
+    LazyLock::new(|| load_mode_delimiters("reader/modes"));
 fn load_mode_delimiters(dir: &str) -> HashMap<String, Vec<String>> {
     let mut map = HashMap::new();
     let paths = file_kit::read_files(dir, "json").unwrap();

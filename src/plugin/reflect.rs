@@ -205,7 +205,7 @@ mod tests {
             expr: String,
             content: String,
         }
-        let json = fs::read_to_string(r"D:\project\rust\streamind\prompts\rule_scope.json")?;
+        let json = fs::read_to_string("prompts/rule_scope.json")?;
         let scopes = serde_json::from_str::<Vec<Scope>>(&json)?;
         //
         let sim = Similar(Box::new(move |name: &str| {
