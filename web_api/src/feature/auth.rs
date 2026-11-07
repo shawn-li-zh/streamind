@@ -18,7 +18,14 @@ use tower_governor::{governor::GovernorConfigBuilder, GovernorLayer};
 use crate::wrapper::ApiResponse;
 
 static SECRET_KEY: LazyLock<(EncodingKey, DecodingKey)> = LazyLock::new(|| {
-    let key = std::env::var("JWT_SECRET_KEY").unwrap_or_else(|_| "your_jwt_secret_key".to_string());
+    // 不再回退到内置默认值：弱密钥/占位密钥等同于没有鉴权。
+    // 由 inject_router 在启动时强制初始化，配置缺失会直接启动失败。
+    let key = std::env::var("JWT_SECRET_KEY").unwrap_or_default();
+    if key.len() < 16 || key == "your_jwt_secret_key" {
+        panic!(
+            "JWT_SECRET_KEY 未配置或强度不足（至少 16 个字符）。请在 .env 中设置随机密钥，参考 .env.example"
+        );
+    }
     let encoding_key = EncodingKey::from_secret(key.as_ref());
     let decoding_key = DecodingKey::from_secret(key.as_ref());
     (encoding_key, decoding_key)
@@ -130,6 +137,8 @@ async fn auth_middleware(
     Ok(next.run(req).await)
 }
 pub fn inject_router(mut router: Router) -> Router {
+    // 启动即校验 JWT 密钥配置，配置缺失时fail-fast，而不是等到调用登录接口才崩
+    LazyLock::force(&SECRET_KEY);
     let governor_conf = GovernorConfigBuilder::default()
         .per_second(3)
         .burst_size(1)

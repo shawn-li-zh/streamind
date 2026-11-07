@@ -2,7 +2,7 @@ use axum::Router;
 
 use tracing::info;
 use tracing_subscriber::EnvFilter;
-use web::feature::auth::LOGIN_CODE;
+use web_api::feature::auth::LOGIN_CODE;
 
 mod common;
 mod event_context;
@@ -11,12 +11,10 @@ mod plugin;
 mod runtime;
 mod sse_event;
 mod status;
-mod web_api;
+mod agent_api;
 mod agent;
 mod task;
 
-
-// mod web;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -35,13 +33,13 @@ async fn main() -> anyhow::Result<()> {
     info!("智能体运行时初始化成功!");
     //
     let port = &std::env::var("PORT").unwrap();
-    let web_service = web::Service {
-        router: web_api::inject_router(Router::new()),
+    let web_service = web_api::Service {
+        router: agent_api::inject_router(Router::new()),
         addr: format!("0.0.0.0:{port}").parse().unwrap(),
     };
     info!("Starting StreamInd AI Client");
     info!("Generated login code:\n 【 {} 】", LOGIN_CODE.as_str());
-    web::run(web_service).await?;
+    web_api::run(web_service).await?;
 
     Ok(())
 }

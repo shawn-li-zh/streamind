@@ -11,7 +11,7 @@ members = [
     "tool/tool_pkg",
     "runtime",
     "entity_service",
-    "web",
+    "web_api",
     "rule_script",
     "reflection", "mcp",
 ]
@@ -20,7 +20,7 @@ entity = { path = "entity" }
 entity_service = { path = "entity_service" }
 kernel = { path = "kernel" }
 runtime = { path = "runtime" }
-web = { path = "web" }
+web_api = { path = "web_api" }
 reflection = { path = "reflection" }
 # tool_core = { path = "tool/tool_core" }
 tool_pkg = { path = "tool/tool_pkg" }

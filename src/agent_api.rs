@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tokio_stream::{wrappers::UnboundedReceiverStream, StreamExt};
 use tracing::info;
-use web::wrapper::ApiResponse;
+use web_api::wrapper::ApiResponse;
 
 use crate::{
     agent::app::AppAgent,
