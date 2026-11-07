@@ -38,7 +38,9 @@ pub async fn solve_exprs<E: Send + Sync + 'static>(
                 Err(e) => TestValue::Error(e.to_string()),
             }
         })
-        .buffer_unordered(max_concurrency)
+        // 必须用 buffered：它并发执行但保持输入顺序。
+        // 用 buffer_unordered 会按完成先后返回，调用方按下标回填规则时会串位。
+        .buffered(max_concurrency)
         .collect::<Vec<_>>()
         .await;
     Ok(results)
@@ -104,8 +106,14 @@ async fn solve_expr<E: Send + Sync + 'static>(
                         Arithmetic::Add => left + right,
                         Arithmetic::Sub => left - right,
                         Arithmetic::Mul => left * right,
-                        Arithmetic::Div => left / right,
-                        Arithmetic::Mod => left % right,
+                        // Decimal 的 / 和 % 在除数为 0 时会 panic，规则表达式来自模型，
+                        // 不能让一条写错的规则把运行时打崩
+                        Arithmetic::Div => left
+                            .checked_div(right)
+                            .ok_or_else(|| anyhow::anyhow!("除数为 0"))?,
+                        Arithmetic::Mod => left
+                            .checked_rem(right)
+                            .ok_or_else(|| anyhow::anyhow!("取模的除数为 0"))?,
                         Arithmetic::Pow => left.powf(right.as_f64()),
                     };
                     TestValue::Number(num)

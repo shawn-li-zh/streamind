@@ -254,8 +254,10 @@ impl GenerateWorker {
                         .await?;
                 }
                 {
+                    // 配置写错不应该 panic，退回默认值即可
                     let limit = std::env::var("CONTEXT_SIZE_LIMIT")
-                        .map(|v| usize::from_str_radix(&v, 10).unwrap())
+                        .ok()
+                        .and_then(|v| v.trim().parse::<usize>().ok())
                         .unwrap_or(1024 * 1024);
                     let size = self.agent.event_context().size();
                     if size > limit {

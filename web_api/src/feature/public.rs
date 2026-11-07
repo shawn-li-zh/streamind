@@ -1,5 +1,5 @@
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Component, Path as FsPath, PathBuf};
 
 use axum::body::Bytes;
 use axum::{Router, extract::Path};
@@ -15,12 +15,12 @@ async fn upload(
     let base_dir = PathBuf::from(PUBLIC_DIR);
 
     // 2. 安全性检查：防止路径穿越 (例如 ../../etc/passwd)
-
-    // 3. 构建完整路径
-    let full_path = base_dir.join(&path);
-    if !full_path.starts_with(base_dir) {
-        return ApiResponse::error("非法路径");
-    }
+    //    注意：starts_with 是逐段比较的，"public/../x" 依然以 "public" 开头，
+    //    所以必须先拒绝 ..、根和盘符，光靠 starts_with 拦不住
+    let full_path = match resolve_upload_path(PUBLIC_DIR, &path) {
+        Some(p) => p,
+        None => return ApiResponse::error("非法路径"),
+    };
     // 4. 确保父目录存在 (例如 aa/ 目录)
     if let Some(parent) = full_path.parent() {
         match std::fs::create_dir_all(parent) {
@@ -131,4 +131,49 @@ pub fn inject_router(mut router: Router) -> Router {
         .append_index_html_on_directories(true);
     router = router.nest_service("/public", serve_dir);
     router
+}
+/// 把上传请求里的相对路径安全地拼到根目录下。
+/// 拒绝绝对路径、盘符以及任何 `..` 片段，允许 `.` 与普通的嵌套目录。
+fn resolve_upload_path(base: &str, path: &str) -> Option<PathBuf> {
+    let rel = FsPath::new(path);
+    let mut has_file = false;
+    for comp in rel.components() {
+        match comp {
+            Component::Normal(_) => has_file = true,
+            Component::CurDir => {}
+            // ParentDir / RootDir / Prefix(盘符) 一律拒绝
+            _ => return None,
+        }
+    }
+    if !has_file {
+        return None;
+    }
+    let base_dir = PathBuf::from(base);
+    let full = base_dir.join(rel);
+    if !full.starts_with(&base_dir) {
+        return None;
+    }
+    Some(full)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_upload_path;
+
+    #[test]
+    fn upload_path_rejects_traversal() {
+        assert!(resolve_upload_path("./public", "../evil.txt").is_none());
+        assert!(resolve_upload_path("./public", "components/../../evil.txt").is_none());
+        assert!(resolve_upload_path("./public", "/etc/passwd").is_none());
+        assert!(resolve_upload_path("./public", "C:/Windows/system32").is_none());
+        assert!(resolve_upload_path("./public", "").is_none());
+    }
+
+    #[test]
+    fn upload_path_accepts_normal_paths() {
+        let p = resolve_upload_path("./public", "components/ImageList/index.js").unwrap();
+        assert!(p.ends_with("components/ImageList/index.js") || p.ends_with("components\\ImageList\\index.js"));
+        // "./a.png" 这种写法也要能落地
+        assert!(resolve_upload_path("./public", "./a.png").is_some());
+    }
 }

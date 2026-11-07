@@ -200,4 +200,77 @@ mod tests {
         let res = engine.simplify(expr, &HashMap::new()).unwrap();
         assert_eq!(&res, r#"true"#);
     }
+
+    /// 带延迟的谓词：用于验证批量求解结果的顺序与输入顺序一致
+    struct Echo;
+    #[async_trait]
+    impl Predicate<Element> for Echo {
+        fn name(&self) -> &'static str {
+            "echo"
+        }
+        async fn test(&self, _element: &Element, args: &[ArgValue]) -> anyhow::Result<TestValue> {
+            let n = args[0].clone().must_number()?;
+            let millis: u64 = n.to_string().parse().unwrap_or(0);
+            tokio::time::sleep(std::time::Duration::from_millis(millis * 20)).await;
+            Ok(TestValue::Number(n))
+        }
+    }
+
+    #[tokio::test]
+    async fn test_solve_order_follows_input() {
+        let mut engine = init_engine();
+        engine.register_predicate(Echo);
+        let engine = Arc::new(engine);
+        let element = Arc::new(init_element());
+        // 耗时递减：如果按完成顺序返回，结果会变成 [1, 2, 3]
+        let exprs = vec![to_expr("echo(3)"), to_expr("echo(1)"), to_expr("echo(2)")];
+        let res = engine.solves(&exprs, element).await.unwrap();
+        let nums: Vec<u64> = res
+            .iter()
+            .map(|v| match v {
+                TestValue::Number(n) => n.to_string().parse().unwrap(),
+                other => panic!("期望数字，实际 {other:?}"),
+            })
+            .collect();
+        assert_eq!(nums, vec![3, 1, 2]);
+    }
+
+    #[tokio::test]
+    async fn test_division_by_zero_does_not_panic() {
+        let engine = Arc::new(init_engine());
+        let element = Arc::new(init_element());
+        for src in ["age() / 0", "age() % 0"] {
+            let res = engine
+                .clone()
+                .solves(&vec![to_expr(src)], element.clone())
+                .await
+                .unwrap();
+            assert!(
+                matches!(res[0], TestValue::Error(_)),
+                "{src} 应该返回错误而不是 panic"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_arithmetic_and_precedence() {
+        let engine = Arc::new(init_engine());
+        let element = Arc::new(init_element());
+        let cases = [
+            ("1 + 2 * 3 == 7", true),
+            ("(1 + 2) * 3 == 9", true),
+            ("10 / 4 == 2.5", true),
+            ("!true | true", true),
+            ("!true & true", false),
+            ("age() >= 18 & age() < 60", true),
+        ];
+        for (src, expected) in cases {
+            let res = engine
+                .clone()
+                .solves(&vec![to_expr(src)], element.clone())
+                .await
+                .unwrap();
+            assert_eq!(res[0], TestValue::Bool(expected), "{src}");
+        }
+    }
 }

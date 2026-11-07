@@ -112,6 +112,10 @@ impl<E> MindNode<E> {
         let mut c = self.content.write();
         *c = content;
         self.events.write().clear();
+        // 事件已清空，size 必须一起归零；否则之后 pop 时会按旧值重复扣减，
+        // 导致 StackContext::content_size 下溢成天文数字，触发「上下文溢出」中断
+        self.content_size
+            .store(0, std::sync::atomic::Ordering::Relaxed);
     }
 }
 impl<E: EnvEvent> MindNode<E> {
@@ -164,12 +168,29 @@ impl<E> StackContext<E> {
         nodes.push(arc_node.clone());
         arc_node
     }
+    /// 重置栈顶节点：先把该节点占用的体积从上下文里扣掉，再清空事件
+    pub fn reset_top_node(&self, content: String) -> Option<Arc<MindNode<E>>> {
+        let node = self.top_node()?;
+        let size = node.size();
+        let current = self.content_size.load(std::sync::atomic::Ordering::Relaxed);
+        self.content_size.store(
+            current.saturating_sub(size),
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        node.reset(content);
+        Some(node)
+    }
+
     pub fn pop_node(&self) -> Option<Arc<MindNode<E>>> {
         let mut nodes = self.nodes.write();
         if let Some(node) = nodes.pop() {
             let size = node.size();
-            self.content_size
-                .fetch_sub(size, std::sync::atomic::Ordering::Relaxed);
+            // 用饱和减法而不是 fetch_sub：计数值万一偏小也不会下溢成 usize::MAX
+            let current = self.content_size.load(std::sync::atomic::Ordering::Relaxed);
+            self.content_size.store(
+                current.saturating_sub(size),
+                std::sync::atomic::Ordering::Relaxed,
+            );
             return Some(node);
         }
         None
@@ -246,4 +267,96 @@ pub enum StackCommand {
     Push(Node),
     Reset(String),
     Pop(String),
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kernel::mind::context::EventContext;
+    use kernel::model::{ModelFamily, ModelModal};
+
+    struct DummyClient;
+
+    #[async_trait]
+    impl ChatClient for DummyClient {
+        fn model_info(&self) -> (ModelFamily, String, Vec<ModelModal>) {
+            (ModelFamily::OpenAI, "dummy".to_string(), vec![])
+        }
+        async fn stream(&self, _messages: Vec<RoleMessage>) -> anyhow::Result<ChunkStream> {
+            anyhow::bail!("测试环境不应真的调用模型")
+        }
+    }
+
+    #[derive(Clone)]
+    struct DummyEvent(String);
+
+    impl EnvEvent for DummyEvent {
+        fn to_message(&self) -> RoleMessage {
+            RoleMessage::System(vec![self.0.clone().into()])
+        }
+        fn size(&self) -> usize {
+            self.0.len()
+        }
+    }
+
+    fn node(id: i64, pos: usize) -> Node {
+        Node {
+            id,
+            pos,
+            title: format!("node-{id}"),
+            content: String::new(),
+        }
+    }
+
+    fn stack() -> StackContext<DummyEvent> {
+        StackContext::new(Arc::new(DummyClient), "system".to_string())
+    }
+
+    #[test]
+    fn reset_clears_node_size() {
+        let n = MindNode::new(node(1, 0));
+        n.push(DummyEvent("hello".into()));
+        n.push(DummyEvent("world".into()));
+        assert_eq!(n.size(), 10);
+        assert_eq!(n.len(), 2);
+
+        n.reset("重置".to_string());
+
+        assert_eq!(n.size(), 0, "reset 之后 size 必须归零");
+        assert_eq!(n.len(), 0);
+        assert_eq!(n.content.read().as_str(), "重置");
+    }
+
+    #[test]
+    fn stack_size_accounting_survives_reset_and_pop() {
+        let stack = stack();
+        stack.push_node(node(1, 0));
+        stack.push_event(DummyEvent("abc".into()));
+        assert_eq!(stack.size(), 3);
+
+        stack.push_node(node(2, 1));
+        stack.push_event(DummyEvent("defg".into()));
+        assert_eq!(stack.size(), 7);
+
+        stack.reset_top_node("重置".to_string());
+        assert_eq!(stack.size(), 3, "reset 必须扣减栈顶节点占用的体积");
+
+        stack.pop_node();
+        assert_eq!(stack.size(), 3);
+
+        stack.pop_node();
+        assert_eq!(stack.size(), 0);
+    }
+
+    #[test]
+    fn pop_never_underflows() {
+        let stack = stack();
+        stack.push_node(node(1, 0));
+        stack.push_event(DummyEvent("abc".into()));
+        // 人为把计数改小，模拟历史统计偏差
+        stack
+            .content_size
+            .store(0, std::sync::atomic::Ordering::Relaxed);
+        stack.pop_node();
+        assert_eq!(stack.size(), 0, "计数不能下溢成 usize::MAX");
+    }
 }

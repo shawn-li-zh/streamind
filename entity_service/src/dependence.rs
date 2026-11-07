@@ -73,6 +73,26 @@ pub async fn remove(id: i32) -> anyhow::Result<()> {
     rewrite_manifest().await?;
     Ok(())
 }
+/// 比较点分版本号：`1.10.0` 必须大于 `1.9.0`，
+/// 直接用字符串比较会得出相反结论，从而选错「最新版本」
+pub(crate) fn compare_version(a: &str, b: &str) -> std::cmp::Ordering {
+    fn key(v: &str) -> Vec<u64> {
+        v.split(['.', '-', '+', '_'])
+            .map(|s| s.trim().parse::<u64>().unwrap_or(0))
+            .collect()
+    }
+    let (ka, kb) = (key(a), key(b));
+    for i in 0..ka.len().max(kb.len()) {
+        let x = ka.get(i).copied().unwrap_or(0);
+        let y = kb.get(i).copied().unwrap_or(0);
+        match x.cmp(&y) {
+            std::cmp::Ordering::Equal => {}
+            other => return other,
+        }
+    }
+    std::cmp::Ordering::Equal
+}
+
 pub async fn rewrite_manifest() -> anyhow::Result<()> {
     let db = DB.get().unwrap();
     let models = entity::render_dependence::Entity::find().all(db).await?;
@@ -87,7 +107,7 @@ pub async fn rewrite_manifest() -> anyhow::Result<()> {
     });
     let mut map = HashMap::new();
     for (name, mut models) in groups {
-        models.sort_by(|a, b| b.version.cmp(&a.version));
+        models.sort_by(|a, b| compare_version(&b.version, &a.version));
         let max = models.first().unwrap();
         map.insert(name, max.path.clone());
         for model in models {
@@ -148,5 +168,25 @@ pub async fn download_to_local(id: i32) -> anyhow::Result<()> {
         Ok(())
     } else {
         anyhow::bail!("Dependence not found");
+    }
+}
+#[cfg(test)]
+mod tests {
+    use std::cmp::Ordering::*;
+
+    use super::compare_version;
+
+    #[test]
+    fn version_compare_is_numeric_not_lexical() {
+        // 字符串比较会把 "1.9.0" 判为更大
+        assert_eq!(compare_version("1.10.0", "1.9.0"), Greater);
+        assert_eq!(compare_version("1.9.0", "1.10.0"), Less);
+        assert_eq!(compare_version("2.0.0", "10.0.0"), Less);
+        assert_eq!(compare_version("3.2.25", "3.2.25"), Equal);
+        // 段数不同时缺省段按 0 处理
+        assert_eq!(compare_version("1.0", "1.0.0"), Equal);
+        assert_eq!(compare_version("1.0.1", "1.0"), Greater);
+        // 非数字段（预发布标识）按 0 处理，不应 panic
+        assert_eq!(compare_version("1.0.0-beta", "1.0.0"), Equal);
     }
 }

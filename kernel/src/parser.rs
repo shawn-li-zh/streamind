@@ -78,16 +78,19 @@ pub fn parse_args(
 }
 
 pub fn parse_xml(xml: &str) -> anyhow::Result<(String, HashMap<String, serde_json::Value>)> {
-    if !(xml.starts_with("<") && xml.ends_with("/>")) {
+    let xml = xml.trim();
+    if !(xml.starts_with('<') && xml.ends_with("/>")) {
         anyhow::bail!("无效的组件标签语法:{xml}");
     }
     let inner = xml[1..xml.len() - 2].trim();
-    let (name, attr_str) = match inner.split_once(" ") {
-        Some((n, last)) => (n.trim(), last.trim()),
-        None => {
-            anyhow::bail!("缺失title属性");
-        }
+    // 标签名与属性之间可以是任意空白，也允许完全没有属性（<Foo/>）
+    let (name, attr_str) = match inner.find(char::is_whitespace) {
+        Some(idx) => (inner[..idx].trim(), inner[idx..].trim()),
+        None => (inner, ""),
     };
+    if name.is_empty() {
+        anyhow::bail!("无效的组件标签语法:{xml}");
+    }
     let name = name.to_string();
     let attrs = parse_attrs(attr_str);
     Ok((name, attrs))
@@ -105,8 +108,10 @@ fn split_top_level(s: &str, delimiter: char) -> anyhow::Result<Vec<String>> {
 
     for i in 0..chars.len() {
         match chars[i] {
-            '"' if i == 0 || chars[i - 1] != '\\' => in_quotes1 = !in_quotes1,
-            '\'' if i == 0 || chars[i - 1] != '\\' => in_quotes2 = !in_quotes2,
+            // 注意：只有当另一种引号未开启时才切换状态，
+            // 否则 expr='a="b' 这种「单引号里含奇数个双引号」的参数会被判成引号不匹配
+            '"' if !in_quotes2 && (i == 0 || chars[i - 1] != '\\') => in_quotes1 = !in_quotes1,
+            '\'' if !in_quotes1 && (i == 0 || chars[i - 1] != '\\') => in_quotes2 = !in_quotes2,
             _ if in_quotes1 || in_quotes2 => continue, // 引号内忽略任何符号
             '{' => depth_brace += 1,
             '}' => depth_brace -= 1,
@@ -228,9 +233,19 @@ fn extract_raw_value(s: &str) -> (&str, &str) {
         }
         // 场景 3: 裸字符 (如 boolean、数字、或者无引号字符串，遇到空格或标签结尾 `>` `/` 停止)
         _ => {
-            let end = s
-                .find(|c: char| c.is_whitespace() || c == '>' || c == '/')
-                .unwrap_or(s.len());
+            // 裸值：遇到空白或 '>' 结束；'/' 只有构成自闭合 "/>" 时才算结束，
+            // 否则 path=/public/a.png 会被截成空串
+            let mut end = s.len();
+            for (i, c) in s.char_indices() {
+                if c.is_whitespace() || c == '>' {
+                    end = i;
+                    break;
+                }
+                if c == '/' && s[i + c.len_utf8()..].starts_with('>') {
+                    end = i;
+                    break;
+                }
+            }
             (&s[..end], &s[end..])
         }
     }
@@ -238,23 +253,15 @@ fn extract_raw_value(s: &str) -> (&str, &str) {
 
 #[cfg(test)]
 mod test {
-    use std::backtrace::Backtrace;
-
     use crate::parser;
 
     #[test]
     fn test_call() -> anyhow::Result<()> {
         let raw = r#"pkg.tool(a=1,   b={"inner":[1,2,3]},c=[1,2,{"a":{"b":1}}],d="str\"",e=true,f=false,g=1.3)"#;
 
-        match parser::parse_call(raw) {
-            Ok((pkg, func, map)) => {
-                println!("解析成功: {} {func} {:?} ", pkg.unwrap_or_default(), map);
-            }
-            Err(e) => {
-                let bt = Backtrace::capture();
-                eprintln!("错误: {:?}\n{:?}", e, bt)
-            }
-        }
+        // 这两个用例来自真实模型输出，必须能解析（原来只打印，失败也不会让测试挂掉）
+        let (pkg, func, args) = parser::parse_call(raw).expect("真实工具调用应当解析成功");
+        println!("解析成功: {:?} {func} {:?}", pkg, args);
         Ok(())
     }
     #[test]
@@ -262,15 +269,9 @@ mod test {
         let raw = r#"reflect.save_rule(group_id=4, name="ImageList本地图片前缀提醒", expr='similar("ImageList本地图片渲染规则") > 0.7 & event_type_is("userRequest")', content="您正在使用 ImageList 组件渲染本地图片，请记得在 src 路径前加上 public/ 前缀，如 src='/public/photo.png'，否则生产环境将无法加载。")
 "#;
 
-        match parser::parse_call(raw) {
-            Ok((pkg, func, map)) => {
-                println!("解析成功: {} {func} {:?} ", pkg.unwrap_or_default(), map);
-            }
-            Err(e) => {
-                let bt = Backtrace::capture();
-                eprintln!("错误: {:?}\n{:?}", e, bt)
-            }
-        }
+        // 这两个用例来自真实模型输出，必须能解析（原来只打印，失败也不会让测试挂掉）
+        let (pkg, func, args) = parser::parse_call(raw).expect("真实工具调用应当解析成功");
+        println!("解析成功: {:?} {func} {:?}", pkg, args);
         Ok(())
     }
 
@@ -311,5 +312,78 @@ mod test {
         );
 
         println!("解析成功: 标签 {}, 属性: {:#?}", tag_name, attrs);
+    }
+
+    #[test]
+    fn test_parse_call_nested_values() {
+        let raw = r#"pkg.tool(a=1, b={"inner":[1,2,3]}, c=[1,2,{"a":{"b":1}}], d="x, y", e=true, f=1.5)"#;
+        let (pkg, func, args) = super::parse_call(raw).unwrap();
+        assert_eq!(pkg, Some("pkg"));
+        assert_eq!(func, "tool");
+        assert_eq!(args["a"], serde_json::json!(1));
+        assert_eq!(args["b"]["inner"][2], serde_json::json!(3));
+        assert_eq!(args["c"][2]["a"]["b"], serde_json::json!(1));
+        // 引号里的逗号不能当分隔符
+        assert_eq!(args["d"], serde_json::json!("x, y"));
+        assert_eq!(args["e"], serde_json::json!(true));
+        assert_eq!(args["f"], serde_json::json!(1.5));
+    }
+
+    #[test]
+    fn test_parse_call_without_package() {
+        let (pkg, func, args) = super::parse_call("plain(a=1)").unwrap();
+        assert_eq!(pkg, None);
+        assert_eq!(func, "plain");
+        assert_eq!(args["a"], serde_json::json!(1));
+    }
+
+    #[test]
+    fn test_parse_call_odd_double_quote_in_single_quoted_arg() {
+        // 单引号参数里出现奇数个双引号时，不能误判为「引号不匹配」
+        let raw = r#"reflect.save_rule(expr='a="b', n=1)"#;
+        let (_, func, args) = super::parse_call(raw).unwrap();
+        assert_eq!(func, "save_rule");
+        assert_eq!(args["expr"], serde_json::json!("a=\"b"));
+        assert_eq!(args["n"], serde_json::json!(1));
+    }
+
+    #[test]
+    fn test_parse_call_invalid_input() {
+        assert!(super::parse_call("").is_err());
+        assert!(super::parse_call("timer.sleep 1m").is_err());
+        assert!(super::parse_call("timer.sleep(a=1").is_err()); // 括号不匹配
+    }
+
+    #[test]
+    fn test_parse_attrs_mixed_types() {
+        let mut attrs = super::parse_attrs(
+            r#"id="a1" disabled title='中文 标题' code={"a":[1,2]} path=/public/a.png"#,
+        );
+        assert_eq!(attrs.remove("id").unwrap(), serde_json::json!("a1"));
+        // 无等号的属性视为布尔标记
+        assert_eq!(attrs.remove("disabled").unwrap(), serde_json::json!(true));
+        assert_eq!(attrs.remove("title").unwrap(), serde_json::json!("中文 标题"));
+        assert_eq!(attrs.remove("code").unwrap(), serde_json::json!({"a":[1,2]}));
+        // 裸值里的 / 不能被当成标签结束符
+        assert_eq!(attrs.remove("path").unwrap(), serde_json::json!("/public/a.png"));
+        assert!(attrs.is_empty(), "出现了多余的键: {:?}", attrs);
+    }
+
+    #[test]
+    fn test_parse_xml_variants() {
+        // 无属性
+        let (name, attrs) = super::parse_xml("<Foo/>").unwrap();
+        assert_eq!(name, "Foo");
+        assert!(attrs.is_empty());
+
+        // 换行分隔的属性
+        let (name, attrs) = super::parse_xml("<Bar\n a=\"1\" />").unwrap();
+        assert_eq!(name, "Bar");
+        assert_eq!(attrs["a"], serde_json::json!("1"));
+
+        // 非法语法：未自闭合、没有尖括号
+        assert!(super::parse_xml("<Foo>").is_err());
+        assert!(super::parse_xml("Foo").is_err());
+        assert!(super::parse_xml("</>").is_err());
     }
 }

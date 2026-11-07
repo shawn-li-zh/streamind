@@ -75,7 +75,8 @@ pub async fn handle_stack_commands(
                         .boxed()
                     })
                     .await?;
-                    top_node.reset(content);
+                    // 用 reset_top_node 而不是 top_node.reset，把体积统计一起扣掉
+                    stack.reset_top_node(content);
                 } else {
                     anyhow::bail!("栈顶不存在")
                 }
