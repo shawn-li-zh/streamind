@@ -489,3 +489,143 @@ pub use config::{ESCAPE_CHARS, SectionTag, TAGS};
 pub use events::{Event, Section};
 pub use parser::SectionParser;
 pub use stream::section_stream;
+#[cfg(test)]
+mod tests {
+    use super::{TAGS, events::Event, parser::SectionParser};
+
+    /// 把事件序列压成便于断言的字符串
+    fn trace(events: Vec<Event>) -> Vec<String> {
+        events
+            .into_iter()
+            .map(|e| match e {
+                Event::Start => "start".to_string(),
+                Event::Open(tag, head) => format!("open:{}:{}", tag.name, head),
+                Event::Chunk(tag, chunk) => format!("chunk:{}:{}", tag.name, chunk),
+                Event::Close(tag, content) => format!("close:{}:{}", tag.name, content),
+                Event::End => "end".to_string(),
+                Event::Error(e) => format!("error:{e}"),
+            })
+            .collect()
+    }
+
+    fn feed(chunks: &[&str]) -> Vec<String> {
+        let mut parser = SectionParser::new(&TAGS, 20);
+        let mut out = Vec::new();
+        for chunk in chunks {
+            out.extend(trace(parser.push(chunk)));
+        }
+        out.extend(trace(parser.finish()));
+        out
+    }
+
+    /// 只取所有 Close 事件（分节最终内容）
+    fn closed(events: &[String]) -> Vec<String> {
+        events
+            .iter()
+            .filter(|e| e.starts_with("close:"))
+            .cloned()
+            .collect()
+    }
+
+    #[test]
+    fn plain_text_becomes_reply() {
+        let events = feed(&["hello"]);
+        assert_eq!(
+            events,
+            vec!["open:reply:", "close:reply:hello", "end"],
+            "没有标签的纯文本应当作为 reply 分节输出"
+        );
+    }
+
+    #[test]
+    fn think_section_is_split_out() {
+        let events = feed(&["<think>let me see</think>"]);
+        assert_eq!(
+            events,
+            vec![
+                "open:think:<think>",
+                "chunk:think:let me see",
+                "close:think:let me see",
+                "end",
+            ]
+        );
+    }
+
+    #[test]
+    fn tag_split_across_chunks() {
+        // 标签头被切到两个 chunk 里也必须能识别
+        let events = feed(&["<thi", "nk>abc</think>"]);
+        assert_eq!(
+            events,
+            vec![
+                "open:think:<think>",
+                "chunk:think:abc",
+                "close:think:abc",
+                "end",
+            ]
+        );
+    }
+
+    #[test]
+    fn tool_call_head_keeps_attributes() {
+        let events = feed(&[r#"<tool_call id="a1">timer.sleep(time="1m")</tool_call>"#]);
+        assert_eq!(events[0], r#"open:tool_call:<tool_call id="a1">"#);
+        assert_eq!(events[1], r#"chunk:tool_call:timer.sleep(time="1m")"#);
+        assert_eq!(events[2], r#"close:tool_call:timer.sleep(time="1m")"#);
+    }
+
+    #[test]
+    fn escaped_tag_is_plain_text() {
+        // 被反引号包裹的 <think> 只是在描述协议，不能真的开启分节
+        let events = feed(&["use `<think>` in prompt"]);
+        assert!(
+            events.iter().all(|e| !e.starts_with("open:think")),
+            "转义后的标签不应生效: {events:?}"
+        );
+        assert!(
+            events.iter().any(|e| e.contains("`<think>`")),
+            "标签应原样保留在文本中: {events:?}"
+        );
+    }
+
+    #[test]
+    fn text_before_tag_becomes_reply() {
+        let events = feed(&["你好<reply>世界</reply>"]);
+        assert_eq!(closed(&events), vec!["close:reply:你好", "close:reply:世界"]);
+        assert_eq!(events.last().unwrap(), "end");
+    }
+
+    #[test]
+    fn finish_closes_unterminated_section() {
+        // 模型没写闭合标签就结束流，也要把内容吐出来
+        let events = feed(&["<think>abc"]);
+        assert_eq!(
+            events,
+            vec![
+                "open:think:<think>",
+                "close:think:abc",
+                "end",
+            ]
+        );
+    }
+
+    #[test]
+    fn parser_is_reusable_after_finish() {
+        let mut parser = SectionParser::new(&TAGS, 20);
+
+        let mut first = trace(parser.push("<think>a</think>"));
+        first.extend(trace(parser.finish()));
+        assert_eq!(
+            first,
+            vec!["open:think:<think>", "chunk:think:a", "close:think:a", "end"]
+        );
+
+        // finish 之后状态应完全重置，可以接着解析下一个流
+        let mut second = trace(parser.push("<reply>b</reply>"));
+        second.extend(trace(parser.finish()));
+        assert_eq!(
+            second,
+            vec!["open:reply:<reply>", "chunk:reply:b", "close:reply:b", "end"]
+        );
+    }
+}
