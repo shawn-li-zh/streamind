@@ -1,0 +1,53 @@
+# 持续集成模板：Rust 检查/测试 + 两个前端的构建
+# 说明：cargo 部分在 windows-latest 上跑（与开发环境一致，SQLite 走 bundled 编译）；
+#      若项目后续迁到 Linux 部署，注意 browser 工具与路径相关逻辑需要验证。
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  rust:
+    name: Rust / check & test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo check
+        run: cargo check --workspace
+      - name: cargo test
+        run: cargo test --workspace
+
+  web:
+    name: Web / build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: "10"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: |
+            web_ui/pnpm-lock.yaml
+            web_render/pnpm-lock.yaml
+
+      - name: 安装控制台依赖
+        working-directory: web_ui
+        run: pnpm install --frozen-lockfile
+      - name: 构建控制台
+        working-directory: web_ui
+        run: pnpm run build-only
+
+      - name: 安装渲染组件依赖
+        working-directory: web_render
+        run: pnpm install --frozen-lockfile
+      - name: 构建渲染组件
+        working-directory: web_render
+        run: pnpm run build-render -- --all

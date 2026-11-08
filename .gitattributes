@@ -1,0 +1,22 @@
+# 仓库内统一以 LF 存储，工作区由 core.autocrlf / .editorconfig 决定
+* text=auto
+
+# Windows 脚本保留 CRLF，避免 cmd/pwsh 解析异常
+*.ps1 text eol=crlf
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# 二进制文件不做换行转换
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.eot binary
+*.db binary
+*.exe binary
+*.zip binary
