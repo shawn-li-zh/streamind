@@ -5,7 +5,7 @@
   >
     <div class="h-16 border-b flex items-center justify-center text-white font-bold">
       <el-image :src="logo" fit="cover" class="size-14"></el-image>
-      {{ isCollapse ? '' : 'Streamind' }}
+      {{ isCollapse ? '' : 'streamind' }}
     </div>
 
     <!-- router: 开启路由模式 -->

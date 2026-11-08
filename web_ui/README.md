@@ -1,4 +1,4 @@
-# web_ui — StreamInd 控制台
+# web_ui — streamind 控制台
 
 Vue 3 + Vite + Pinia + Element Plus / TDesign 的单页应用，负责对话、过程可视化、Agent / 模型 / 渲染组件管理。
 

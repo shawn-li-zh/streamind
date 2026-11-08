@@ -37,7 +37,7 @@
         <h1
           class="text-4xl font-black tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-gray-900 to-gray-600 dark:from-white dark:to-gray-300"
         >
-          Streamind
+          streamind
         </h1>
         <p class="mt-3 text-sm font-medium text-gray-500 dark:text-gray-400">
           Agent Framework · 智能节点接入

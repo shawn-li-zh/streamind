@@ -37,7 +37,7 @@ async fn main() -> anyhow::Result<()> {
         router: agent_api::inject_router(Router::new()),
         addr: format!("0.0.0.0:{port}").parse().unwrap(),
     };
-    info!("Starting StreamInd AI Client");
+    info!("Starting streamind AI Client");
     info!("Generated login code:\n 【 {} 】", LOGIN_CODE.as_str());
     web_api::run(web_service).await?;
 

@@ -1,7 +1,7 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-    StreamInd 一键打包脚本。
+    streamind 一键打包脚本。
 
 .DESCRIPTION
     依次构建：
@@ -98,7 +98,7 @@ $PackageName = "streamind-$Version-windows-$Arch"
 $OutRoot = Join-Path $Root $OutDir
 $StageDir = Join-Path $OutRoot $PackageName
 
-Write-Host 'StreamInd 打包' -ForegroundColor Green
+Write-Host 'streamind 打包' -ForegroundColor Green
 Write-Host "  版本 : $Version"
 Write-Host "  平台 : windows-$Arch"
 Write-Host "  产物 : $StageDir"
@@ -187,7 +187,7 @@ if (-not (Test-Path '.env')) {
     exit 1
 }
 
-Write-Host '启动 StreamInd，随后访问 http://localhost:3000 （登录码见下方日志）' -ForegroundColor Cyan
+Write-Host '启动 streamind，随后访问 http://localhost:3000 （登录码见下方日志）' -ForegroundColor Cyan
 & "$PSScriptRoot/streamind.exe"
 '@
 Set-Content -Path (Join-Path $StageDir 'start.ps1') -Value $StartScript -Encoding UTF8
