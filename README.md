@@ -1,423 +1,387 @@
 <div align="center">
+  <img src="docs/assets/logo.png" width="128" alt="streamind" />
 
-# StreamInd
+  <h1>streamind</h1>
 
-**用 Rust 写的事件驱动 AI Agent 运行时**
+  <p><b>事件驱动的 AI Agent 运行时</b></p>
+  <p><sub>LLM 是常驻进程，不是一问一答的接口</sub></p>
 
-Rust 2024 · Axum · SQLite + sqlite-vec · SSE · 远程渲染组件
+  <p>
+    <img alt="rust" src="https://img.shields.io/badge/Rust-1.85%2B-000000?logo=rust&logoColor=white">
+    <img alt="axum" src="https://img.shields.io/badge/axum-0.8-2f6f9f">
+    <img alt="sqlite" src="https://img.shields.io/badge/SQLite-sqlite--vec-003B57?logo=sqlite&logoColor=white">
+    <img alt="vue" src="https://img.shields.io/badge/Vue-3-42b883?logo=vuedotjs&logoColor=white">
+    <img alt="license" src="https://img.shields.io/badge/license-TBD-lightgrey">
+  </p>
 
+  <p>
+    <a href="#快速开始">快速开始</a> ·
+    <a href="#事件循环">事件循环</a> ·
+    <a href="#模型输出协议">输出协议</a> ·
+    <a href="#前端">前端</a> ·
+    <a href="#打包与部署">打包</a> ·
+    <a href="#安全须知">安全须知</a>
+  </p>
 </div>
 
 ---
 
-> **状态：早期开发中（0.1.0）。** 数据表由实体自动同步，HTTP 接口与提示词协议仍在快速演进，本文档以当前代码为准。
-> 文档与代码不一致时，请以代码为第一手资料，并顺手修正文档。
+streamind 把大模型当作一个**长期运行的进程**：用户输入、定时器、工具结果、心跳、异常都是**事件**，
+进入队列后由 Agent 在「流」里消费；模型输出的每一段（思考 / 回复 / 工具调用 / 组件渲染）会被解析成**新的指令**，
+再变成事件回到队列 —— 循环往复，直到任务结束。
 
-## 目录
+> **状态：早期开发（0.1.0）。** 表结构由实体自动同步，接口与提示词协议仍在快速演进。
+> 文档与代码不一致时以代码为准，欢迎顺手修正。
 
-- [1. 这是什么](#1-这是什么)
-- [2. 核心概念](#2-核心概念)
-- [3. 输出协议：模型如何驱动运行时](#3-输出协议模型如何驱动运行时)
-- [4. 架构与 crate 划分](#4-架构与-crate-划分)
-- [5. 快速开始](#5-快速开始)
-- [6. 配置项](#6-配置项)
-- [7. HTTP / SSE 接口](#7-http--sse-接口)
-- [8. 数据模型](#8-数据模型)
-- [9. 目录结构](#9-目录结构)
-- [10. 前端项目](#10-前端项目)
-- [11. 打包与部署](#11-打包与部署)
-- [12. 安全须知](#12-安全须知)
-- [13. 开发与调试](#13-开发与调试)
-- [14. 已知问题](#14-已知问题)
+## 它有什么不一样
 
----
+<table>
+<tr>
+<td width="50%" valign="top">
 
-## 1. 这是什么
+**上下文是栈，不是窗口**
 
-StreamInd 把 LLM 当作一个**持续运行的进程**，而不是一问一答的接口。
+模型用 `<push>` / `<pop>` / `<reset>` 自己管理注意力。长任务里可以为一个临时话题开一层栈，做完弹掉，主线不丢。
 
-一切输入都是**事件**：用户输入、定时器、工具结果、心跳、异常、规则召回……事件进入队列，Agent 在自己的「流」里消费事件、生成带标签的分节输出；输出又可以被解析成新的事件（工具调用、上下文栈操作、渲染组件），如此循环。
+</td>
+<td width="50%" valign="top">
 
-由此带来几个和普通聊天机器人不一样的能力：
+**过程可见**
 
-- **过程可见**：输出按 `think` / `tool_call` / `reply` / `render` 分节，实时通过 SSE 推给前端。
-- **上下文是栈**：模型可以用 `push` / `pop` / `reset` 自己管理临时注意力，长任务不丢主线。
-- **条件反射**：用关键词/正则/向量相似度表达式绑定「触发器 → 注入内容」，命中后直接把经验反射进上下文，而不是靠 RAG 检索。
-- **动态 UI**：模型输出 `render` 标签，运行时调用前端已注册的 Vue 组件，把结构化数据变成真正的界面。
-- **可被中断与分叉**：主流运行中可派生支流响应新事件，支流还能请求打断主流。
+输出按分节流式推送（SSE）：思考、工具调用参数、工具结果、回复、渲染组件各自独立，前端可以做真正的「过程可视化」。
 
-## 2. 核心概念
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
 
-| 概念 | 说明 | 主要代码 |
-| --- | --- | --- |
-| **事件 Event** | 运行时的一切输入。落库的 `event` 表 + 内存事件队列。 | `entity/src/event.rs`、`runtime/src/agent/event.rs` |
-| **流 Mind** | 一次「思维活动」：消费事件上下文，产出分节流。 | `kernel/src/mind/stream.rs` |
-| **分节 Section** | 模型输出的切片单元（think/reply/tool_call/...）。 | `kernel/src/mind/section.rs`、`entity/src/section.rs` |
-| **栈式上下文 Stack** | 事件上下文以栈节点组织，支持 push/pop/reset。 | `runtime/src/context/stack.rs` |
-| **条件反射 Rule** | 表达式（关键词/正则/相似度/时间算子）命中后注入内容。 | `reflection/`、`rule_script/`、`src/plugin/reflect.rs` |
-| **记忆 Memory** | 主 Agent 之外的记忆 Agent，负责总结短期记忆、整理任务。 | `src/agent/memory.rs`、`src/plugin/memory.rs` |
-| **工具 Tool** | 以工具包为单位注册的可调用函数，带类型与文档注释。 | `kernel/src/tool/`、`tool/tool_pkg/` |
-| **渲染组件** | 前端注册的 Vue 组件，模型用 `render` 标签实例化。 | `entity/src/render_component.rs`、`public/components/` |
-| **Agent** | 一条独立的运行时实例：模型 + 上下文栈 + 工具集 + 权限。 | `src/agent/app.rs`、`runtime/src/agent/` |
+**条件反射，不靠 RAG**
 
-## 3. 输出协议：模型如何驱动运行时
+用关键词 / 正则 / 向量相似度 / 时间表达式绑定「触发条件 → 注入内容」。命中就直接把经验反射进上下文，比检索更可控。
 
-模型的原始输出会被 `kernel/src/parser.rs` + `kernel/src/mind/section.rs` 切成「分节」，并流式推给前端。
+</td>
+<td width="50%" valign="top">
 
-| 标签 | 作用 | 处理位置 |
-| --- | --- | --- |
-| `<think>…</think>` | 思考过程，只展示不进上下文 | 分节直出 |
-| `<reply>…</reply>` | 给用户的回复 | 分节直出 |
-| `<tool_call id="a1">pkg.fn(args)</tool_call>` | 工具调用 | `src/runtime/tool_call.rs` + `kernel/src/tool/engine.rs` |
-| `<recall time=… type=…>…</recall>` | 主动触发条件反射召回 | `src/runtime/reflect_call.rs` |
-| `<render><Comp attrs={...} /></render>` | 实例化前端渲染组件 | `src/runtime/app.rs` → 前端 `RemoteComponent.vue` |
-| `<push title="…">…</push>` | 创建临时栈节点（转移注意力） | `src/runtime/stack_call.rs` |
-| `<pop/>` / `<reset/>` | 出栈 / 重置栈 | `src/runtime/stack_call.rs` |
+**模型生成 UI**
 
-一个完整回合的样子（节选自 `test.xml`）：
+模型输出 `<render>` 标签，运行时实例化前端注册的 Vue 组件。界面不再是写死的，而是对话的一部分。
 
-```xml
-<think>用户想了解北京的天气，我需要调用天气查询工具…</think>
-<tool_call id="a1">http.request(method="get",url="https://crates.io/crates/nanoid")</tool_call>
-<push title="临时上下文">我需要调用天气查询工具来获取北京的天气信息。</push>
-<reply>根据查询结果，北京现在是晴天，约 25 摄氏度。</reply>
-<render>
-  <ImageList title="动物摄影" attrs={"width":100,"images":[{"name":"鹿","path":"https://…"}]} />
-</render>
-```
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
 
-提示词都放在 `prompts/` 目录，运行时按**当前工作目录**的相对路径读取（`prompts/common/*.md`、`prompts/memory/*.md`），改完重启即可生效。
+**可中断、可分叉**
 
-## 4. 架构与 crate 划分
+主流运行中能派生支流处理新事件，支流还能请求打断主流并把控制权交回。
+
+</td>
+<td width="50%" valign="top">
+
+**一切落库**
+
+事件、分节、栈节点、工具结果都在 SQLite 里，断点续跑和事后复盘不需要额外埋点。
+
+</td>
+</tr>
+</table>
+
+## 事件循环
 
 ```text
-             ┌──────────────────────────────────────────┐
-   浏览器 ──▶│ web_api : axum router / SSE / JWT / CORS  │
-             └───────────────────┬──────────────────────┘
-                                 │
-             ┌───────────────────▼──────────────────────┐
-             │ src/  二进制 streamind                    │
-             │  ├ agent/   AppAgent、MemoryAgent         │
-             │  ├ runtime/ AppAgentRuntime 回合调度       │
-             │  ├ plugin/  心跳、定时、权限、日志、记忆     │
-             │  └ task/    向量化后台任务                 │
-             └───┬────────────┬─────────────┬───────────┘
-                 │            │             │
-        ┌────────▼───┐ ┌──────▼─────┐ ┌─────▼──────────┐
-        │  kernel    │ │  runtime   │ │ entity_service │
-        │ 思维/工具/  │ │ LLM/上下文/ │ │ CRUD + 建表     │
-        │ 解析/渲染   │ │ 嵌入/调度   │ │                │
-        └─────┬──────┘ └──────┬─────┘ └─────┬──────────┘
-              │               │             │
-        ┌─────▼───────┐ ┌─────▼──────┐ ┌─────▼─────┐
-        │ tool_pkg    │ │rule_script │ │  entity   │
-        │ 内置工具包   │ │+reflection │ │  表定义    │
-        └─────────────┘ └────────────┘ └───────────┘
+  事件
+    ↓   用户输入 / 定时器 / 工具结果 / 心跳 / 异常
+  上下文（栈）
+    ↓   栈顶节点 + 条件反射注入
+  LLM 流
+    ↓   流式 token
+  分节
+    ↓   think / reply / tool_call / render / push / pop
+  拦截与执行
+    ↓
+  工具调用 · 栈操作 · 组件渲染  ──▶  新事件回到队首
 ```
 
-| crate | 职责 | 说明 |
-| --- | --- | --- |
-| `src/`（bin `streamind`） | 装配与业务编排 | 初始化数据库/模型/Agent，回合调度、插件、SSE 出口 |
-| `kernel` | 内核抽象 | 消息、解析器、分节、思维流、工具引擎、渲染上下文、权限 |
-| `runtime` | 运行时实现 | LLM 客户端（DeepSeek/OpenAI/SiliconFlow）、嵌入、栈/线性上下文、定时器、Agent 事件 |
-| `entity` | 数据表定义 | SeaORM 实体（agent/event/section/state/model/...） |
-| `entity_service` | 数据访问层 | CRUD、sqlite-vec 初始化、渲染依赖清单重写 |
-| `web_api` | HTTP 层 | axum 路由、SSE、JWT、限流、静态资源（原 `web/`） |
-| `tool/tool_pkg` | 内置工具集 | tool / render / event / file / editor / http / browser / timer / reflect |
-| `tool/tool_macro` | 工具宏 | `#[package]` / `#[tool]` 自动生成工具描述与参数类型 |
-| `reflection` | 条件反射引擎 | 算子（includes/regex/count/similar/time…）与规则引擎 |
-| `rule_script` | 规则表达式 | pest 语法解析 + 求值 |
-| `mcp` | MCP 客户端 | 骨架，尚未接入主流程 |
+## 快速开始
 
-## 5. 快速开始
+**1 · 准备** — Rust ≥ 1.85（子 crate 用 edition 2024）、本机 Chrome；跑前端另需 Node ≥ 20 与 pnpm。
 
-### 5.1 前置条件
-
-| 依赖 | 版本 | 备注 |
-| --- | --- | --- |
-| Rust | ≥ 1.85 | 子 crate 使用 edition 2024 |
-| Chrome / Chromium | 任意较新版本 | `browser_*` 工具需要 |
-| Node.js + pnpm | ≥ 20 / ≥ 9 | 只有跑前端时才需要 |
-| 一个 OpenAI 兼容的模型服务 | — | DeepSeek / SiliconFlow / OpenAI 等 |
-
-### 5.2 步骤
+**2 · 配置**
 
 ```powershell
-git clone <repo> streamind
-cd streamind
-
-# 1) 配置环境变量（务必使用自己的密钥，见「安全须知」）
 Copy-Item .env.example .env
-notepad .env
+notepad .env              # 填 JWT_SECRET_KEY 与 EMBEDDING_* 四项
+```
 
-# 2) 准备运行时目录（后端会往里写 component-manifest.json）
-New-Item -ItemType Directory -Force public | Out-Null
+**3 · 启动**
 
-# 3) 启动（首次运行自动建表；种子数据见 sql/init.data.sql）
+```powershell
 cargo run
 ```
 
-启动成功后会打印：
+首次启动会自动建表，并打印一个一次性登录码：
 
 ```text
 INFO streamind: 存储服务初始化成功!
 INFO streamind: 智能体运行时初始化成功!
-INFO streamind: Starting StreamInd AI Client
+INFO streamind: Starting streamind AI Client
 INFO streamind: Generated login code:
  【 a1b2c3d4 】
 ```
 
-用这个登录码换取 JWT：
+用它换 JWT：`curl "http://localhost:3000/api/login?code=a1b2c3d4"`。
 
-```powershell
-curl "http://localhost:3000/api/login?code=a1b2c3d4"
-# {"code":200,"data":"<jwt>","message":"ok"}
-```
-
-> 所有 `prompts/`、`public/`、`workspace/`、`reader/` 路径都相对**进程当前工作目录**，请在仓库根目录启动。
-
-### 5.3 前端联调
-
-```powershell
-# 另一个终端
-cd web_ui                # 见「前端项目」一节
-pnpm install
-pnpm dev                 # http://localhost:5173，已代理 /api 与 /public 到 :3000
-```
-
-后端 CORS 仅放行 `http://localhost:5173`，改端口请同步修改 `web_api/src/lib.rs`。
-
-## 6. 配置项
-
-复制 `.env.example` 为 `.env`（`.env` 已在 `.gitignore` 中，**请勿提交**）。
+<details>
+<summary><b>完整环境变量表</b></summary>
 
 | 变量 | 必填 | 默认 | 说明 |
 | --- | --- | --- | --- |
-| `PORT` | 是 | — | HTTP 监听端口，代码中 `unwrap()`，缺失会启动失败 |
+| `PORT` | 是 | — | HTTP 端口，缺失直接启动失败 |
 | `DATABASE_URL` | 是 | — | `sqlite://streamind.db?mode=rwc` |
-| `EMBEDDING_API_KEY` | 是 | — | 向量模型密钥 |
-| `EMBEDDING_API_URL` | 是 | — | 向量接口地址，如火山方舟 `/api/v3/embeddings/multimodal` |
-| `EMBEDDING_MODEL` | 是 | — | 如 `doubao-embedding-vision-251215` |
-| `EMBEDDING_DIM` | 是 | — | **必须与 `sql/init.vec.sql` 的 `FLOAT[1024]` 一致** |
-| `JWT_SECRET_KEY` | 是 | — | 签名密钥，建议 32 位以上随机串；缺失会启动失败 |
+| `JWT_SECRET_KEY` | 是 | — | 签名密钥，≥ 16 字符，缺失直接启动失败 |
 | `JWT_EXPIRATION_MINUTES` | | `600` | Token 有效期（分钟） |
-| `BASE_URL` | | — | 外部可访问地址，用于把下载的渲染依赖改写成绝对 URL |
-| `WEB_UI_DIR` | | `./public/web` | 控制台静态站点目录，后端在 `/` 上托管并回退到 `index.html` |
-| `CHROME_PATH` | | 系统默认 | 浏览器工具使用的 Chrome 可执行文件 |
-| `HEARTBEAT_INTERVAL` | | 代码内默认 | 心跳间隔（humantime，如 `30s`） |
-| `CONTEXT_SIZE_LIMIT` | | 代码内默认 | 单次上下文体积上限 |
+| `EMBEDDING_API_KEY` | 是 | — | 向量模型密钥 |
+| `EMBEDDING_API_URL` | 是 | — | 如火山方舟 `/api/v3/embeddings/multimodal` |
+| `EMBEDDING_MODEL` | 是 | — | 如 `doubao-embedding-vision-251215` |
+| `EMBEDDING_DIM` | 是 | — | 必须与 `sql/init.vec.sql` 的 `FLOAT[1024]` 一致 |
+| `BASE_URL` | | — | 对外地址，用于把下载的渲染依赖改写成绝对 URL |
+| `WEB_UI_DIR` | | `./public/web` | 控制台静态站点目录 |
+| `CHROME_PATH` | | 系统默认 | 浏览器工具的 Chrome 路径 |
+| `HEARTBEAT_INTERVAL` | | 代码内默认 | 心跳间隔（humantime） |
+| `CONTEXT_SIZE_LIMIT` | | `1 MiB` | 单次上下文体积上限 |
 | `TOOL_CALL_TIME_OUT` | | 代码内默认 | 工具调用超时 |
-| `TOOL_RESULT_SIZE_LIMIT` | | 代码内默认 | 工具返回值截断阈值 |
+| `TOOL_RESULT_SIZE_LIMIT` | | 代码内默认 | 工具结果截断阈值 |
 
-模型（`model` 表）与 Agent（`agent` 表）的密钥和参数存在数据库里，可从前端「模型」页维护，也可直接执行 SQL：
+模型密钥存在数据库的 `model` 表，可从前端「模型」页维护，也可以：
 
 ```sql
 update model set api_key = 'sk-你的密钥' where id = 1;
 ```
 
-## 7. HTTP / SSE 接口
+</details>
 
-统一响应体：
+<details>
+<summary><b>为什么必须从仓库根目录启动</b></summary>
 
-```json
-{ "code": 200, "data": {}, "message": "ok" }
+`prompts/`、`sql/`、`public/`、`reader/`、`workspace/` 全是**相对当前工作目录**的路径。
+换个目录启动会读不到提示词，或者把运行时数据写到别处。
+
+</details>
+
+## 模型输出协议
+
+模型不返回 JSON，而是返回带标签的文本流；解析器边收边切，前端边收边渲染。
+
+| 标签 | 作用 | 处理位置 |
+| --- | --- | --- |
+| `<think>…</think>` | 思考过程，只展示不进上下文 | 分节直出 |
+| `<reply>…</reply>` | 给用户的回复 | 分节直出 |
+| `<tool_call id="a1">pkg.fn(args)</tool_call>` | 工具调用 | `kernel/tool/engine.rs` |
+| `<recall>…</recall>` | 主动触发条件反射 | `src/runtime/reflect_call.rs` |
+| `<render><Comp attrs={...} /></render>` | 实例化前端组件 | `kernel/render` → `RemoteComponent.vue` |
+| `<push title="…">…</push>` | 压入临时栈节点 | `src/runtime/stack_call.rs` |
+| `<pop/>` · `<reset/>` | 出栈 · 重置栈顶 | `src/runtime/stack_call.rs` |
+
+<details>
+<summary><b>一个完整回合长什么样</b></summary>
+
+```xml
+<think>用户想了解北京的天气，我需要调用天气查询工具…</think>
+<tool_call id="a1">http.request(method="get",url="https://example.com/weather")</tool_call>
+<push title="临时上下文">正在查天气，先把主线放一放。</push>
+<reply>北京今天晴，约 25 摄氏度。</reply>
+<render>
+  <ImageList title="实时天气" attrs={"width":100,"images":[{"name":"晴","path":"/public/weather.png"}]} />
+</render>
 ```
+
+提示词在 `prompts/` 下，按工作目录相对路径读取，改完重启即可生效。
+
+</details>
+
+## HTTP 与 SSE
+
+统一响应体 `{ code, data, message }`。
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| GET | `/api/login?code=` | 用启动日志里的登录码换 JWT（带限流） |
-| GET | `/api/agent/connect/{agent_id}` | **SSE** 事件流，连接即开始推送 |
-| POST | `/api/agent/chat/{agent_id}` | 发送用户消息 `{content, attachments}` |
-| POST | `/api/agent/user_interrupt/{agent_id}` | 打断当前回合 |
-| POST | `/api/agent/ui_interaction/{agent_id}` | 组件交互回传 `{section_id, message}` |
-| POST/GET | `/api/agent`、`/api/agent/{id}`、`/api/agent/tree` | Agent 增查 |
-| POST/PUT/GET | `/api/model`、`/api/model/{id}`、`/api/model/list` | 模型配置 |
-| GET | `/api/state/list` | 上下文栈状态 |
-| GET | `/api/event/list`、`/api/event/load`、`/api/event/count_by_status/{id}` | 历史事件 |
-| GET/POST | `/api/section/list`、`/api/section/list_in_range`、`/api/section/{id}`、`/api/section/update_value/{id}` | 分节（过程展示） |
-| CRUD | `/api/render_component*` | 渲染组件注册表 |
-| CRUD | `/api/render_dependence*` | 渲染依赖（vue/element-plus/自定义组件），含 `download_to_local` |
+| GET | `/api/login?code=` | 用启动日志里的登录码换 JWT |
+| GET | `/api/agent/connect/{id}` | **SSE** 事件流 |
+| POST | `/api/agent/chat/{id}` | 发送用户消息 |
+| POST | `/api/agent/user_interrupt/{id}` | 打断当前回合 |
+| POST | `/api/agent/ui_interaction/{id}` | 组件交互回传 |
+| GET | `/api/event/*` · `/api/section/*` · `/api/state/*` | 历史事件 / 分节 / 栈状态 |
+| CRUD | `/api/model/*` · `/api/render_component/*` · `/api/render_dependence/*` | 模型与渲染组件配置 |
 | POST | `/upload/{*path}` | 上传文件到 `public/` |
-| GET | `/public/*` | 静态资源（组件、依赖、图片） |
-| GET | `/api/local-image?path=` | 仅本机可访问的本地图片流 |
+| GET | `/public/*` | 静态资源 |
 
-### SSE 帧格式
+SSE 帧形如：
 
 ```json
-{"bind_event_id": 12, "event": "section", "type": "chunk",
- "data": {"tag": "think", "chunk": "让我先看看…"}}
+{ "bind_event_id": 12, "event": "section", "type": "chunk",
+  "data": { "tag": "think", "chunk": "让我先看看…" } }
 ```
 
-| `event`（类别） | `type`（动作） | 说明 |
-| --- | --- | --- |
-| `server` | `connected` / 注释帧 | 连接建立、心跳保活 |
-| `section` | `start` / `open` / `chunk` / `close` / `end` | 分节流式输出 |
-| `tool_call` | `start` / `active` / `success` / `failure` / `end` | 工具调用过程 |
-| `env` | `userRequest` / `timer` / `error` / `interrupt` | 环境事件 |
+`event` 是类别（`server` / `section` / `tool_call` / `env`），`type` 是动作
+（`start` / `open` / `chunk` / `close` / `end` …）。
 
-## 8. 数据模型
+## 数据模型
 
-SQLite，启用 `sqlite-vec` 扩展，向量表 `vec_concept` / `vec_scope` 维度固定 1024。
+<details>
+<summary><b>数据表一览</b></summary>
+
+SQLite + `sqlite-vec`，向量表维度固定 1024（见 `sql/init.vec.sql`）。
 
 | 表 | 说明 |
 | --- | --- |
-| `agent` | Agent 实例：模型、父级、当前状态节点、workspace、工具包 |
+| `agent` | Agent 实例：模型、父级、当前栈节点、workspace、工具包 |
 | `model` | LLM 配置：api_url / api_key / 模态 / 成本档 |
 | `state` | 上下文栈节点（`pos=0` 为根） |
-| `event` | 事件流水（用户输入、回复、工具结果、定时器等） |
+| `event` | 事件流水 |
 | `section` | 模型输出分节 |
 | `item` | 结构化条目 |
-| `rule_concept` / `rule_scope` / `rule_item` | 条件反射：概念、作用域、规则 |
+| `rule_concept` / `rule_scope` / `rule_item` | 条件反射：概念 / 作用域 / 规则 |
 | `render_component` / `render_dependence` / `render_state` | 远程渲染 |
-| `agent_permission` / `agent_timer` / `task_queue` | 权限、定时、任务队列 |
+| `agent_permission` / `agent_timer` / `task_queue` | 权限 / 定时 / 任务队列 |
 
-建表方式：`entity_service::init()` 中 SeaORM `schema_registry.sync()` 自动对齐实体，再执行 `sql/init.vec.sql` 创建向量表。
-`sql/init.data.sql` 是**种子数据**（示例模型 / Agent / 组件 / 依赖），`sql/reset.sql` 用于把 1 号 Agent 的会话状态清空。
+建表方式：启动时 SeaORM `schema_registry.sync()` 对齐实体，再执行 `sql/init.vec.sql` 建向量表。
+`sql/init.data.sql` 是种子数据（模型 / Agent / 组件 / 依赖），`sql/reset.sql` 用来清空 1 号 Agent 的会话。
 
-## 9. 目录结构
+</details>
+
+## 目录结构
+
+<details>
+<summary><b>展开完整目录树</b></summary>
 
 ```text
 streamind/
 ├── src/                  # 二进制入口与业务编排
 │   ├── main.rs           # 启动：dotenv → DB → runtime → HTTP
 │   ├── global.rs         # AGENT_POOL / MODEL_POOL / 向量客户端 / 调度器
-│   ├── agent_api.rs      # Agent 会话相关 HTTP 接口（chat/connect/interrupt）
+│   ├── agent_api.rs      # Agent 会话接口（chat / connect / interrupt）
 │   ├── sse_event.rs      # WebEvent → SSE 帧
 │   ├── agent/            # AppAgent、MemoryAgent
 │   ├── runtime/          # 回合调度、工具/栈/召回调用
-│   ├── plugin/           # 心跳、调度、权限、日志、记忆、反射
+│   ├── plugin/           # 心跳、定时、权限、日志、记忆、反射
 │   └── task/             # 向量化后台任务
 ├── kernel/               # 内核：mind / parser / tool / render / permission
 ├── runtime/              # LLM、嵌入、上下文、Agent 事件
 ├── entity/               # SeaORM 实体
 ├── entity_service/       # 数据访问 + DB 初始化
-├── web_api/              # axum HTTP 层（原 web/）
-├── tool/
-│   ├── tool_macro/       # #[package] / #[tool] 过程宏
-│   └── tool_pkg/         # 内置工具实现
+├── web_api/              # axum HTTP 层、SSE、静态托管
+├── tool/tool_macro/      # #[package] / #[tool] 过程宏
+├── tool/tool_pkg/        # 内置工具：browser/editor/file/http/timer/reflect…
 ├── reflection/           # 条件反射算子与规则引擎
 ├── rule_script/          # 规则表达式 DSL（pest）
 ├── mcp/                  # MCP 客户端（骨架）
-├── prompts/              # 系统提示词与规则模板（cwd 相对路径）
+├── web_ui/               # 控制台前端（Vue 3 + Vite）
+├── web_render/           # 远程渲染组件（Vite lib 模式）
+├── prompts/              # 系统提示词与规则模板
 ├── reader/               # 编辑器工具的语言模式分隔符
 ├── sql/                  # 向量表 / 种子数据 / 重置脚本
-├── public/               # 运行时静态资源（git 忽略，由运行时生成）
-├── workspace/            # 各 Agent 的运行时目录（日志、浏览器 profile）
-├── web_ui/               # 控制台前端（Vue3 + Vite，产物进 public/web）
-├── web_render/           # 远程渲染组件（Vite lib 模式，产物进 public/components）
-├── scripts/              # 打包 / 自检脚本
+├── scripts/              # 打包与密钥自检
 ├── docs/                 # 设计与规划文档
-├── .github/workflows/    # CI
+├── public/               # 运行时静态根（git 忽略）
+├── workspace/            # Agent 运行时目录（日志、浏览器 profile）
 └── dist/                 # 打包产物（git 忽略）
 ```
 
-## 10. 前端项目
+</details>
 
-界面由两个 Vue 3 项目组成，与后端同仓：
+## 前端
 
-| 目录 | 技术栈 | 作用 | 产物去向 |
-| --- | --- | --- | --- |
-| `web_ui/` | Vue 3 + Vite + Pinia + Element Plus / TDesign | 控制台：对话、过程可视化、Agent/模型/组件管理 | `web_ui/dist` → `public/web` |
-| `web_render/` | Vue 3 + Vite lib 模式 | 远程渲染组件源码与构建脚本 | `web_render/dist/<Name>/index.js` → `public/components/` |
+界面是两个 Vue 3 项目，和后端同仓：
 
-开发：
+| 目录 | 作用 | 产物 |
+| --- | --- | --- |
+| `web_ui/` | 控制台：对话、过程可视化、Agent / 模型 / 组件管理 | `web_ui/dist` → `public/web` |
+| `web_render/` | 模型 `<render>` 标签可实例化的组件 | `dist/<Name>/index.js` → `public/components` |
 
 ```powershell
 pnpm -C web_ui install
-pnpm -C web_ui dev                                    # http://localhost:5173，已代理 /api 与 /public 到 :3000
-
-pnpm -C web_render install
-pnpm -C web_render run build-render -- --all          # 全量构建；单包用 -- --name=X --path=X
+pnpm -C web_ui dev        # http://localhost:5173，已代理 /api 与 /public 到 :3000
 ```
 
-约定：
+后端在站点根托管 `public/web` 并对未命中路由回退 `index.html`，
+所以**打包后直接访问 `http://localhost:3000` 就是控制台**，前端路由刷新不会 404。
 
-- 后端在 `/` 上托管 `public/web`（可用 `WEB_UI_DIR` 改），未命中的路由回退到 `index.html`，因此打包后直接访问 `http://localhost:3000` 即可，前端路由刷新不 404。
-- 组件以 ESM 输出，`vue` / `element-plus` / `@element-plus/icons-vue` 作为外部依赖，由宿主通过 `public/component-manifest.json` 的 importmap 注入；两端 vue / element-plus 大版本必须一致，否则远程组件在宿主里会崩。
-- 目录划分、依赖关系与「为什么不用 submodule」见 [docs/ui-monorepo.md](docs/ui-monorepo.md)。
+细节（契约、新增组件流程、为什么不用 submodule）见 [docs/ui-monorepo.md](docs/ui-monorepo.md)。
 
-## 11. 打包与部署
-
-一条命令产出可分发包（前端 + 渲染组件 + release 二进制 + 运行期资源）：
+## 打包与部署
 
 ```powershell
 pwsh -File scripts/package.ps1
-# 只重打某一部分
-pwsh -File scripts/package.ps1 -SkipWebUI -SkipRender
 ```
 
-产物：
+依次构建 `web_render` → `web_ui` → `cargo build --release`，组装成可直接运行的目录并打 zip：
 
 ```text
-dist/streamind-<version>-windows-<arch>/
+dist/streamind-0.1.0-windows-x64/
 ├── streamind.exe
-├── start.ps1              # 首次运行生成 .env，提示填密钥
+├── start.ps1              # 首次运行生成 .env 并提示填密钥
 ├── .env.example  README.md
 ├── prompts/  reader/  sql/
 └── public/
     ├── dom_view.js  fingerprint_cheat.js
     ├── components/<Name>/index.js
-    └── web/               # 控制台静态站点
+    └── web/               # 控制台
 ```
-
-运行：
 
 ```powershell
 cd dist/streamind-0.1.0-windows-x64
-.\start.ps1        # 首次：生成 .env → 填 JWT_SECRET_KEY / EMBEDDING_API_KEY → 再跑一次
+.\start.ps1        # 第一次会生成 .env，填好密钥再跑一次
 # 浏览器打开 http://localhost:3000
 ```
 
-要点：
+常用开关：`-SkipWebUI` / `-SkipRender` / `-SkipRust` 分步重打，`-NoZip` 只出目录，`-SkipInstall` 跳过 pnpm install。
 
-- 进程的工作目录必须是包根目录（`prompts/`、`sql/`、`public/` 都是相对路径），`start.ps1` 已 `Set-Location $PSScriptRoot`。
-- 首次启动会在包内生成 `streamind.db` 并自动建表；要带种子数据，先执行 `sql/init.data.sql`（把占位密钥换成自己的）。
-- `-NoZip` 只出目录不打 zip；`-SkipInstall` 用于 CI 等已装好依赖的场景。
+## 安全须知
 
-## 12. 安全须知
-
-- **本仓库此前提交过真实的模型 API Key。** 历史提交里的密钥请视为已泄露，务必到平台吊销并重新签发：DeepSeek、SiliconFlow（`sql/init.data.sql` 的种子数据）、火山方舟（`EMBEDDING_API_KEY`）。
-- `.env`、`*.db`、`public/`、`workspace/`、`tempb/` 均已加入 `.gitignore`，且已从索引中移除。提交前请 `git status` 自查。
-- 提交前自检：`pwsh -File scripts/check-secrets.ps1`（默认扫暂存区，`-All` 扫全部受跟踪文件），可挂到 `.git/hooks/pre-commit`。
-- 若需要从历史中彻底抹除（会重写所有提交哈希，请先备份并通知协作者）：
+- **本仓库早期提交过真实 API Key**（DeepSeek / SiliconFlow / 火山方舟），历史里的密钥请视为已泄露并吊销重发。
+- `.env`、`*.db`、`public/`、`workspace/`、`tempb/` 已加入 `.gitignore` 并从索引移除。
+- 提交前自检：`pwsh -File scripts/check-secrets.ps1`（默认扫暂存区，`-All` 扫全部受跟踪文件）。
+- 需要彻底清理历史时（会重写所有提交哈希）：
 
 ```bash
 git filter-repo --invert-paths --path .env --path streamind.db
 ```
 
-- JWT 中间件目前在 `web_api/src/feature/auth.rs` 中**处于注释状态**，即使登录成功也不会强制校验；不要把它直接暴露到公网，启用前请自行打开校验。
-- 默认监听 `0.0.0.0`。仅本机使用请改为 `127.0.0.1`。
-- 浏览器工具会以你的身份操作本机 Chrome，`file_*` / `editor_*` 工具可以读写磁盘，请只在可信环境运行。
+- **JWT 中间件目前是注释状态**（`web_api/src/feature/auth.rs`），登录成功也不会强制校验 —— 不要直接暴露到公网。
+- 默认监听 `0.0.0.0`；只在本机用请改成 `127.0.0.1`。
+- 浏览器工具会以你的身份操作本机 Chrome，`file_*` / `editor_*` 可以读写磁盘，只在可信环境运行。
 
-## 13. 开发与调试
+## 开发与调试
 
 ```powershell
-cargo check --workspace        # 全量类型检查
-cargo run                      # 启动后端（仓库根目录执行）
-cargo test --workspace         # 单元测试
-cargo nextest run              # 已在 dev-dependencies 中声明
+cargo check --workspace        # 类型检查
+cargo run                      # 启动后端
+cargo test --workspace         # 33 项单元测试
 $env:RUST_LOG="debug"; cargo run
-
-pnpm -C web_ui dev             # 前端开发服务器（:5173，代理到 :3000）
-pnpm -C web_render run build-render -- --all
-pwsh -File scripts/package.ps1 # 出可分发包
-pwsh -File scripts/check-secrets.ps1   # 提交前密钥自检
 ```
 
-- 单元测试覆盖规则引擎、分节解析、工具调用解析、栈上下文与上传路径，全仓库 33 项；另有 2 项依赖真实环境的集成测试默认 `#[ignore]`（真实数据库 / 本机 Chrome），用 `cargo test --workspace -- --ignored` 手动执行。
-- 日志同时走 `tracing`（stdout）和 Agent 工作区文件（`workspace/<code>/log/*.txt`）。
-- 想重置 1 号 Agent 的对话：执行 `sql/reset.sql`。
-- 想重建向量索引：删掉 `vec_concept` / `vec_scope` 两张表后重启。
+- 另有 2 项依赖真实环境的集成测试默认 `#[ignore]`（真实数据库 / 本机 Chrome），用 `-- --ignored` 手动跑。
+- 日志同时写 stdout 和 `workspace/<code>/log/*.txt`。
+- 重置 1 号 Agent 会话：执行 `sql/reset.sql`；重建向量索引：删掉 `vec_concept` / `vec_scope` 后重启。
 
-## 14. 已知问题
+## 已知问题
 
-- `web_api` 的鉴权中间件未启用（见「安全须知」）。
-- CORS 白名单与前端端口写死为 `localhost:5173`。
+<details>
+<summary><b>展开</b></summary>
+
+- 鉴权中间件未启用；CORS 白名单与前端端口写死 `localhost:5173`。
 - `mcp` crate 只有骨架，未接入工具池。
-- 仓库没有统一 `rustfmt` 约束（现有代码风格差异较大），因此 CI 只跑 check/test，不跑 `fmt --check` / `clippy -D warnings`。
-- `web_ui/dist` 打包后含一个 4MB 级的 vendor chunk，尚未做代码分割。
-- 部分工具在初始化时读取 `reader/modes`、`prompts/rule_scope.json`，依赖工作目录为仓库根目录。
-- Agent 的 `workspace/` 会持续增长（浏览器 profile、日志、截图），需要定期清理。
+- 仓库没有统一 `rustfmt` 约束，CI 只跑 check / test，不跑 `fmt --check` 与 `clippy -D warnings`。
+- `web_ui` 打包后有 4MB 级 vendor chunk，尚未做代码分割。
+- `workspace/` 会持续增长（浏览器 profile、日志、截图），需要定期清理。
+
+</details>
+
+## 文档
+
+- [docs/ui-monorepo.md](docs/ui-monorepo.md) — 前端目录、三方契约与构建流程
+- [idea.md](idea.md) — 最初的运行时设计草案（事件流、反射、栈、渲染）
+- [entity.md](entity.md) — 早期实体设计
 
 ## 许可证
 
