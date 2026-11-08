@@ -25,9 +25,10 @@ Rust 2024 · Axum · SQLite + sqlite-vec · SSE · 远程渲染组件
 - [8. 数据模型](#8-数据模型)
 - [9. 目录结构](#9-目录结构)
 - [10. 前端项目](#10-前端项目)
-- [11. 安全须知](#11-安全须知)
-- [12. 开发与调试](#12-开发与调试)
-- [13. 已知问题](#13-已知问题)
+- [11. 打包与部署](#11-打包与部署)
+- [12. 安全须知](#12-安全须知)
+- [13. 开发与调试](#13-开发与调试)
+- [14. 已知问题](#14-已知问题)
 
 ---
 
@@ -179,7 +180,7 @@ curl "http://localhost:3000/api/login?code=a1b2c3d4"
 
 ```powershell
 # 另一个终端
-cd ui/streamind-web      # 见「前端项目」一节
+cd web_ui                # 见「前端项目」一节
 pnpm install
 pnpm dev                 # http://localhost:5173，已代理 /api 与 /public 到 :3000
 ```
@@ -201,6 +202,7 @@ pnpm dev                 # http://localhost:5173，已代理 /api 与 /public �
 | `JWT_SECRET_KEY` | 是 | — | 签名密钥，建议 32 位以上随机串；缺失会启动失败 |
 | `JWT_EXPIRATION_MINUTES` | | `600` | Token 有效期（分钟） |
 | `BASE_URL` | | — | 外部可访问地址，用于把下载的渲染依赖改写成绝对 URL |
+| `WEB_UI_DIR` | | `./public/web` | 控制台静态站点目录，后端在 `/` 上托管并回退到 `index.html` |
 | `CHROME_PATH` | | 系统默认 | 浏览器工具使用的 Chrome 可执行文件 |
 | `HEARTBEAT_INTERVAL` | | 代码内默认 | 心跳间隔（humantime，如 `30s`） |
 | `CONTEXT_SIZE_LIMIT` | | 代码内默认 | 单次上下文体积上限 |
@@ -301,27 +303,78 @@ streamind/
 ├── sql/                  # 向量表 / 种子数据 / 重置脚本
 ├── public/               # 运行时静态资源（git 忽略，由运行时生成）
 ├── workspace/            # 各 Agent 的运行时目录（日志、浏览器 profile）
-├── scripts/              # 开发辅助脚本（密钥自检等）
+├── web_ui/               # 控制台前端（Vue3 + Vite，产物进 public/web）
+├── web_render/           # 远程渲染组件（Vite lib 模式，产物进 public/components）
+├── scripts/              # 打包 / 自检脚本
 ├── docs/                 # 设计与规划文档
-└── ui/                   # 前端（规划中，见下一节）
+├── .github/workflows/    # CI
+└── dist/                 # 打包产物（git 忽略）
 ```
 
 ## 10. 前端项目
 
-后端只提供 API + 静态托管，界面由两个独立的 Vue 3 项目组成（当前位于仓库外，建议按 [docs/ui-monorepo.md](docs/ui-monorepo.md) 归置）：
+界面由两个 Vue 3 项目组成，与后端同仓：
 
-| 项目 | 技术栈 | 作用 |
-| --- | --- | --- |
-| `streamind-web` | Vue 3 + Vite + Pinia + Element Plus / TDesign | 主控制台：对话、过程可视化、Agent/模型/组件管理 |
-| `streamind-remote-render` | Vue 3 + Vite lib 模式 | 远程渲染组件的源码与构建脚本，产物 `dist/<Name>/index.js` 上传到后端 `public/components/` |
+| 目录 | 技术栈 | 作用 | 产物去向 |
+| --- | --- | --- | --- |
+| `web_ui/` | Vue 3 + Vite + Pinia + Element Plus / TDesign | 控制台：对话、过程可视化、Agent/模型/组件管理 | `web_ui/dist` → `public/web` |
+| `web_render/` | Vue 3 + Vite lib 模式 | 远程渲染组件源码与构建脚本 | `web_render/dist/<Name>/index.js` → `public/components/` |
 
-开发期约定：
+开发：
 
-- 主控制台把 `/api`、`/public` 代理到 `http://localhost:3000`（见其 `vite.config.ts`）。
-- 组件用 `pnpm build-render -- --name=X --path=X` 单包构建，`--all` 全量构建。
-- 组件以 ESM 输出，`vue` / `element-plus` / `@element-plus/icons-vue` 作为外部依赖，由宿主通过 `public/component-manifest.json` 的 importmap 注入。
+```powershell
+pnpm -C web_ui install
+pnpm -C web_ui dev                                    # http://localhost:5173，已代理 /api 与 /public 到 :3000
 
-## 11. 安全须知
+pnpm -C web_render install
+pnpm -C web_render run build-render -- --all          # 全量构建；单包用 -- --name=X --path=X
+```
+
+约定：
+
+- 后端在 `/` 上托管 `public/web`（可用 `WEB_UI_DIR` 改），未命中的路由回退到 `index.html`，因此打包后直接访问 `http://localhost:3000` 即可，前端路由刷新不 404。
+- 组件以 ESM 输出，`vue` / `element-plus` / `@element-plus/icons-vue` 作为外部依赖，由宿主通过 `public/component-manifest.json` 的 importmap 注入；两端 vue / element-plus 大版本必须一致，否则远程组件在宿主里会崩。
+- 目录划分、依赖关系与「为什么不用 submodule」见 [docs/ui-monorepo.md](docs/ui-monorepo.md)。
+
+## 11. 打包与部署
+
+一条命令产出可分发包（前端 + 渲染组件 + release 二进制 + 运行期资源）：
+
+```powershell
+pwsh -File scripts/package.ps1
+# 只重打某一部分
+pwsh -File scripts/package.ps1 -SkipWebUI -SkipRender
+```
+
+产物：
+
+```text
+dist/streamind-<version>-windows-<arch>/
+├── streamind.exe
+├── start.ps1              # 首次运行生成 .env，提示填密钥
+├── .env.example  README.md
+├── prompts/  reader/  sql/
+└── public/
+    ├── dom_view.js  fingerprint_cheat.js
+    ├── components/<Name>/index.js
+    └── web/               # 控制台静态站点
+```
+
+运行：
+
+```powershell
+cd dist/streamind-0.1.0-windows-x64
+.\start.ps1        # 首次：生成 .env → 填 JWT_SECRET_KEY / EMBEDDING_API_KEY → 再跑一次
+# 浏览器打开 http://localhost:3000
+```
+
+要点：
+
+- 进程的工作目录必须是包根目录（`prompts/`、`sql/`、`public/` 都是相对路径），`start.ps1` 已 `Set-Location $PSScriptRoot`。
+- 首次启动会在包内生成 `streamind.db` 并自动建表；要带种子数据，先执行 `sql/init.data.sql`（把占位密钥换成自己的）。
+- `-NoZip` 只出目录不打 zip；`-SkipInstall` 用于 CI 等已装好依赖的场景。
+
+## 12. 安全须知
 
 - **本仓库此前提交过真实的模型 API Key。** 历史提交里的密钥请视为已泄露，务必到平台吊销并重新签发：DeepSeek、SiliconFlow（`sql/init.data.sql` 的种子数据）、火山方舟（`EMBEDDING_API_KEY`）。
 - `.env`、`*.db`、`public/`、`workspace/`、`tempb/` 均已加入 `.gitignore`，且已从索引中移除。提交前请 `git status` 自查。
@@ -336,14 +389,19 @@ git filter-repo --invert-paths --path .env --path streamind.db
 - 默认监听 `0.0.0.0`。仅本机使用请改为 `127.0.0.1`。
 - 浏览器工具会以你的身份操作本机 Chrome，`file_*` / `editor_*` 工具可以读写磁盘，请只在可信环境运行。
 
-## 12. 开发与调试
+## 13. 开发与调试
 
 ```powershell
 cargo check --workspace        # 全量类型检查
-cargo run                      # 启动
-cargo test --workspace         # 单元测试（部分 crate 尚无覆盖）
+cargo run                      # 启动后端（仓库根目录执行）
+cargo test --workspace         # 单元测试
 cargo nextest run              # 已在 dev-dependencies 中声明
 $env:RUST_LOG="debug"; cargo run
+
+pnpm -C web_ui dev             # 前端开发服务器（:5173，代理到 :3000）
+pnpm -C web_render run build-render -- --all
+pwsh -File scripts/package.ps1 # 出可分发包
+pwsh -File scripts/check-secrets.ps1   # 提交前密钥自检
 ```
 
 - 单元测试覆盖规则引擎、分节解析、工具调用解析、栈上下文与上传路径，全仓库 33 项；另有 2 项依赖真实环境的集成测试默认 `#[ignore]`（真实数据库 / 本机 Chrome），用 `cargo test --workspace -- --ignored` 手动执行。
@@ -351,11 +409,13 @@ $env:RUST_LOG="debug"; cargo run
 - 想重置 1 号 Agent 的对话：执行 `sql/reset.sql`。
 - 想重建向量索引：删掉 `vec_concept` / `vec_scope` 两张表后重启。
 
-## 13. 已知问题
+## 14. 已知问题
 
 - `web_api` 的鉴权中间件未启用（见「安全须知」）。
 - CORS 白名单与前端端口写死为 `localhost:5173`。
 - `mcp` crate 只有骨架，未接入工具池。
+- 仓库没有统一 `rustfmt` 约束（现有代码风格差异较大），因此 CI 只跑 check/test，不跑 `fmt --check` / `clippy -D warnings`。
+- `web_ui/dist` 打包后含一个 4MB 级的 vendor chunk，尚未做代码分割。
 - 部分工具在初始化时读取 `reader/modes`、`prompts/rule_scope.json`，依赖工作目录为仓库根目录。
 - Agent 的 `workspace/` 会持续增长（浏览器 profile、日志、截图），需要定期清理。
 

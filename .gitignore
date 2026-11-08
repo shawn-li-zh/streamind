@@ -1,5 +1,13 @@
 # ===== 构建产物 =====
 /target
+# 打包脚本的输出目录
+/dist
+
+# ===== 前端依赖与产物（web_ui / web_render 各自也有 .gitignore，这里做兜底）=====
+node_modules/
+.pnpm-store/
+web_ui/dist/
+web_render/dist/
 
 # ===== 编辑器 =====
 /.idea

@@ -130,7 +130,24 @@ pub fn inject_router(mut router: Router) -> Router {
         .precompressed_gzip()
         .append_index_html_on_directories(true);
     router = router.nest_service("/public", serve_dir);
+
+    // 托管 web_ui 的构建产物（默认 public/web），未命中的路径回退到 index.html，
+    // 这样打包后前端路由（history 模式）刷新页面不会 404
+    let web_dir = web_ui_dir();
+    let index = format!("{}/index.html", web_dir);
+    // 注意用 fallback 而不是 not_found_service：后者会把响应状态强制改成 404，
+    // 前端路由（history 模式）刷新时会拿到 404 + 首页内容，浏览器直接报错。
+    let spa = tower_http::services::ServeDir::new(&web_dir)
+        .precompressed_gzip()
+        .append_index_html_on_directories(true)
+        .fallback(tower_http::services::ServeFile::new(index));
+    router = router.fallback_service(spa);
+
     router
+}
+/// 前端构建产物目录。默认放在 public/web 下，打包时由 scripts/package.ps1 复制过去。
+pub fn web_ui_dir() -> String {
+    std::env::var("WEB_UI_DIR").unwrap_or_else(|_| format!("{}/web", PUBLIC_DIR))
 }
 /// 把上传请求里的相对路径安全地拼到根目录下。
 /// 拒绝绝对路径、盘符以及任何 `..` 片段，允许 `.` 与普通的嵌套目录。

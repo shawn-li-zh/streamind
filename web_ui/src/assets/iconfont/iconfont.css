@@ -1,0 +1,171 @@
+@font-face {
+  font-family: "iconfont"; /* Project id 5171324 */
+  src: url('iconfont.woff2?t=1779855142812') format('woff2'),
+       url('iconfont.woff?t=1779855142812') format('woff'),
+       url('iconfont.ttf?t=1779855142812') format('truetype');
+}
+
+.iconfont {
+  font-family: "iconfont" !important;
+  font-size: 16px;
+  font-style: normal;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.icon-sleep:before {
+  content: "\e610";
+}
+
+.icon-idle:before {
+  content: "\e7ac";
+}
+
+.icon-interrupt:before {
+  content: "\e63c";
+}
+
+.icon-click:before {
+  content: "\e603";
+}
+
+.icon-rightBar:before {
+  content: "\e761";
+}
+
+.icon-leftBar-copy:before {
+  content: "\ed3f";
+}
+
+.icon-heartbeat:before {
+  content: "\e600";
+}
+
+.icon-error:before {
+  content: "\e611";
+}
+
+.icon-push:before {
+  content: "\e60d";
+}
+
+.icon-connected:before {
+  content: "\e692";
+}
+
+.icon-clock:before {
+  content: "\e63e";
+}
+
+.icon-alert:before {
+  content: "\e686";
+}
+
+.icon-audio:before {
+  content: "\e612";
+}
+
+.icon-model:before {
+  content: "\e62f";
+}
+
+.icon-image:before {
+  content: "\e8ba";
+}
+
+.icon-video:before {
+  content: "\e6dd";
+}
+
+.icon-vector:before {
+  content: "\e721";
+}
+
+.icon-wenzi:before {
+  content: "\e62d";
+}
+
+.icon-talk:before {
+  content: "\e619";
+}
+
+.icon-setting:before {
+  content: "\e605";
+}
+
+.icon-log:before {
+  content: "\e613";
+}
+
+.icon-net:before {
+  content: "\e608";
+}
+
+.icon-dashboard:before {
+  content: "\e6d2";
+}
+
+.icon-file:before {
+  content: "\e695";
+}
+
+.icon-http:before {
+  content: "\ed3e";
+}
+
+.icon-write:before {
+  content: "\e60e";
+}
+
+.icon-book:before {
+  content: "\e6f0";
+}
+
+.icon-tool:before {
+  content: "\e60c";
+}
+
+.icon-cube:before {
+  content: "\e691";
+}
+
+.icon-component:before {
+  content: "\e730";
+}
+
+.icon-stop:before {
+  content: "\e88b";
+}
+
+.icon-user:before {
+  content: "\e7fd";
+}
+
+.icon-bot:before {
+  content: "\e62a";
+}
+
+.icon-glasses:before {
+  content: "\e6a5";
+}
+
+.icon-module:before {
+  content: "\e604";
+}
+
+.icon-stack:before {
+  content: "\e798";
+}
+
+.icon-think:before {
+  content: "\e7d3";
+}
+
+.icon-run:before {
+  content: "\e63f";
+}
+
+.icon-search:before {
+  content: "\e703";
+}
+
